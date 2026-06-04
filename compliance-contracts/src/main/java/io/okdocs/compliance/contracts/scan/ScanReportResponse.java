@@ -15,6 +15,7 @@ public record ScanReportResponse(
         ScanStatus status,
         Integer score,
         ScanTier tier,
+        UUID parentScanId,
         ScanSummaryDto summary,
         List<FindingDto> findings,
         DiagnosticsDto diagnostics,
