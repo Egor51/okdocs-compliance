@@ -27,6 +27,12 @@
             <artifactId>compliance-persistence</artifactId>
         </dependency>
 
+        <!-- messaging: OutboxPublisher (публикация ScanRequestedEvent через outbox relay) -->
+        <dependency>
+            <groupId>io.okdocs</groupId>
+            <artifactId>compliance-messaging</artifactId>
+        </dependency>
+
         <!-- Web -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

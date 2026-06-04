@@ -27,6 +27,12 @@
             <artifactId>compliance-persistence</artifactId>
         </dependency>
 
+        <!-- messaging: OutboxPublisher (публикация ScanCompletedEvent/ScanFailedEvent через outbox relay) -->
+        <dependency>
+            <groupId>io.okdocs</groupId>
+            <artifactId>compliance-messaging</artifactId>
+        </dependency>
+
         <!-- rules: Rule interface + RU/EU implementations -->
         <dependency>
             <groupId>io.okdocs</groupId>
