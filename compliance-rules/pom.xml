@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.okdocs</groupId>
+        <artifactId>compliance-parent</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>compliance-rules</artifactId>
+    <name>compliance-rules</name>
+    <description>Rule interface + implementations per jurisdiction (RU 152-ФЗ, EU GDPR)</description>
+
+    <dependencies>
+        <!-- единственная зависимость — внешний язык системы -->
+        <dependency>
+            <groupId>io.okdocs</groupId>
+            <artifactId>compliance-contracts</artifactId>
+        </dependency>
+
+        <!-- Spring Context только для @Component — без JPA, без Kafka, без Web -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+        </dependency>
+
+        <!-- Lombok -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- Test -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

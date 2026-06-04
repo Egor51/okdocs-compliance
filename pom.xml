@@ -21,8 +21,10 @@
     <modules>
         <module>compliance-contracts</module>
         <module>compliance-persistence</module>
+        <module>compliance-rules</module>
         <module>compliance-api</module>
         <module>compliance-worker</module>
+        <module>compliance-app</module>
     </modules>
 
     <properties>
@@ -47,6 +49,21 @@
             <dependency>
                 <groupId>io.okdocs</groupId>
                 <artifactId>compliance-persistence</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.okdocs</groupId>
+                <artifactId>compliance-rules</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.okdocs</groupId>
+                <artifactId>compliance-api</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.okdocs</groupId>
+                <artifactId>compliance-worker</artifactId>
                 <version>${project.version}</version>
             </dependency>
 

@@ -27,6 +27,12 @@
             <artifactId>compliance-persistence</artifactId>
         </dependency>
 
+        <!-- rules: Rule interface + RU/EU implementations -->
+        <dependency>
+            <groupId>io.okdocs</groupId>
+            <artifactId>compliance-rules</artifactId>
+        </dependency>
+
         <!-- Kafka consumer -->
         <dependency>
             <groupId>org.springframework.kafka</groupId>
@@ -95,6 +101,8 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
+                    <!-- classifier позволяет compliance-app импортировать этот модуль как библиотеку -->
+                    <classifier>exec</classifier>
                     <excludes>
                         <exclude>
                             <groupId>org.projectlombok</groupId>
