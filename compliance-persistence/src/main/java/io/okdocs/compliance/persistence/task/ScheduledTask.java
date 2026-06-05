@@ -59,8 +59,9 @@ public class ScheduledTask {
     @Column(name = "retry_count", nullable = false)
     private int retryCount;
 
+    // Инициализатор, а не SQL DEFAULT 3: Hibernate пишет значение поля при INSERT.
     @Column(name = "max_retries", nullable = false)
-    private int maxRetries;
+    private int maxRetries = 3;
 
     @Column(name = "last_error", columnDefinition = "text")
     private String lastError;

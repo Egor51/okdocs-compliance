@@ -41,8 +41,10 @@ public class OutboxEvent {
     @Column(nullable = false, columnDefinition = "text")
     private String payload;
 
+    // Инициализатор, а не SQL DEFAULT: Hibernate при INSERT пишет значение поля (примитив=0),
+    // SQL DEFAULT 1 сработал бы только в обход Hibernate.
     @Column(name = "schema_version", nullable = false)
-    private int schemaVersion;
+    private int schemaVersion = 1;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)

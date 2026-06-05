@@ -4,7 +4,7 @@ CREATE TABLE scheduled_tasks (
     id           UUID         PRIMARY KEY,
     user_id      BIGINT       REFERENCES app_users(id),
     guest_id     UUID,
-    scan_id      UUID         REFERENCES compliance_scans(id),
+    scan_id      UUID         REFERENCES compliance_scans(id) ON DELETE SET NULL,
     task_type    VARCHAR(50)  NOT NULL,
     status       VARCHAR(30)  NOT NULL,
     payload      TEXT         NOT NULL,

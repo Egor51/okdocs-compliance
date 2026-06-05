@@ -37,8 +37,9 @@ public class CompliancePromoCode {
     @Column(name = "expires_at")
     private Instant expiresAt;
 
+    // Инициализатор, а не SQL DEFAULT TRUE: Hibernate пишет значение поля (boolean=false) при INSERT.
     @Column(nullable = false)
-    private boolean active;
+    private boolean active = true;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
