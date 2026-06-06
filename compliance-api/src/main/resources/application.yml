@@ -18,6 +18,14 @@ spring:
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
       properties:
         spring.json.add.type.headers: false
+    consumer:
+      group-id: ${KAFKA_CONSUMER_GROUP:compliance-api}
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.use.type.headers: false
+        spring.json.trusted.packages: io.okdocs.compliance.contracts.*
   data:
     redis:
       host: ${REDIS_HOST:localhost}
@@ -40,5 +48,7 @@ compliance:
     topic:
       scan-requested: compliance.scan.requested
       scan-completed: compliance.scan.completed
+      scan-failed: compliance.scan.failed
   rate-limit:
-    scans-per-ip-per-hour: 5
+    guest-scans-per-ip-per-hour: 5
+    user-scans-per-hour: 20
