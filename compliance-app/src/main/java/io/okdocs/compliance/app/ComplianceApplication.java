@@ -5,8 +5,10 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication(scanBasePackages = {
-        "io.okdocs.compliance.api.web",
-        "io.okdocs.compliance.api.service",
+        // весь api: web + service + config + security + messaging + job
+        // (узкий scan по web/service ронял SecurityConfig, JWT filter, properties,
+        // result listener и schedulers в combined-процессе)
+        "io.okdocs.compliance.api",
         "io.okdocs.compliance.worker.job",
         "io.okdocs.compliance.worker.service",
         "io.okdocs.compliance.persistence",

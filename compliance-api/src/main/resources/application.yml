@@ -52,3 +52,31 @@ compliance:
   rate-limit:
     guest-scans-per-ip-per-hour: 5
     user-scans-per-hour: 20
+  scan:
+    guest-max-pages: 5
+    user-max-pages: 30
+    guest-retention-days: 7
+  plan:
+    quota:
+      FREE: 1
+      PRO: 30
+      BUSINESS: 200
+  paywall-cta:
+    title: "Откройте полный отчёт"
+    text: "Получите доказательства, ссылки на закон, рекомендации и PDF-отчёт"
+    action-url: "/payment"
+  outbox:
+    max-retries: 5
+    batch-size: 100
+    poll-interval-ms: 5000
+    backoff-base: 10s
+    backoff-max: 10m
+  auth:
+    jwt-secret: ${JWT_SECRET:change-me-in-production-this-must-be-at-least-256-bits-long-secret-key}
+    access-token-ttl: 30m
+    refresh-token-ttl: 30d
+    guest-token-ttl: 7d
+  security:
+    # Доверять X-Forwarded-For только за доверенным ingress/proxy. По умолчанию false
+    # (иначе guest-rate-limit по IP обходится подделкой заголовка).
+    trust-forwarded-header: ${TRUST_FORWARDED_HEADER:false}

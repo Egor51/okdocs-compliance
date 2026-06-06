@@ -24,6 +24,15 @@ public interface ComplianceScanRepository extends JpaRepository<ComplianceScan, 
     /** Rate limit: сколько сканов с этого IP за окно. */
     List<ComplianceScan> findByIpAddressAndCreatedAtAfter(String ipAddress, Instant after);
 
+    /** Статистика админки: сканов за период (scansToday) и всего. */
+    long countByCreatedAtAfter(Instant after);
+
+    /** Кол-во сканов юзера (для админ-детали / списка). */
+    long countByUserId(Long userId);
+
+    /** Последние сканы юзера (админ-деталь, обход owner-check). */
+    java.util.List<ComplianceScan> findTop10ByUserIdOrderByCreatedAtDesc(Long userId);
+
     /** Reaper зависших сканов (§5.3): статус в работе + давно не обновлялся. */
     List<ComplianceScan> findByStatusInAndUpdatedAtBefore(Collection<ScanStatus> statuses, Instant cutoff);
 
