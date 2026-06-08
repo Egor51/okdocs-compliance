@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Structured logs worker'а: добавляем MDC scanId/scanKind в паттерн — каждая строка обработки скана
+  трассируется по scanId (ставится в ScanRequestedListener, подхватывается pipeline/lifecycle).
+  Наследуем дефолты Spring Boot, переопределяем только CONSOLE-паттерн.
+-->
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} [scanId=%X{scanId:-} kind=%X{scanKind:-}] - %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+</configuration>

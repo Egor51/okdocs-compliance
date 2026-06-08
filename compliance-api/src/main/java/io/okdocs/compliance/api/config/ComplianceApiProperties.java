@@ -63,9 +63,13 @@ public record ComplianceApiProperties(
         }
     }
 
-    /** Параметры скана: лимиты страниц по типу принципала и TTL гостевых сканов. */
-    public record Scan(Integer guestMaxPages, Integer userMaxPages, Integer guestRetentionDays) {
+    /** Параметры скана: лимиты страниц по flow/принципалу и TTL короткоживущих сканов. */
+    public record Scan(Integer freeMarketingMaxPages, Integer guestMaxPages, Integer userMaxPages,
+                       Integer guestRetentionDays, Integer freeMarketingRetentionDays) {
         public Scan {
+            if (freeMarketingMaxPages == null) {
+                freeMarketingMaxPages = 1; // FREE_MARKETING — лид-магнит: главная страница
+            }
             if (guestMaxPages == null) {
                 guestMaxPages = 5;
             }
@@ -74,6 +78,9 @@ public record ComplianceApiProperties(
             }
             if (guestRetentionDays == null) {
                 guestRetentionDays = 7;
+            }
+            if (freeMarketingRetentionDays == null) {
+                freeMarketingRetentionDays = 7; // короткоживущий лид-магнит
             }
         }
     }

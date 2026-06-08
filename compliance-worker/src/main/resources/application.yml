@@ -13,14 +13,23 @@ spring:
     open-in-view: false
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    # Worker — НЕ только consumer: OutboxPublisher (§5.6) публикует ScanCompletedEvent/ScanFailedEvent.
+    # Producer-сериализаторы обязательны, иначе outbox relay не сможет отправить события.
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      properties:
+        # Тип не пишем в headers: consumer резолвит целевой тип по сигнатуре @KafkaListener
+        # (single source of truth — параметр метода), а не по заголовку от producer'а.
+        spring.json.add.type.headers: false
     consumer:
       group-id: compliance-worker
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
-      properties:
-        spring.json.trusted.packages: "io.okdocs.compliance.*"
-        spring.json.use.type.headers: false
+      # Сырые байты + ByteArrayJsonMessageConverter (MessagingConfig): целевой тип берётся из
+      # сигнатуры @KafkaListener, без type-headers от продюсера. JsonDeserializer тут не годится —
+      # без headers он не знает тип и падает с «No type information in headers».
+      value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
     listener:
       concurrency: 3
       ack-mode: manual
@@ -36,11 +45,22 @@ compliance:
     topic:
       scan-requested: compliance.scan.requested
       scan-completed: compliance.scan.completed
+      scan-failed: compliance.scan.failed
   crawler:
     max-pages: 20
     max-depth: 3
     page-timeout-ms: 15000
     crawler-timeout-seconds: 90
     rate-limit-ms: 1000
+    blocked-domains: []
+  scan:
+    # Порог reaper'а: должен быть строго больше crawler.crawler-timeout-seconds (90s).
+    stale-after: 5m
+  outbox:
+    max-retries: 10
+    batch-size: 100
+    poll-interval-ms: 5000
+    backoff-base: 10s
+    backoff-max: 10m
   geoip:
-    db-path: ${GEOIP_DB_PATH:/opt/geoip/dbip-country-lite.mmdb}
+    db-path: ${GEOIP_DB_PATH:classpath:ip-db/dbip-country-lite-2026-06.mmdb}

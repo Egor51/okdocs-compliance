@@ -146,6 +146,32 @@
                     </excludes>
                 </configuration>
             </plugin>
+
+            <!--
+              Mockito как ЯВНЫЙ -javaagent (а не self-attach). С JDK 21 self-attach даёт WARNING,
+              с JDK 24+ динамическая загрузка агентов запрещена по умолчанию → inline-mock-maker
+              перестанет работать. properties-goal резолвит путь к jar в ${org.mockito:mockito-core:jar},
+              surefire подключает его агентом. (Если позже добавится jacoco — вернуть @{argLine}.)
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>get-mockito-agent</id>
+                        <goals>
+                            <goal>properties</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>-javaagent:${org.mockito:mockito-core:jar}</argLine>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 </project>

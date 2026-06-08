@@ -4,6 +4,7 @@ import io.okdocs.compliance.contracts.crawler.PageAnalysisResult;
 import io.okdocs.compliance.contracts.crawler.ScanAnalysisContext;
 import io.okdocs.compliance.contracts.enums.FindingCategory;
 import io.okdocs.compliance.contracts.enums.FindingSeverity;
+import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.contracts.enums.SourceType;
 import io.okdocs.compliance.contracts.enums.VerificationStatus;
 import io.okdocs.compliance.rules.Rule;
@@ -27,6 +28,7 @@ public final class CrossBorderTransferRule implements Rule {
 
     private static final RuleDefinition DEFINITION = new RuleDefinition(
             "POSSIBLE_CROSS_BORDER_TRANSFER",
+            ScanJurisdiction.RU,
             FindingSeverity.HIGH,
             FindingCategory.HOSTING,
             "Обнаружен риск трансграничной передачи персональных данных",

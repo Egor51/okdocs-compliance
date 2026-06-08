@@ -7,6 +7,7 @@ import io.okdocs.compliance.contracts.enums.EvidenceType;
 import io.okdocs.compliance.contracts.enums.FindingCategory;
 import io.okdocs.compliance.contracts.enums.FindingSeverity;
 import io.okdocs.compliance.contracts.enums.RenderMode;
+import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.contracts.enums.SourceType;
 import io.okdocs.compliance.contracts.enums.VerificationStatus;
 import io.okdocs.compliance.rules.Rule;
@@ -27,6 +28,7 @@ public final class UnprotectedDataFormsRule implements Rule {
 
     private static final RuleDefinition DEFINITION = new RuleDefinition(
             "UNPROTECTED_DATA_FORMS",
+            ScanJurisdiction.RU,
             FindingSeverity.CRITICAL,
             FindingCategory.FORMS,
             "Формы сбора данных без надлежащего согласия пользователя",

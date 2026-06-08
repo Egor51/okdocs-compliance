@@ -6,6 +6,7 @@ import io.okdocs.compliance.contracts.crawler.PageAnalysisResult;
 import io.okdocs.compliance.contracts.crawler.ScanAnalysisContext;
 import io.okdocs.compliance.contracts.enums.RegistryStatus;
 import io.okdocs.compliance.contracts.enums.RenderMode;
+import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 
 import java.util.List;
 
@@ -25,6 +26,7 @@ public final class TestFixtures {
     public static ScanAnalysisContext ctx(String hostCountry, RegistryStatus registry,
                                           PageAnalysisResult... pages) {
         return new ScanAnalysisContext(
+                ScanJurisdiction.RU,
                 List.of(pages),
                 hostCountry,
                 List.of("1.2.3.4"),

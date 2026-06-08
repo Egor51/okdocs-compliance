@@ -22,10 +22,9 @@ spring:
       group-id: ${KAFKA_CONSUMER_GROUP:compliance-api}
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
-      properties:
-        spring.json.use.type.headers: false
-        spring.json.trusted.packages: io.okdocs.compliance.contracts.*
+      # Сырые байты + ByteArrayJsonMessageConverter (MessagingConfig): тип из сигнатуры @KafkaListener
+      # без type-headers. См. compliance-worker/application.yml — единый контракт api↔worker.
+      value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
   data:
     redis:
       host: ${REDIS_HOST:localhost}
@@ -53,9 +52,11 @@ compliance:
     guest-scans-per-ip-per-hour: 5
     user-scans-per-hour: 20
   scan:
+    free-marketing-max-pages: 1
     guest-max-pages: 5
     user-max-pages: 30
     guest-retention-days: 7
+    free-marketing-retention-days: 7
   plan:
     quota:
       FREE: 1

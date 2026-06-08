@@ -6,6 +6,7 @@ import io.okdocs.compliance.contracts.enums.EvidenceType;
 import io.okdocs.compliance.contracts.enums.FindingCategory;
 import io.okdocs.compliance.contracts.enums.FindingSeverity;
 import io.okdocs.compliance.contracts.enums.RenderMode;
+import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.contracts.enums.SourceType;
 import io.okdocs.compliance.contracts.enums.VerificationStatus;
 import io.okdocs.compliance.rules.Rule;
@@ -31,6 +32,7 @@ public final class TrackersBeforeConsentRule implements Rule {
 
     private static final RuleDefinition DEFINITION = new RuleDefinition(
             "POSSIBLE_TRACKERS_BEFORE_CONSENT",
+            ScanJurisdiction.RU,
             FindingSeverity.HIGH,
             FindingCategory.TRACKERS,
             "Сторонние трекеры загружаются без получения согласия на cookie",
