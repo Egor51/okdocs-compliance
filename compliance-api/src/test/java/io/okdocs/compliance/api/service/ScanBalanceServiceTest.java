@@ -77,8 +77,21 @@ class ScanBalanceServiceTest {
     }
 
     @Test
+    void refundSkippedWhenNoDebit_freeMarketingOrGuest() {
+        // FREE_MARKETING-скан (в т.ч. от залогиненного юзера) баланс не списывал → возврата нет.
+        UUID scanId = UUID.randomUUID();
+        when(txnRepository.existsByScanIdAndType(scanId, BalanceTxnType.DEBIT)).thenReturn(false);
+
+        service.refund(1L, scanId);
+
+        verify(balanceRepository, never()).findByUserId(org.mockito.ArgumentMatchers.anyLong());
+        verify(txnRepository, never()).saveAndFlush(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
     void refundIsIdempotentByScanId() {
         UUID scanId = UUID.randomUUID();
+        when(txnRepository.existsByScanIdAndType(scanId, BalanceTxnType.DEBIT)).thenReturn(true);
         when(txnRepository.existsByScanIdAndType(scanId, BalanceTxnType.REFUND)).thenReturn(true);
 
         service.refund(1L, scanId);
@@ -91,6 +104,7 @@ class ScanBalanceServiceTest {
     void refundRestoresMonthlyQuota() {
         balance.setUsedThisPeriod(2);
         UUID scanId = UUID.randomUUID();
+        when(txnRepository.existsByScanIdAndType(scanId, BalanceTxnType.DEBIT)).thenReturn(true);
         when(txnRepository.existsByScanIdAndType(scanId, BalanceTxnType.REFUND)).thenReturn(false);
         when(balanceRepository.findByUserId(1L)).thenReturn(Optional.of(balance));
 
@@ -106,6 +120,7 @@ class ScanBalanceServiceTest {
     @Test
     void refundSwallowsUniqueViolationFromConcurrentRefund() {
         UUID scanId = UUID.randomUUID();
+        when(txnRepository.existsByScanIdAndType(scanId, BalanceTxnType.DEBIT)).thenReturn(true);
         when(txnRepository.existsByScanIdAndType(scanId, BalanceTxnType.REFUND)).thenReturn(false);
         when(balanceRepository.findByUserId(1L)).thenReturn(Optional.of(balance));
         when(txnRepository.saveAndFlush(org.mockito.ArgumentMatchers.any()))

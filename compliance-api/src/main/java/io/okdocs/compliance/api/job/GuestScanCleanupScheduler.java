@@ -1,6 +1,7 @@
 package io.okdocs.compliance.api.job;
 
 import io.okdocs.compliance.api.config.ComplianceApiProperties;
+import io.okdocs.compliance.contracts.enums.ScanKind;
 import io.okdocs.compliance.persistence.scan.ComplianceScanRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -12,8 +13,11 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 
 /**
- * TTL-чистка эфемерных гостевых сканов (§4.6): раз в день удаляет сканы без владельца
- * ({@code userId IS NULL}) старше {@code scan.guestRetentionDays}. Cascade удалит findings/emails.
+ * TTL-чистка эфемерных FREE_MARKETING-сканов (§4.6): раз в день удаляет лид-магнит-сканы старше
+ * {@code scan.freeMarketingRetentionDays}, <b>по {@code kind}</b> (не по {@code userId IS NULL}) —
+ * после split FREE/PREMIUM (Этап 5.5) free-скан может принадлежать залогиненному юзеру, и гард по
+ * владельцу его бы не удалил. Cascade удалит findings/emails. CABINET_PREMIUM хранится в истории
+ * кабинета, чистке не подлежит.
  */
 @Slf4j
 @Component
@@ -25,12 +29,12 @@ public class GuestScanCleanupScheduler {
 
     @Scheduled(cron = "${compliance.scan.guest-cleanup-cron:0 0 3 * * *}")
     @Transactional
-    public void cleanupGuestScans() {
-        int retentionDays = properties.scan().guestRetentionDays();
+    public void cleanupFreeMarketingScans() {
+        int retentionDays = properties.scan().freeMarketingRetentionDays();
         Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
-        int removed = scanRepository.deleteGuestScansOlderThan(cutoff);
+        int removed = scanRepository.deleteByKindOlderThan(ScanKind.FREE_MARKETING, cutoff);
         if (removed > 0) {
-            log.info("TTL-чистка: удалено {} гостевых сканов старше {} дней", removed, retentionDays);
+            log.info("TTL-чистка: удалено {} FREE_MARKETING-сканов старше {} дней", removed, retentionDays);
         }
     }
 }

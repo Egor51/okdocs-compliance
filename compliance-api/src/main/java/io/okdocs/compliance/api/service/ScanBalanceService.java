@@ -77,6 +77,11 @@ public class ScanBalanceService {
     /**
      * Возврат 1 скана при FAILED, идемпотентно по scanId.
      * <p>
+     * <b>Возвращаем только реально списанное</b> (есть DEBIT по этому scanId): FREE_MARKETING-скан
+     * (в т.ч. запущенный залогиненным юзером) баланс не трогал, поэтому при его FAILED возврата быть
+     * не должно — иначе юзер получил бы кредит, которого не платил. Refund = «отмена фактического
+     * списания», а не «реакция на любое ScanFailedEvent с userId».
+     * <p>
      * Двойная защита от гонки at-least-once Kafka: (1) быстрый пре-чек, (2) партиальный уникальный
      * индекс {@code uq_balance_txns_refund_per_scan} (V011) — второй параллельный REFUND по тому же
      * scanId падает с unique violation. Ловим её ВНЕ транзакции (она помечает tx rollback-only),
@@ -84,6 +89,11 @@ public class ScanBalanceService {
      * дважды.
      */
     public void refund(Long userId, UUID scanId) {
+        if (!txnRepository.existsByScanIdAndType(scanId, BalanceTxnType.DEBIT)) {
+            // Списания по этому скану не было (FREE_MARKETING / гость) — возвращать нечего.
+            log.debug("Refund по скану {} пропущен: нет DEBIT (не chargeable-скан)", scanId);
+            return;
+        }
         if (txnRepository.existsByScanIdAndType(scanId, BalanceTxnType.REFUND)) {
             log.debug("Refund по скану {} уже выполнен — пропуск", scanId);
             return;

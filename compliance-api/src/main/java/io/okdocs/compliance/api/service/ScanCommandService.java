@@ -3,12 +3,15 @@ package io.okdocs.compliance.api.service;
 import io.okdocs.compliance.api.config.ComplianceApiProperties;
 import io.okdocs.compliance.api.security.CompliancePrincipal;
 import io.okdocs.compliance.messaging.OutboxEventFactory;
+import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
+import io.okdocs.compliance.contracts.enums.ScanKind;
 import io.okdocs.compliance.contracts.enums.ScanStatus;
 import io.okdocs.compliance.contracts.enums.ScanTier;
 import io.okdocs.compliance.contracts.event.ScanRequestedEvent;
 import io.okdocs.compliance.contracts.exception.AccessDeniedToScanException;
 import io.okdocs.compliance.contracts.exception.ComplianceValidationException;
 import io.okdocs.compliance.contracts.exception.ScanNotFoundException;
+import io.okdocs.compliance.contracts.scan.FreeScanRequest;
 import io.okdocs.compliance.contracts.scan.ScanEmailRequest;
 import io.okdocs.compliance.contracts.scan.ScanListResponse;
 import io.okdocs.compliance.contracts.scan.ScanReportResponse;
@@ -53,21 +56,61 @@ public class ScanCommandService {
     private final ComplianceApiProperties properties;
 
     /**
-     * Запуск скана. Rate-limit (дёшево, до транзакции) → транзакция: для юзера списать 1 скан,
-     * сохранить {@link ComplianceScan}, записать {@link OutboxEvent}. Гость баланс не трогает.
+     * Бесплатный маркетинговый скан ({@code POST /api/free-scans}): {@code FREE_MARKETING}, 1 страница,
+     * только STATIC, без списания баланса. Доступен гостям и юзерам. Родителя нет.
      */
     @Transactional
-    public ScanStatusResponse startScan(ScanRequest request, String ipAddress,
-                                        CompliancePrincipal principal) {
+    public ScanStatusResponse startFreeScan(FreeScanRequest request, String ipAddress,
+                                            CompliancePrincipal principal) {
         rateLimitService.checkScanAllowed(principal, ipAddress);
-
         UrlValidatorService.ValidatedUrl validated = urlValidator.validate(request.siteUrl());
 
+        ScanJurisdiction jurisdiction = parseJurisdiction(request.jurisdiction());
+
+        ComplianceScan scan = newScan(validated, ipAddress, principal, null,
+                ScanKind.FREE_MARKETING, properties.scan().freeMarketingMaxPages(), false, jurisdiction);
+        scanRepository.save(scan);
+        publishScanRequested(scan, principal);
+        return toStatusResponse(scan);
+    }
+
+    /**
+     * Полноценный premium-скан кабинета ({@code POST /api/cabinet/scans}): {@code CABINET_PREMIUM},
+     * полный crawl, STATIC + DYNAMIC (dynamic required). Только для USER; списывает 1 кредит баланса
+     * (нет баланса → 402 через {@code InsufficientScanBalanceException}). При FAILED worker вернёт
+     * кредит (refund по {@code ScanFailedEvent}).
+     */
+    @Transactional
+    public ScanStatusResponse startCabinetScan(ScanRequest request, String ipAddress,
+                                               CompliancePrincipal principal) {
+        if (!principal.isUser()) {
+            throw new AccessDeniedToScanException(null);
+        }
+        rateLimitService.checkScanAllowed(principal, ipAddress);
+        UrlValidatorService.ValidatedUrl validated = urlValidator.validate(request.siteUrl());
         UUID parentScanId = resolveParent(request.parentScanId(), validated.domain(), principal);
 
+        ScanJurisdiction jurisdiction = parseJurisdiction(request.jurisdiction());
+
+        ComplianceScan scan = newScan(validated, ipAddress, principal, parentScanId,
+                ScanKind.CABINET_PREMIUM, properties.scan().userMaxPages(), true, jurisdiction);
+
+        // Списание баланса — в той же транзакции (oversell ловит @Version; нет баланса → 402).
+        balanceService.debit(principal.userId(), scan.getId());
+
+        scanRepository.save(scan);
+        publishScanRequested(scan, principal);
+        return toStatusResponse(scan);
+    }
+
+    /** Сборка строки скана в QUEUED. Режим выполнения (kind/maxPages/dynamicRequired) — здесь. */
+    private ComplianceScan newScan(UrlValidatorService.ValidatedUrl validated, String ipAddress,
+                                   CompliancePrincipal principal, UUID parentScanId,
+                                   ScanKind kind, int maxPages, boolean dynamicRequired, ScanJurisdiction jurisdiction) {
         ComplianceScan scan = new ComplianceScan();
         scan.setId(UUID.randomUUID());
         scan.setUserId(principal.userId());
+        scan.setJurisdiction(jurisdiction);
         scan.setGuestId(principal.guestId());
         scan.setParentScanId(parentScanId);
         scan.setIpAddress(ipAddress);
@@ -76,24 +119,21 @@ public class ScanCommandService {
         scan.setSiteDomain(validated.domain());
         scan.setProgressStep("Ожидание");
         scan.setProgressPct(0);
-        scan.setTier(ScanTier.FREE);
+        scan.setTier(ScanTier.FREE); // unlock-tier отчёта; режим выполнения определяет kind
+        scan.setKind(kind);
+        scan.setMaxPages(maxPages);
+        scan.setDynamicRequired(dynamicRequired);
+        return scan;
+    }
 
-        // Списание баланса — только для юзера; внутри той же транзакции (oversell ловит @Version).
-        if (principal.isUser()) {
-            balanceService.debit(principal.userId(), scan.getId());
-        }
-
-        scanRepository.save(scan);
-
-        int maxPages = principal.isUser() ? properties.scan().userMaxPages() : properties.scan().guestMaxPages();
+    /** Transactional outbox: событие-команда «обработай scanId» в той же транзакции, что и скан. */
+    private void publishScanRequested(ComplianceScan scan, CompliancePrincipal principal) {
         ScanRequestedEvent event = new ScanRequestedEvent(
                 UUID.randomUUID(), 1, scan.getId(), principal.userId(), principal.guestId(),
-                scan.getSiteUrl(), maxPages, Instant.now());
+                scan.getSiteUrl(), Instant.now());
         OutboxEvent outbox = outboxEventFactory.create(
                 scan.getId(), properties.kafka().topic().scanRequested(), scan.getId().toString(), event);
         outboxRepository.save(outbox);
-
-        return toStatusResponse(scan);
     }
 
     @Transactional(readOnly = true)
@@ -137,6 +177,22 @@ public class ScanCommandService {
 
         scan.setBuyerEmail(request.email());
         scanRepository.save(scan);
+    }
+
+    /**
+     * Строгий разбор юрисдикции из запроса в {@link ScanJurisdiction}: «по какому закону проверяем».
+     * Невалидное/пустое значение → 400 ({@link ComplianceValidationException}), без неявного дефолта —
+     * выбор юрисдикции явно делает фронт (от неё зависят набор правил и тариф).
+     */
+    private static ScanJurisdiction parseJurisdiction(String raw) {
+        if (raw == null || raw.isBlank()) {
+            throw new ComplianceValidationException("Не указана юрисдикция скана");
+        }
+        try {
+            return ScanJurisdiction.valueOf(raw.trim().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            throw new ComplianceValidationException("Неизвестная юрисдикция скана: " + raw);
+        }
     }
 
     private UUID resolveParent(UUID parentScanId, String domain, CompliancePrincipal principal) {

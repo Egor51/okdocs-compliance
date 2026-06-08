@@ -7,14 +7,12 @@ import io.okdocs.compliance.contracts.enums.ScanStatus;
 import io.okdocs.compliance.contracts.scan.ScanEmailRequest;
 import io.okdocs.compliance.contracts.scan.ScanListResponse;
 import io.okdocs.compliance.contracts.scan.ScanReportResponse;
-import io.okdocs.compliance.contracts.scan.ScanRequest;
 import io.okdocs.compliance.contracts.scan.ScanStatusResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -26,7 +24,11 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
 
-/** REST-вход сканирования (§4.1). Owner-check и tier-маскировка — в сервисе. */
+/**
+ * Чтение результатов скана (§4.1): статус/отчёт/история + сохранение email. Owner-check и
+ * tier-маскировка — в сервисе. Запуск скана разнесён по двум flow:
+ * {@code POST /api/free-scans} (marketing) и {@code POST /api/cabinet/scans} (premium).
+ */
 @RestController
 @RequestMapping("/api/compliance-scans")
 @RequiredArgsConstructor
@@ -36,15 +38,6 @@ public class ComplianceScanController {
 
     private final ScanCommandService scanCommandService;
     private final ClientIpResolver clientIpResolver;
-
-    @PostMapping
-    public ResponseEntity<ScanStatusResponse> start(@Valid @RequestBody ScanRequest request,
-                                                    HttpServletRequest http) {
-        CompliancePrincipal principal = CurrentPrincipal.require();
-        ScanStatusResponse response = scanCommandService.startScan(
-                request, clientIpResolver.resolve(http), principal);
-        return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
-    }
 
     @GetMapping
     public ScanListResponse list(@RequestParam(required = false) String domain,
