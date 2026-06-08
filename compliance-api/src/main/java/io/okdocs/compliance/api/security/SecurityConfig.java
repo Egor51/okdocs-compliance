@@ -51,6 +51,9 @@ public class SecurityConfig {
                         .requestMatchers("/api/cabinet/**").hasRole("USER")
                         // история сканов — только USER (§4.3)
                         .requestMatchers(HttpMethod.GET, "/api/compliance-scans").hasRole("USER")
+                        // free marketing scan — любой валидный токен (guest получает его через
+                        // /api/auth/guest; так rate-limit по IP и owner-check работают единообразно)
+                        .requestMatchers(HttpMethod.POST, "/api/free-scans").authenticated()
                         // остальные scan-эндпоинты — любой валидный токен; owner-check в сервисе
                         .requestMatchers("/api/compliance-scans/**").authenticated()
                         .anyRequest().authenticated())
