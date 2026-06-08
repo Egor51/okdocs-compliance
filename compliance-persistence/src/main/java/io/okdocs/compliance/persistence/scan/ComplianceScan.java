@@ -1,5 +1,7 @@
 package io.okdocs.compliance.persistence.scan;
 
+import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
+import io.okdocs.compliance.contracts.enums.ScanKind;
 import io.okdocs.compliance.contracts.enums.ScanStatus;
 import io.okdocs.compliance.contracts.enums.ScanTier;
 import jakarta.persistence.Column;
@@ -78,6 +80,23 @@ public class ComplianceScan {
     @Column(nullable = false, length = 30)
     private ScanTier tier;
 
+    /** Продуктовый flow: FREE_MARKETING (static, 1 страница) vs CABINET_PREMIUM (static+dynamic). */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "scan_kind", nullable = false, length = 30)
+    private ScanKind kind;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "scan_jurisdiction", nullable = false, length = 30)
+    private ScanJurisdiction jurisdiction;
+
+    /** Лимит страниц краула (перенесён из события — worker читает из БД). */
+    @Column(name = "max_pages", nullable = false)
+    private int maxPages;
+
+    /** Для CABINET_PREMIUM dynamic обязателен: CDP недоступен → FAILED + refund. */
+    @Column(name = "dynamic_required", nullable = false)
+    private boolean dynamicRequired;
+
     @Column(name = "buyer_email")
     private String buyerEmail;
 
@@ -93,6 +112,7 @@ public class ComplianceScan {
 
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
+    
 
     @Version
     @Column(nullable = false)

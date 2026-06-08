@@ -1,5 +1,6 @@
 package io.okdocs.compliance.persistence.scan;
 
+import io.okdocs.compliance.contracts.enums.ScanKind;
 import io.okdocs.compliance.contracts.enums.ScanStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -49,8 +50,35 @@ public interface ComplianceScanRepository extends JpaRepository<ComplianceScan, 
                                       @Param("status") ScanStatus status,
                                       Pageable pageable);
 
-    /** TTL-чистка гостевых сканов (§4.6): userId IS NULL и старше cutoff. Cascade удалит findings/emails. */
+    /**
+     * TTL-чистка эфемерных FREE_MARKETING-сканов (§4.6): по {@code kind}, а НЕ по {@code userId IS NULL}.
+     * После split FREE/PREMIUM (Этап 5.5) free-скан может иметь {@code userId} (залогиненный юзер
+     * запустил лид-магнит) — старый гард по владельцу его бы не удалил, и он жил бы вечно. Cascade
+     * удалит findings/emails.
+     */
     @Modifying
-    @Query("DELETE FROM ComplianceScan s WHERE s.userId IS NULL AND s.createdAt < :cutoff")
-    int deleteGuestScansOlderThan(@Param("cutoff") Instant cutoff);
+    @Query("DELETE FROM ComplianceScan s WHERE s.kind = :kind AND s.createdAt < :cutoff")
+    int deleteByKindOlderThan(@Param("kind") ScanKind kind, @Param("cutoff") Instant cutoff);
+
+    /**
+     * Best-effort апдейт прогресса (§5.3): прямой UPDATE по id, только если статус НЕ терминальный.
+     * Намеренно НЕ через dirty-checking entity — иначе {@code OptimisticLockingFailureException}
+     * прилетал бы на flush/commit (после выхода из сервиса через proxy) и валил бы пайплайн. Прямой
+     * запрос не трогает {@code @Version} и не конфликтует с lifecycle-переходами; двигает
+     * {@code updated_at}, чтобы reaper не считал живой скан зависшим. Возвращает число обновлённых
+     * строк (0 = скан уже терминальный/удалён — не ошибка).
+     */
+    @Modifying
+    @Query("""
+            UPDATE ComplianceScan s
+            SET s.progressPct = :pct, s.progressStep = :step, s.updatedAt = :now
+            WHERE s.id = :scanId
+              AND s.status NOT IN (io.okdocs.compliance.contracts.enums.ScanStatus.COMPLETED,
+                                   io.okdocs.compliance.contracts.enums.ScanStatus.PARTIAL,
+                                   io.okdocs.compliance.contracts.enums.ScanStatus.FAILED)
+            """)
+    int updateProgress(@Param("scanId") UUID scanId,
+                       @Param("pct") int pct,
+                       @Param("step") String step,
+                       @Param("now") Instant now);
 }
