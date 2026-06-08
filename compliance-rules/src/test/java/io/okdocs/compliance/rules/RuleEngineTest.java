@@ -3,6 +3,7 @@ package io.okdocs.compliance.rules;
 import io.okdocs.compliance.contracts.crawler.ScanAnalysisContext;
 import io.okdocs.compliance.contracts.enums.FindingCategory;
 import io.okdocs.compliance.contracts.enums.FindingSeverity;
+import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.rules.ru.UnprotectedDataFormsRule;
 import org.junit.jupiter.api.Test;
 
@@ -53,6 +54,17 @@ class RuleEngineTest {
     }
 
     @Test
+    void runsOnlyRulesMatchingScanJurisdiction() {
+        // RU-скан: EU-правило (GDPR) пропускается молча, без ошибки — не его юрисдикция.
+        RuleEngine engine = new RuleEngine(List.of(new OkRule(), new EuRule()));
+
+        RuleEngineResult result = engine.evaluate(TestFixtures.ctx()); // ctx() == RU
+
+        assertThat(result.facts()).extracting(RuleFact::code).containsExactly("OK");
+        assertThat(result.errors()).isEmpty();
+    }
+
+    @Test
     void emptyRuleSetYieldsEmptyResult() {
         RuleEngineResult result = new RuleEngine(List.of()).evaluate(TestFixtures.ctx());
         assertThat(result.facts()).isEmpty();
@@ -62,13 +74,27 @@ class RuleEngineTest {
     private static final class OkRule implements Rule {
         @Override
         public RuleDefinition definition() {
-            return new RuleDefinition("OK", FindingSeverity.LOW, FindingCategory.OTHER,
-                    "ok", null, null, null, null);
+            return new RuleDefinition("OK", ScanJurisdiction.RU, FindingSeverity.LOW,
+                    FindingCategory.OTHER, "ok", null, null, null, null);
         }
 
         @Override
         public List<RuleFact> evaluate(ScanAnalysisContext ctx) {
             return List.of(new RuleFact("OK", null, null, null, null, null, null, null));
+        }
+    }
+
+    /** EU-правило (GDPR): на RU-скане {@link RuleEngine} его пропускает. */
+    private static final class EuRule implements Rule {
+        @Override
+        public RuleDefinition definition() {
+            return new RuleDefinition("EU_ONLY", ScanJurisdiction.EU, FindingSeverity.LOW,
+                    FindingCategory.OTHER, "eu", null, null, null, null);
+        }
+
+        @Override
+        public List<RuleFact> evaluate(ScanAnalysisContext ctx) {
+            return List.of(new RuleFact("EU_ONLY", null, null, null, null, null, null, null));
         }
     }
 
@@ -87,8 +113,8 @@ class RuleEngineTest {
     private static final class ThrowingRule implements Rule {
         @Override
         public RuleDefinition definition() {
-            return new RuleDefinition("BOOM", FindingSeverity.LOW, FindingCategory.OTHER,
-                    "boom", null, null, null, null);
+            return new RuleDefinition("BOOM", ScanJurisdiction.RU, FindingSeverity.LOW,
+                    FindingCategory.OTHER, "boom", null, null, null, null);
         }
 
         @Override

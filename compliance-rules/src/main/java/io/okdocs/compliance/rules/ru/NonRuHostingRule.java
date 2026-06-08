@@ -4,6 +4,7 @@ import io.okdocs.compliance.contracts.crawler.ScanAnalysisContext;
 import io.okdocs.compliance.contracts.enums.EvidenceType;
 import io.okdocs.compliance.contracts.enums.FindingCategory;
 import io.okdocs.compliance.contracts.enums.FindingSeverity;
+import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.contracts.enums.SourceType;
 import io.okdocs.compliance.contracts.enums.VerificationStatus;
 import io.okdocs.compliance.rules.Rule;
@@ -28,6 +29,7 @@ public final class NonRuHostingRule implements Rule {
 
     private static final RuleDefinition DEFINITION = new RuleDefinition(
             "HOSTING_OUTSIDE_RU_DETECTED",
+            ScanJurisdiction.RU,
             FindingSeverity.HIGH,
             FindingCategory.HOSTING,
             "Сервер сайта находится за пределами Российской Федерации",

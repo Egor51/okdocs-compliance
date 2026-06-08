@@ -7,6 +7,7 @@ import io.okdocs.compliance.contracts.enums.EvidenceType;
 import io.okdocs.compliance.contracts.enums.FindingCategory;
 import io.okdocs.compliance.contracts.enums.FindingSeverity;
 import io.okdocs.compliance.contracts.enums.RenderMode;
+import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.contracts.enums.SourceType;
 import io.okdocs.compliance.contracts.enums.VerificationStatus;
 import io.okdocs.compliance.rules.Rule;
@@ -26,6 +27,7 @@ public final class ConsentDefaultCheckedRule implements Rule {
 
     private static final RuleDefinition DEFINITION = new RuleDefinition(
             "CONSENT_DEFAULT_CHECKED",
+            ScanJurisdiction.RU,
             FindingSeverity.HIGH,
             FindingCategory.CONSENT,
             "Согласие на обработку ПДн отмечено по умолчанию",
