@@ -22,10 +22,9 @@ spring:
       group-id: compliance-worker
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
-      properties:
-        spring.json.trusted.packages: "io.okdocs.compliance.*"
-        spring.json.use.type.headers: false
+      # Сырые байты + ByteArrayJsonMessageConverter (MessagingConfig): тип из сигнатуры @KafkaListener
+      # без type-headers. Единый контракт api↔worker в combined-процессе.
+      value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
     listener:
       concurrency: 3
       ack-mode: manual
@@ -44,6 +43,7 @@ compliance:
     topic:
       scan-requested: compliance.scan.requested
       scan-completed: compliance.scan.completed
+      scan-failed: compliance.scan.failed
   rate-limit:
     scans-per-ip-per-hour: 5
   crawler:

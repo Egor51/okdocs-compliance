@@ -1,0 +1,19 @@
+# Kafka-конфиг для round-trip IT — копия прод-настроек (worker/application.yml), чтобы доказывать
+# именно прод-контракт: JsonNode-payload от producer → typed record у consumer БЕЗ type headers
+# (тип резолвится по сигнатуре @KafkaListener). bootstrap-servers подставляет @EmbeddedKafka.
+spring:
+  kafka:
+    bootstrap-servers: ${spring.embedded.kafka.brokers}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      properties:
+        spring.json.add.type.headers: false
+    consumer:
+      group-id: compliance-worker-it
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # Как в проде: сырые байты + ByteArrayJsonMessageConverter, тип из сигнатуры @KafkaListener.
+      value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+    listener:
+      ack-mode: manual
