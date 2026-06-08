@@ -13,6 +13,7 @@ import java.util.UUID;
  */
 public record ScanRequest(
         @NotBlank String siteUrl,
+        @NotBlank String  jurisdiction,
         UUID parentScanId
 ) {
 }

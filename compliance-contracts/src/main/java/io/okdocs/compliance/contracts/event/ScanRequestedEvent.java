@@ -6,8 +6,10 @@ import java.util.UUID;
 /**
  * Запрошен скан сайта. Авторизованный → {@code userId} заполнен; гость → {@code guestId}.
  * <p>
- * {@code tier} намеренно отсутствует: скан всегда стартует FREE, worker всегда прогоняет все
- * правила. Tier — свойство чтения отчёта, не выполнения скана.
+ * Событие — это команда «обработай {@code scanId}». Режим выполнения ({@code kind}, {@code maxPages},
+ * {@code dynamicRequired}, {@code tier}) намеренно <b>не</b> передаётся: worker читает его из строки
+ * {@code ComplianceScan} в БД (единый source of truth), не из producer-решений. {@code siteUrl} и
+ * {@code userId}/{@code guestId} оставлены для логирования/диагностики на стороне consumer'а.
  */
 public record ScanRequestedEvent(
         UUID eventId,
@@ -16,7 +18,6 @@ public record ScanRequestedEvent(
         Long userId,
         UUID guestId,
         String siteUrl,
-        Integer maxPages,
         Instant requestedAt
 ) {
 }
