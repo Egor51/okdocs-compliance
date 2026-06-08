@@ -4,6 +4,7 @@ import io.okdocs.compliance.contracts.crawler.PageAnalysisResult;
 import io.okdocs.compliance.contracts.crawler.ScanAnalysisContext;
 import io.okdocs.compliance.contracts.enums.FindingCategory;
 import io.okdocs.compliance.contracts.enums.FindingSeverity;
+import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.contracts.enums.SourceType;
 import io.okdocs.compliance.contracts.enums.VerificationStatus;
 import io.okdocs.compliance.rules.Rule;
@@ -23,6 +24,7 @@ public final class NoOperatorContactsRule implements Rule {
 
     private static final RuleDefinition DEFINITION = new RuleDefinition(
             "NO_OPERATOR_CONTACTS",
+            ScanJurisdiction.RU,
             FindingSeverity.MEDIUM,
             FindingCategory.DOCUMENTS,
             "Не найдены сведения об операторе персональных данных",
