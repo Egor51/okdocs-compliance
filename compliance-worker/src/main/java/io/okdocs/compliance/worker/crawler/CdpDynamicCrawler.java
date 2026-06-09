@@ -8,6 +8,7 @@ import io.okdocs.compliance.worker.config.ComplianceWorkerProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
+import org.slf4j.MDC;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -168,45 +169,53 @@ public class CdpDynamicCrawler implements DynamicCrawler {
 
         long t0 = System.currentTimeMillis();
 
-        // Один BrowserContext на весь batch: изолируем от других вкладок, но параллельные Target-ы
-        // внутри делят cookies/storage (нам подходит).
-        String browserContextId = createBrowserContext();
+        // ОДНА browser-level CdpSession на весь batch. Браузерный BrowserContext привязан к
+        // lifecycle той сессии, через которую создан (Browserless): если закрыть сокет сразу после
+        // Target.createBrowserContext, контекст исчезает, и Target.createTarget из новой сессии падает
+        // «Failed to find browser context». Поэтому держим browser-сессию открытой, через неё же
+        // создаём/закрываем targets и dispose'им контекст. getBrowserWsUrl() — один раз.
+        CdpSession browser;
         try {
-            return crawlWithContext(normalizedUrls, allowedThirdPartyHosts, browserContextId, t0);
+            browser = new CdpSession(getBrowserWsUrl(), authHeader);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to open CDP browser session: " + chromiumBaseUrl, e);
+        }
+        try {
+            String browserContextId = createBrowserContext(browser);
+            try {
+                return crawlWithContext(browser, normalizedUrls, allowedThirdPartyHosts, browserContextId, t0);
+            } finally {
+                disposeBrowserContext(browser, browserContextId);
+            }
         } finally {
-            disposeBrowserContext(browserContextId);
+            browser.close();
         }
     }
 
-    private String createBrowserContext() {
+    private String createBrowserContext(CdpSession browser) {
         try {
-            String browserWs = getBrowserWsUrl();
-            try (CdpSession browser = new CdpSession(browserWs, authHeader)) {
-                JsonNode result = browser.send("Target.createBrowserContext", null);
-                return result.path("browserContextId").asText();
-            }
+            JsonNode result = browser.send("Target.createBrowserContext", null);
+            return result.path("browserContextId").asText();
         } catch (Exception e) {
             throw new RuntimeException("Failed to create BrowserContext", e);
         }
     }
 
-    private void disposeBrowserContext(String browserContextId) {
+    private void disposeBrowserContext(CdpSession browser, String browserContextId) {
         if (browserContextId == null || browserContextId.isBlank()) {
             return;
         }
         try {
-            String browserWs = getBrowserWsUrl();
-            try (CdpSession browser = new CdpSession(browserWs, authHeader)) {
-                browser.send("Target.disposeBrowserContext",
-                        objectMapper.createObjectNode()
-                                .put("browserContextId", browserContextId).toString());
-            }
+            browser.send("Target.disposeBrowserContext",
+                    objectMapper.createObjectNode()
+                            .put("browserContextId", browserContextId).toString());
         } catch (Exception e) {
             log.debug("disposeBrowserContext ctx={} failed: {}", browserContextId, e.getMessage());
         }
     }
 
     private Map<String, PageAnalysisResult> crawlWithContext(
+            CdpSession browser,
             List<String> urls,
             Set<String> allowedThirdPartyHosts,
             String browserContextId,
@@ -218,14 +227,20 @@ public class CdpDynamicCrawler implements DynamicCrawler {
         // так deadline гарантированно жёсткий.
         AtomicBoolean cancelled = new AtomicBoolean(false);
 
+        // MDC (scanId/scanKind) живёт на потоке Kafka-листенера; cdp-worker-* — отдельные потоки пула,
+        // в них MDC пуст. Снимаем контекст вызывающего потока и ставим его в каждом воркере, чтобы
+        // CDP-логи трассировались по scanId, как и остальной пайплайн.
+        Map<String, String> parentMdc = MDC.getCopyOfContextMap();
+
         int workers = Math.min(concurrency, urls.size());
         ExecutorService pool = Executors.newFixedThreadPool(workers,
                 r -> new Thread(r, "cdp-worker-" + System.nanoTime() % 1000));
         try {
             List<Future<?>> futures = new ArrayList<>(workers);
             for (int i = 0; i < workers; i++) {
-                futures.add(pool.submit(
-                        () -> runWorker(queue, results, allowedThirdPartyHosts, browserContextId, cancelled)));
+                futures.add(pool.submit(() ->
+                        runWorker(browser, queue, results, allowedThirdPartyHosts, browserContextId,
+                                cancelled, parentMdc)));
             }
 
             long deadlineMs = batchTimeoutSeconds > 0
@@ -288,14 +303,19 @@ public class CdpDynamicCrawler implements DynamicCrawler {
      * Один воркер: создаёт Target (вкладку) внутри browserContext, забирает URL из очереди, обходит
      * последовательно в одной CdpSession, затем закрывает Target. Стоп при interrupt/cancelled.
      */
-    private void runWorker(BlockingQueue<String> queue,
+    private void runWorker(CdpSession browser,
+                           BlockingQueue<String> queue,
                            ConcurrentHashMap<String, PageAnalysisResult> results,
                            Set<String> allowedThirdPartyHosts,
                            String browserContextId,
-                           AtomicBoolean cancelled) {
+                           AtomicBoolean cancelled,
+                           Map<String, String> parentMdc) {
+        if (parentMdc != null) {
+            MDC.setContextMap(parentMdc);
+        }
         String targetId = null;
         try {
-            String[] target = createTargetInContext(browserContextId);
+            String[] target = createTargetInContext(browser, browserContextId);
             targetId = target[0];
             String wsUrl = target[1];
 
@@ -339,47 +359,45 @@ public class CdpDynamicCrawler implements DynamicCrawler {
             log.warn("CDP worker setup failed: {}", e.getMessage());
         } finally {
             if (targetId != null) {
-                closeTarget(targetId);
+                closeTarget(browser, targetId);
             }
+            MDC.clear();
         }
     }
 
-    /** Создаёт Target внутри BrowserContext. Возвращает [targetId, wsDebuggerUrl]. */
-    private String[] createTargetInContext(String browserContextId) throws Exception {
-        String browserWs = getBrowserWsUrl();
-        try (CdpSession browser = new CdpSession(browserWs, authHeader)) {
-            JsonNode tgtResult = browser.send("Target.createTarget",
-                    objectMapper.createObjectNode()
-                            .put("url", "about:blank")
-                            .put("browserContextId", browserContextId)
-                            .toString());
-            String targetId = tgtResult.path("targetId").asText();
+    /**
+     * Создаёт Target внутри BrowserContext через общую browser-сессию (НЕ открывает новую — иначе
+     * контекст из другой сессии не виден). Возвращает [targetId, wsDebuggerUrl].
+     */
+    private String[] createTargetInContext(CdpSession browser, String browserContextId) throws Exception {
+        JsonNode tgtResult = browser.send("Target.createTarget",
+                objectMapper.createObjectNode()
+                        .put("url", "about:blank")
+                        .put("browserContextId", browserContextId)
+                        .toString());
+        String targetId = tgtResult.path("targetId").asText();
 
-            HttpResponse<String> listResp = http.send(
-                    cdpGet("/json/list", Duration.ofSeconds(5)),
-                    HttpResponse.BodyHandlers.ofString());
-            JsonNode targets = objectMapper.readTree(listResp.body());
-            String wsUrl = "";
-            for (JsonNode t : targets) {
-                if (targetId.equals(t.path("id").asText())) {
-                    wsUrl = resolveWsUrl(t.path("webSocketDebuggerUrl").asText());
-                    break;
-                }
+        HttpResponse<String> listResp = http.send(
+                cdpGet("/json/list", Duration.ofSeconds(5)),
+                HttpResponse.BodyHandlers.ofString());
+        JsonNode targets = objectMapper.readTree(listResp.body());
+        String wsUrl = "";
+        for (JsonNode t : targets) {
+            if (targetId.equals(t.path("id").asText())) {
+                wsUrl = resolveWsUrl(t.path("webSocketDebuggerUrl").asText());
+                break;
             }
-            if (wsUrl.isBlank()) {
-                throw new IllegalStateException("wsDebuggerUrl not found for targetId=" + targetId);
-            }
-            return new String[]{targetId, wsUrl};
         }
+        if (wsUrl.isBlank()) {
+            throw new IllegalStateException("wsDebuggerUrl not found for targetId=" + targetId);
+        }
+        return new String[]{targetId, wsUrl};
     }
 
-    private void closeTarget(String targetId) {
+    private void closeTarget(CdpSession browser, String targetId) {
         try {
-            String browserWs = getBrowserWsUrl();
-            try (CdpSession browser = new CdpSession(browserWs, authHeader)) {
-                browser.send("Target.closeTarget",
-                        objectMapper.createObjectNode().put("targetId", targetId).toString());
-            }
+            browser.send("Target.closeTarget",
+                    objectMapper.createObjectNode().put("targetId", targetId).toString());
         } catch (Exception e) {
             log.debug("closeTarget targetId={} failed: {}", targetId, e.getMessage());
         }

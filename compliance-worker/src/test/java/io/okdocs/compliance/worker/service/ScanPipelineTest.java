@@ -27,6 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
@@ -104,20 +105,23 @@ class ScanPipelineTest {
     }
 
     @Test
-    void premium_noPagesWorthDynamic_completesOnStatic() {
-        // Нет форм/политики → dynamic нечего обогащать, но это НЕ провал: premium static полноценен.
+    void premium_noPriorityPagesStillRunsDynamicFallback() {
+        // Нет форм/политики в static HTML: для premium всё равно рендерим fallback-страницы,
+        // потому что SPA может показать формы/трекеры только после JS.
         ComplianceScan scan = premiumScan();
         when(dynamicCrawler.isAvailable()).thenReturn(true);
-        var page = page("https://example.com/about"); // не worth dynamic
+        var page = page("https://example.com/about"); // не приоритетная dynamic-страница
         when(siteCrawler.crawl(anyString(), anyInt()))
                 .thenReturn(new SiteCrawler.CrawlResult(List.of(page), new CrawlerDiagnostics(1, 1, 0, false)));
+        when(dynamicCrawler.crawlPages(eq(List.of("https://example.com/about")), any()))
+                .thenReturn(Map.of("https://example.com/about", dynamicPage("https://example.com/about")));
         stubAnalysis();
 
         ScanPipeline.PipelineOutcome outcome = pipeline.run(scan, scan.getId());
 
         assertThat(outcome.finalStatus()).isEqualTo(ScanStatus.COMPLETED);
         assertThat(outcome.result()).isNotNull();
-        org.mockito.Mockito.verify(dynamicCrawler, org.mockito.Mockito.never()).crawlPages(any(), any());
+        org.mockito.Mockito.verify(dynamicCrawler).crawlPages(eq(List.of("https://example.com/about")), any());
     }
 
     private void stubAnalysis() {
@@ -144,5 +148,10 @@ class ScanPipelineTest {
     private PageAnalysisResult page(String url) {
         return new PageAnalysisResult(url, "t", "text", "<html></html>",
                 List.of(), List.of(), List.of(), false, List.of(), RenderMode.STATIC);
+    }
+
+    private PageAnalysisResult dynamicPage(String url) {
+        return new PageAnalysisResult(url, "t", "text", "<html></html>",
+                List.of(), List.of(), List.of(), false, List.of(), RenderMode.DYNAMIC);
     }
 }

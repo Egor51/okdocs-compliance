@@ -86,11 +86,83 @@ class ComplianceWorkerPropertiesTest {
         assertThat(props.getScan().getStaleAfter().toSeconds()).isEqualTo(300);
     }
 
-    /** Минимальный валидный набор (всё остальное — дефолты). */
+    @Test
+    void premiumEnabledWithoutCdp_failsCrossFieldInvariant() {
+        // premium обещан, но CDP не сконфигурирован → все premium-сканы были бы FAILED+refund.
+        // Инвариант роняет старт, а не тихо ломает платный поток.
+        Map<String, String> p = baseValid();
+        p.put("compliance.crawler.dynamic.premium-enabled", "true");
+        p.put("compliance.crawler.dynamic.enabled", "false");
+
+        assertThatThrownBy(() -> bind(p))
+                .isInstanceOfAny(BindException.class, BindValidationException.class)
+                .hasStackTraceContaining("premium-enabled");
+    }
+
+    @Test
+    void premiumEnabledWithBlankBaseUrl_failsCrossFieldInvariant() {
+        // enabled=true, но base-url пустой — CDP всё равно недоступен → инвариант падает.
+        Map<String, String> p = baseValid();
+        p.put("compliance.crawler.dynamic.premium-enabled", "true");
+        p.put("compliance.crawler.dynamic.enabled", "true");
+        p.put("compliance.crawler.dynamic.base-url", "");
+
+        assertThatThrownBy(() -> bind(p))
+                .isInstanceOfAny(BindException.class, BindValidationException.class)
+                .hasStackTraceContaining("premium-enabled");
+    }
+
+    @Test
+    void premiumEnabledWithConfiguredCdp_passes() {
+        Map<String, String> p = baseValid();
+        p.put("compliance.crawler.dynamic.premium-enabled", "true");
+        p.put("compliance.crawler.dynamic.enabled", "true");
+        p.put("compliance.crawler.dynamic.base-url", "http://browserless:3000");
+
+        ComplianceWorkerProperties props = bind(p);
+        assertThat(props.getCrawler().getDynamic().isPremiumEnabled()).isTrue();
+        assertThat(props.getCrawler().getDynamic().getBaseUrl()).isEqualTo("http://browserless:3000");
+    }
+
+    @Test
+    void wsBaseUrl_failsHttpSchemeInvariant() {
+        // base-url — HTTP CDP-эндпоинт (/json/version), а не WebSocket. ws:// ломает discovery
+        // таргетов → инвариант падает на старте, а не глухим FAILED каждого premium-скана.
+        Map<String, String> p = baseValid();
+        p.put("compliance.crawler.dynamic.enabled", "true");
+        p.put("compliance.crawler.dynamic.base-url", "ws://browserless:3000");
+
+        assertThatThrownBy(() -> bind(p))
+                .isInstanceOfAny(BindException.class, BindValidationException.class)
+                .hasStackTraceContaining("base-url");
+    }
+
+    @Test
+    void httpsBaseUrl_passesHttpSchemeInvariant() {
+        Map<String, String> p = baseValid();
+        p.put("compliance.crawler.dynamic.premium-enabled", "true");
+        p.put("compliance.crawler.dynamic.enabled", "true");
+        p.put("compliance.crawler.dynamic.base-url", "https://browserless.internal:3000");
+
+        ComplianceWorkerProperties props = bind(p);
+        assertThat(props.getCrawler().getDynamic().getBaseUrl())
+                .isEqualTo("https://browserless.internal:3000");
+    }
+
+    @Test
+    void premiumDisabled_passesWithoutCdp() {
+        // Локаль/стейдж без платного потока: premium-enabled=false — старт проходит без CDP.
+        Map<String, String> p = baseValid(); // baseValid уже ставит premium-enabled=false
+        ComplianceWorkerProperties props = bind(p);
+        assertThat(props.getCrawler().getDynamic().isPremiumEnabled()).isFalse();
+    }
+
+    /** Минимальный валидный набор (всё остальное — дефолты). Premium выключен: без CDP старт валиден. */
     private Map<String, String> baseValid() {
         Map<String, String> p = new HashMap<>();
         p.put("compliance.crawler.crawler-timeout-seconds", "90");
         p.put("compliance.scan.stale-after", "5m");
+        p.put("compliance.crawler.dynamic.premium-enabled", "false");
         return p;
     }
 }

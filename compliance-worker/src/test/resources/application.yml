@@ -1,0 +1,8 @@
+# Базовый конфиг для всех worker-IT. IT не используют платный premium-поток (CDP/headless), поэтому
+# premium-enabled=false — иначе инвариант ComplianceWorkerProperties.Dynamic#isPremiumRequiresCdp
+# уронил бы старт контекста (premium обещан, но CDP не сконфигурирован). Профильные yml (kafka-it)
+# накладываются поверх.
+compliance:
+  crawler:
+    dynamic:
+      premium-enabled: false

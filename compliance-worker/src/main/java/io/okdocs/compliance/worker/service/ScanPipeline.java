@@ -18,9 +18,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -34,7 +36,7 @@ import java.util.UUID;
 public class ScanPipeline {
 
     /** Сколько приоритетных страниц перекраулить динамически (формы/политика — там JS-контент важнее). */
-    private static final int MAX_DYNAMIC_PAGES = 5;
+    private static final int MAX_DYNAMIC_PAGES = 20;
 
     private final SiteCrawler siteCrawler;
     private final DynamicCrawler dynamicCrawler;
@@ -159,11 +161,11 @@ public class ScanPipeline {
      * Гибридное обогащение: перекраулить приоритетные страницы через {@link DynamicCrawler} и
      * наложить DYNAMIC-версии поверх STATIC (по URL).
      * <p>
-     * Семантика при {@code dynamicEnabled} (= CABINET_PREMIUM + dynamicRequired): если динамический
-     * проход <b>предпринят</b> (есть целевые страницы), но упал или вернул пусто — это
+     * Семантика при {@code dynamicEnabled} (= CABINET_PREMIUM + dynamicRequired): dynamic-проход
+     * обязателен. Берём стартовую страницу, приоритетные URL (формы/политика/контакты) и fallback
+     * из первых static-страниц. Если CDP упал или вернул пусто — это
      * {@link DynamicRequiredFailedException} → весь скан FAILED + refund (не отдаём degraded static
-     * за деньги). Случай «нет страниц, достойных dynamic» (формы/политика не найдены) — НЕ провал:
-     * premium-скан полноценно отработал static, dynamic-у нечего обогащать.
+     * за деньги).
      */
     private List<PageAnalysisResult> maybeDynamicRecrawl(List<PageAnalysisResult> staticPages,
                                                          String domain, UUID scanId, boolean dynamicEnabled) {
@@ -178,15 +180,10 @@ public class ScanPipeline {
             meterRegistry.counter("compliance.dynamic.failure").increment();
             throw new DynamicRequiredFailedException("CDP became unavailable during premium scan");
         }
-        List<String> targets = staticPages.stream()
-                .filter(ScanPipeline::isWorthDynamicRecrawl)
-                .map(PageAnalysisResult::url)
-                .distinct()
-                .limit(MAX_DYNAMIC_PAGES)
-                .toList();
+        List<String> targets = selectDynamicTargets(staticPages);
         if (targets.isEmpty()) {
-            // Нечего рендерить (нет форм/политики) — premium static-результат полноценен, не провал.
-            log.info("Scan {} premium: no pages worth dynamic re-crawl, static result is complete", scanId);
+            // staticPages не пустой, поэтому сюда попадём только если у всех страниц пустой URL.
+            log.info("Scan {} premium: no valid URLs for dynamic re-crawl, static result is complete", scanId);
             return staticPages;
         }
 
@@ -227,7 +224,41 @@ public class ScanPipeline {
         return new ArrayList<>(byUrl.values());
     }
 
-    /** Страница достойна dynamic-перекраула, если несёт формы или похожа на политику/контакты. */
+    /**
+     * Для premium dynamicRequired CDP не должен зависеть только от эвристики "есть форма/политика".
+     * SPA может скрывать формы/трекеры до JS-рендера, поэтому всегда рендерим стартовую страницу,
+     * затем приоритетные страницы и добиваем первыми URL из static crawl до лимита.
+     */
+    private static List<String> selectDynamicTargets(List<PageAnalysisResult> staticPages) {
+        Set<String> targets = new LinkedHashSet<>();
+        addDynamicTarget(targets, staticPages.get(0));
+
+        for (PageAnalysisResult page : staticPages) {
+            if (targets.size() >= MAX_DYNAMIC_PAGES) {
+                break;
+            }
+            if (isWorthDynamicRecrawl(page)) {
+                addDynamicTarget(targets, page);
+            }
+        }
+
+        for (PageAnalysisResult page : staticPages) {
+            if (targets.size() >= MAX_DYNAMIC_PAGES) {
+                break;
+            }
+            addDynamicTarget(targets, page);
+        }
+        return new ArrayList<>(targets);
+    }
+
+    private static void addDynamicTarget(Set<String> targets, PageAnalysisResult page) {
+        if (page == null || page.url() == null || page.url().isBlank()) {
+            return;
+        }
+        targets.add(page.url());
+    }
+
+    /** Приоритетная страница для dynamic-перекраула: формы, политика, consent, контакты. */
     private static boolean isWorthDynamicRecrawl(PageAnalysisResult page) {
         if (page.forms() != null && !page.forms().isEmpty()) {
             return true;

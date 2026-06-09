@@ -74,11 +74,26 @@ public class ComplianceWorkerProperties {
      * DYNAMIC-краулинг (headless-рендер через CDP) для CABINET_PREMIUM (§5.4). По умолчанию выключен:
      * FREE/гостевые сканы — только STATIC. Включается {@code compliance.crawler.dynamic.enabled=true}
      * + удалённый Chromium через {@code base-url}/{@code auth-token}.
+     * <p>
+     * {@code premiumEnabled} — явное «этот деплой обслуживает платный premium-поток». Premium-сканы
+     * требуют CDP ({@code dynamic_required}); если CDP не сконфигурирован, каждый такой скан падает в
+     * FAILED+refund. Чтобы это не было тихой ловушкой дефолта (free-сканы идут, а весь платный поток
+     * мёртв и обнаруживается только на реальном платеже), {@link #premiumRequiresCdp()} роняет
+     * контекст воркера на старте, если premium включён, но CDP недоступен. Локально/на стейдже, где
+     * premium осознанно не нужен, ставят {@code premium-enabled=false} — старт проходит, а отказ
+     * premium-сканов становится явным выбором, а не дефолтом.
      */
     @Data
     public static class Dynamic {
         private boolean enabled = false;
-        /** CDP HTTP/WebSocket endpoint удалённого Chromium (browserless и т.п.). */
+        /** Этот деплой обслуживает платный premium-поток (требует доступного CDP). */
+        private boolean premiumEnabled = true;
+        /**
+         * HTTP CDP endpoint удалённого Chromium (browserless и т.п.): {@code http://browserless:3000}.
+         * Это именно HTTP-эндпоинт (Chrome отдаёт {@code /json/version}, {@code /json/list}), а не
+         * WebSocket: {@code ws://}-URL ведёт прямо в один debug-сокет и ломает discovery таргетов.
+         * WS-адреса краулер выводит сам из {@code /json/version} ({@code resolveWsUrl}).
+         */
         private String baseUrl = "";
         /** Bearer-токен к CDP-эндпоинту. */
         private String authToken = "";
@@ -88,9 +103,39 @@ public class ComplianceWorkerProperties {
         /** Параллельных CDP-таргетов (вкладок) внутри одного BrowserContext. */
         @Min(1)
         private int concurrency = 3;
+        /** Сколько страниц premium-скана рендерить через CDP поверх static-карта сайта. */
+        @Min(1)
+        private int maxPages = 20;
         /** Жёсткий deadline на весь CDP-batch (секунды). */
         @Positive
         private int batchTimeoutSeconds = 180;
+
+        /**
+         * Premium-поток обещан, но CDP не сконфигурирован → невалидно: контекст не стартует. Premium
+         * требует {@code enabled=true} + непустой {@code base-url}. Сообщение — операторам, как чинить.
+         */
+        @AssertTrue(message = "compliance.crawler.dynamic.premium-enabled=true требует enabled=true и "
+                + "непустой base-url (CDP-эндпоинт). Иначе все CABINET_PREMIUM-сканы будут FAILED+refund. "
+                + "Для деплоя без платного потока выставьте premium-enabled=false.")
+        public boolean isPremiumRequiresCdp() {
+            return !premiumEnabled || (enabled && baseUrl != null && !baseUrl.isBlank());
+        }
+
+        /**
+         * {@code base-url} (если задан) обязан быть HTTP CDP-эндпоинтом: {@code http://} или
+         * {@code https://}. {@code ws://}/{@code wss://} — частая ошибка конфигурации: краулер ходит
+         * на {@code /json/version} по HTTP и сам выводит WS-адрес таргета; ws-base-url ломает discovery.
+         */
+        @AssertTrue(message = "compliance.crawler.dynamic.base-url должен быть HTTP CDP-эндпоинтом "
+                + "(http:// или https://), напр. http://browserless:3000. ws://...|wss://... недопустимо: "
+                + "WS-адрес краулер выводит из /json/version сам.")
+        public boolean isBaseUrlHttpScheme() {
+            if (baseUrl == null || baseUrl.isBlank()) {
+                return true; // пустой base-url ловит isPremiumRequiresCdp, когда premium включён
+            }
+            String lower = baseUrl.trim().toLowerCase(java.util.Locale.ROOT);
+            return lower.startsWith("http://") || lower.startsWith("https://");
+        }
     }
 
     @Data

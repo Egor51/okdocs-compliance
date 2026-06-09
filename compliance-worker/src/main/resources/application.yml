@@ -53,6 +53,17 @@ compliance:
     crawler-timeout-seconds: 90
     rate-limit-ms: 1000
     blocked-domains: []
+    dynamic:
+      # CDP headless Chromium для CABINET_PREMIUM. Прод: enabled=true + base-url на browserless.
+      # base-url — HTTP CDP-эндпоинт (http://browserless:3000), НЕ ws:// (см. isBaseUrlHttpScheme).
+      enabled: ${CDP_ENABLED:false}
+      base-url: ${CDP_BASE_URL:}
+      auth-token: ${CDP_AUTH_TOKEN:}
+      # premium-enabled=true (дефолт, fail-fast) требует сконфигурированного И доступного CDP:
+      # property-инвариант (isPremiumRequiresCdp) роняет старт без base-url, а CdpAvailabilityChecker
+      # — если CDP-эндпоинт мёртв. Так обычный деплой не стартует с мёртвым платным потоком.
+      # Локаль/стейдж без premium: профиль local / test-yml ставят premium-enabled=false.
+      premium-enabled: ${CDP_PREMIUM_ENABLED:true}
   scan:
     # Порог reaper'а: должен быть строго больше crawler.crawler-timeout-seconds (90s).
     stale-after: 5m
