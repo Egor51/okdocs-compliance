@@ -119,8 +119,8 @@ public class ScanCommandService {
         scan.setSiteDomain(validated.domain());
         scan.setProgressStep("Ожидание");
         scan.setProgressPct(0);
-        scan.setTier(ScanTier.FREE); // unlock-tier отчёта; режим выполнения определяет kind
         scan.setKind(kind);
+        scan.setTier(kind == ScanKind.CABINET_PREMIUM ? ScanTier.PREMIUM : ScanTier.FREE);
         scan.setMaxPages(maxPages);
         scan.setDynamicRequired(dynamicRequired);
         return scan;

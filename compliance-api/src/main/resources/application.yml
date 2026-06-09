@@ -25,6 +25,8 @@ spring:
       # Сырые байты + ByteArrayJsonMessageConverter (MessagingConfig): тип из сигнатуры @KafkaListener
       # без type-headers. См. compliance-worker/application.yml — единый контракт api↔worker.
       value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+    listener:
+      ack-mode: manual
   data:
     redis:
       host: ${REDIS_HOST:localhost}

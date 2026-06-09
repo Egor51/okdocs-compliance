@@ -3,7 +3,9 @@ package io.okdocs.compliance.api.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.okdocs.compliance.api.config.ComplianceApiProperties;
 import io.okdocs.compliance.contracts.enums.FindingSeverity;
+import io.okdocs.compliance.contracts.enums.ScanKind;
 import io.okdocs.compliance.contracts.enums.ScanTier;
+import io.okdocs.compliance.contracts.enums.VerificationStatus;
 import io.okdocs.compliance.contracts.scan.DiagnosticsDto;
 import io.okdocs.compliance.contracts.scan.FindingDto;
 import io.okdocs.compliance.contracts.scan.PaywallCtaDto;
@@ -15,8 +17,12 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Сборка {@link ScanReportResponse} из {@link ComplianceScan} + findings (§4.2).
@@ -33,9 +39,11 @@ public class ScanReportAssembler {
     private final ObjectMapper objectMapper;
 
     public ScanReportResponse assemble(ComplianceScan scan, List<ComplianceFinding> findings) {
-        boolean premium = scan.getTier() == ScanTier.PREMIUM;
-        List<FindingDto> findingDtos = findings.stream().map(f -> toDto(f, premium)).toList();
-        ScanSummaryDto summary = summarize(findings);
+        ScanTier tier = effectiveTier(scan);
+        boolean premium = tier == ScanTier.PREMIUM;
+        List<ComplianceFinding> representativeFindings = deduplicateByCode(findings);
+        List<FindingDto> findingDtos = representativeFindings.stream().map(f -> toDto(f, premium)).toList();
+        ScanSummaryDto summary = summarize(representativeFindings);
         PaywallCtaDto cta = premium ? null : paywallCta();
 
         return new ScanReportResponse(
@@ -44,14 +52,99 @@ public class ScanReportAssembler {
                 scan.getSiteDomain(),
                 scan.getStatus(),
                 scan.getScore(),
-                scan.getTier(),
+                tier,
                 scan.getParentScanId(),
                 summary,
                 findingDtos,
                 diagnostics(scan),
                 cta,
+                durationMs(scan),
                 scan.getCreatedAt(),
                 scan.getFinishedAt());
+    }
+
+    private static Long durationMs(ComplianceScan scan) {
+        if (scan.getDurationMs() != null) {
+            return scan.getDurationMs();
+        }
+        if (scan.getStartedAt() == null || scan.getFinishedAt() == null) {
+            return null;
+        }
+        return Duration.between(scan.getStartedAt(), scan.getFinishedAt()).toMillis();
+    }
+
+    /**
+     * CABINET_PREMIUM is paid at scan start via balance debit, so its report is premium even if an
+     * older row still has the historical default tier=FREE.
+     */
+    private static ScanTier effectiveTier(ComplianceScan scan) {
+        if (scan.getTier() == ScanTier.PREMIUM || scan.getKind() == ScanKind.CABINET_PREMIUM) {
+            return ScanTier.PREMIUM;
+        }
+        return ScanTier.FREE;
+    }
+
+    private static List<ComplianceFinding> deduplicateByCode(List<ComplianceFinding> findings) {
+        if (findings == null || findings.isEmpty()) {
+            return List.of();
+        }
+        Map<String, ComplianceFinding> byCode = new LinkedHashMap<>();
+        for (ComplianceFinding finding : findings) {
+            if (finding == null || finding.getCode() == null) {
+                continue;
+            }
+            byCode.merge(finding.getCode(), finding, ScanReportAssembler::betterRepresentative);
+        }
+        return new ArrayList<>(byCode.values());
+    }
+
+    private static ComplianceFinding betterRepresentative(ComplianceFinding a, ComplianceFinding b) {
+        int confidence = Double.compare(confidenceScore(b), confidenceScore(a));
+        if (confidence != 0) {
+            return confidence > 0 ? b : a;
+        }
+        int verification = Integer.compare(verificationRank(b), verificationRank(a));
+        if (verification != 0) {
+            return verification > 0 ? b : a;
+        }
+        int evidence = Integer.compare(completenessRank(b), completenessRank(a));
+        return evidence > 0 ? b : a;
+    }
+
+    private static double confidenceScore(ComplianceFinding finding) {
+        return finding.getConfidence() == null ? -1.0 : finding.getConfidence();
+    }
+
+    private static int verificationRank(ComplianceFinding finding) {
+        VerificationStatus status = finding.getVerificationStatus();
+        if (status == VerificationStatus.CONFIRMED) {
+            return 3;
+        }
+        if (status == VerificationStatus.DETECTED) {
+            return 2;
+        }
+        if (status == VerificationStatus.UNVERIFIED) {
+            return 1;
+        }
+        return 0;
+    }
+
+    private static int completenessRank(ComplianceFinding finding) {
+        int rank = 0;
+        if (hasText(finding.getEvidence())) {
+            rank++;
+        }
+        if (hasText(finding.getSourceUrl())) {
+            rank++;
+        }
+        if (hasText(finding.getMatchedSignals())) {
+            rank++;
+        }
+        return rank;
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     private FindingDto toDto(ComplianceFinding f, boolean premium) {

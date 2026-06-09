@@ -20,6 +20,7 @@ public record ScanReportResponse(
         List<FindingDto> findings,
         DiagnosticsDto diagnostics,
         PaywallCtaDto paywallCta,
+        Long durationMs,
         Instant createdAt,
         Instant finishedAt
 ) {

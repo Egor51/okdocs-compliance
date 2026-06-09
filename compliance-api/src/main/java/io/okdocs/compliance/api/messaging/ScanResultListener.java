@@ -6,6 +6,7 @@ import io.okdocs.compliance.contracts.event.ScanFailedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
 /**
@@ -26,19 +27,27 @@ public class ScanResultListener {
     @KafkaListener(
             topics = "${compliance.kafka.topic.scan-failed}",
             groupId = "${spring.kafka.consumer.group-id}")
-    public void onScanFailed(ScanFailedEvent event) {
-        log.info("Получен ScanFailedEvent для скана {}: {}", event.scanId(), event.errorMessage());
-        if (event.userId() != null) {
-            balanceService.refund(event.userId(), event.scanId());
+    public void onScanFailed(ScanFailedEvent event, Acknowledgment acknowledgment) {
+        try {
+            log.info("Получен ScanFailedEvent для скана {}: {}", event.scanId(), event.errorMessage());
+            if (event.userId() != null) {
+                balanceService.refund(event.userId(), event.scanId());
+            }
+            acknowledgment.acknowledge();
+        } catch (RuntimeException e) {
+            log.warn("Не удалось обработать ScanFailedEvent для скана {} — offset не подтверждён: {}",
+                    event.scanId(), e.getMessage());
+            throw e;
         }
     }
 
     @KafkaListener(
             topics = "${compliance.kafka.topic.scan-completed}",
             groupId = "${spring.kafka.consumer.group-id}")
-    public void onScanCompleted(ScanCompletedEvent event) {
+    public void onScanCompleted(ScanCompletedEvent event, Acknowledgment acknowledgment) {
         log.debug("Получен ScanCompletedEvent для скана {} (status={}, score={})",
                 event.scanId(), event.status(), event.score());
         // Возврата нет: результат сформирован (COMPLETED/PARTIAL).
+        acknowledgment.acknowledge();
     }
 }
