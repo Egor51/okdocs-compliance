@@ -1,12 +1,24 @@
 spring:
   application:
     name: compliance-app
+  # Combined api+worker — инструмент ЛОКАЛЬНОЙ разработки (§6). Дефолтный профиль local:
+  #  - InMemoryRateLimitService вместо Redis (@Profile("local") в api), Redis не нужен;
+  #  - application-local.yml выключает premium CDP (premium-enabled=false), браузер не нужен.
+  # В проде api и worker деплоятся ОТДЕЛЬНО (combined-app не используется) — переопределить
+  # профиль можно через SPRING_PROFILES_ACTIVE.
+  profiles:
+    default: local
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/compliance}
     username: ${DB_USERNAME:compliance}
     password: ${DB_PASSWORD:compliance}
     hikari:
       maximum-pool-size: 10
+  flyway:
+    # Combined-app (локальный) дополнительно применяет dev-сид (db/migration-dev): юзер
+    # user@local / pass с балансом 10. Standalone api/worker сканируют только db/migration —
+    # dev-аккаунт в прод НЕ попадает (см. V900__dev_seed_user.sql).
+    locations: classpath:db/migration,classpath:db/migration-dev
   jpa:
     hibernate:
       ddl-auto: validate
@@ -19,7 +31,9 @@ spring:
       properties:
         spring.json.add.type.headers: false
     consumer:
-      group-id: compliance-worker
+      # Единый процесс — один consumer-group: api-часть (ScanResultListener) и worker-часть
+      # (ScanRequestedListener) слушают разные топики, общий group-id безопасен.
+      group-id: ${KAFKA_CONSUMER_GROUP:compliance-app}
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       # Сырые байты + ByteArrayJsonMessageConverter (MessagingConfig): тип из сигнатуры @KafkaListener
@@ -28,6 +42,12 @@ spring:
     listener:
       concurrency: 3
       ack-mode: manual
+  data:
+    redis:
+      # Используется только при НЕ-local профиле (RedisRateLimitService). В local профиле
+      # (дефолт combined-app) подключения к Redis нет.
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
 
 server:
   port: 8080
@@ -37,20 +57,73 @@ management:
     web:
       exposure:
         include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
 
+# Единый блок compliance.* для combined-процесса: ключи и api (ComplianceApiProperties), и worker
+# (ComplianceWorkerProperties), и messaging (OutboxProperties). Оба биндят prefix=compliance по
+# непересекающимся подключам и сосуществуют. Без auth.jwt-secret api-часть не стартует (дефолта в
+# коде нет) — поэтому он здесь обязателен.
 compliance:
   kafka:
     topic:
       scan-requested: compliance.scan.requested
       scan-completed: compliance.scan.completed
       scan-failed: compliance.scan.failed
+  # ── api: анти-абьюз, продуктовые лимиты, тарифы, paywall, JWT ──────────────────
   rate-limit:
-    scans-per-ip-per-hour: 5
+    guest-scans-per-ip-per-hour: 5
+    user-scans-per-hour: 20
+  scan:
+    # api-флоу: лимиты страниц по принципалу + TTL короткоживущих сканов
+    free-marketing-max-pages: 1
+    guest-max-pages: 5
+    user-max-pages: 100
+    guest-retention-days: 7
+    free-marketing-retention-days: 7
+    # worker-reaper: порог зависшего скана, строго > crawler.crawler-timeout-seconds (90s)
+    stale-after: 5m
+  plan:
+    quota:
+      FREE: 1
+      PRO: 30
+      BUSINESS: 200
+  paywall-cta:
+    title: "Откройте полный отчёт"
+    text: "Получите доказательства, ссылки на закон, рекомендации и PDF-отчёт"
+    action-url: "/payment"
+  auth:
+    jwt-secret: ${JWT_SECRET:change-me-in-production-this-must-be-at-least-256-bits-long-secret-key}
+    access-token-ttl: 30m
+    refresh-token-ttl: 30d
+    guest-token-ttl: 7d
+  security:
+    # Доверять X-Forwarded-For только за доверенным ingress/proxy (иначе guest-rate-limit
+    # по IP обходится подделкой заголовка).
+    trust-forwarded-header: ${TRUST_FORWARDED_HEADER:false}
+  # ── worker: краулер, dynamic CDP, GeoIP ───────────────────────────────────────
   crawler:
-    max-pages: 20
+    max-pages: 100
     max-depth: 3
     page-timeout-ms: 15000
     crawler-timeout-seconds: 90
     rate-limit-ms: 1000
+    dynamic:
+      # CDP headless Chromium для CABINET_PREMIUM. Прод: enabled=true + base-url на browserless.
+      # base-url — HTTP CDP-эндпоинт (http://browserless:3000), НЕ ws:// (см. isBaseUrlHttpScheme).
+      enabled: ${CDP_ENABLED:true}
+      base-url: ${CDP_BASE_URL:http://localhost:3000}
+      auth-token: ${CDP_AUTH_TOKEN:local-cdp-token}
+      # premium-enabled=true (дефолт, fail-fast) требует сконфигурированного И доступного CDP:
+      # property-инвариант (isPremiumRequiresCdp) роняет старт без base-url, а CdpAvailabilityChecker
+      # — если CDP-эндпоинт мёртв. Дефолтный профиль local (application-local.yml) ставит false.
+      premium-enabled: ${CDP_PREMIUM_ENABLED:true}
   geoip:
-    db-path: ${GEOIP_DB_PATH:/opt/geoip/dbip-country-lite.mmdb}
+    db-path: ${GEOIP_DB_PATH:classpath:ip-db/dbip-country-lite-2026-06.mmdb}
+  # ── messaging: outbox relay (общий для api и worker) ──────────────────────────
+  outbox:
+    max-retries: 10
+    batch-size: 100
+    backoff-base: 10s
+    backoff-max: 10m
