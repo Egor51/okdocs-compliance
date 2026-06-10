@@ -6,6 +6,7 @@ import io.github.bucket4j.distributed.ExpirationAfterWriteStrategy;
 import io.github.bucket4j.distributed.proxy.ProxyManager;
 import io.github.bucket4j.redis.lettuce.cas.LettuceBasedProxyManager;
 import io.lettuce.core.RedisClient;
+import io.lettuce.core.RedisURI;
 import io.okdocs.compliance.api.config.ComplianceApiProperties;
 import io.okdocs.compliance.api.security.CompliancePrincipal;
 import io.okdocs.compliance.contracts.exception.ComplianceRateLimitException;
@@ -30,11 +31,29 @@ public class RedisRateLimitService implements RateLimitService {
     private final RedisClient redisClient;
     private final ProxyManager<byte[]> proxyManager;
 
-    public RedisRateLimitService(ComplianceApiProperties properties,
-                                 @Value("${spring.data.redis.host:localhost}") String redisHost,
-                                 @Value("${spring.data.redis.port:6379}") int redisPort) {
+    public RedisRateLimitService(
+            ComplianceApiProperties properties,
+            @Value("${spring.data.redis.host:localhost}") String redisHost,
+            @Value("${spring.data.redis.port:6379}") int redisPort,
+            @Value("${spring.data.redis.username:}") String redisUsername,
+            @Value("${spring.data.redis.password:}") String redisPassword,
+            @Value("${spring.data.redis.ssl.enabled:false}") boolean redisSsl) {
         this.properties = properties;
-        this.redisClient = RedisClient.create("redis://" + redisHost + ":" + redisPort);
+        // RedisURI, а не строка "redis://host:port": ручная сборка URI игнорировала бы auth/TLS.
+        // Пароль/юзер/SSL берём из стандартных spring.data.redis.* (по умолчанию пусто = без auth,
+        // для локали). В проде задаются env REDIS_USERNAME/REDIS_PASSWORD/REDIS_SSL_ENABLED.
+        RedisURI.Builder uri = RedisURI.builder()
+                .withHost(redisHost)
+                .withPort(redisPort)
+                .withSsl(redisSsl);
+        if (!redisPassword.isBlank()) {
+            if (redisUsername.isBlank()) {
+                uri.withPassword(redisPassword.toCharArray());            // requirepass (default user)
+            } else {
+                uri.withAuthentication(redisUsername, redisPassword.toCharArray()); // Redis 6+ ACL user
+            }
+        }
+        this.redisClient = RedisClient.create(uri.build());
         this.proxyManager = LettuceBasedProxyManager
                 .builderFor(redisClient)
                 .withExpirationStrategy(

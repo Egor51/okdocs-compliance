@@ -1,0 +1,104 @@
+# PROD infra host: Postgres + Kafka on a separate server.
+#
+# This file is intentionally standalone. Run it on the infra server, not on the
+# app/runtime server:
+#   docker compose --env-file /path/to/prod-infra.env -f docker-compose.infra.prod.yml up -d
+#
+# App/runtime host connects to these services through DB_URL and
+# KAFKA_BOOTSTRAP_SERVERS/KAFKA_SASL_*.
+#
+# Required env:
+#   POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
+#   KAFKA_EXTERNAL_HOST
+#   KAFKA_CLIENT_USER, KAFKA_CLIENT_PASSWORD
+#
+# IMPORTANT: KAFKA_CLIENT_PASSWORD must use a safe alphabet (e.g. `openssl rand
+# -hex 32` -> only 0-9a-f). Bitnami's storage-bootstrap splits the SCRAM
+# user/password lists on shell metacharacters; a password containing '/', ',',
+# ';' or '=' (e.g. base64) gets truncated, so the stored credential silently
+# differs from the value clients send -> "invalid credentials" auth failures.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?}
+      POSTGRES_USER: ${POSTGRES_USER:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+    ports:
+      # Bind host should be restricted by firewall/security group to app servers only.
+      - "${POSTGRES_BIND:-0.0.0.0}:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  kafka:
+    image: bitnamilegacy/kafka:3.7.0
+    restart: unless-stopped
+    environment:
+      KAFKA_CFG_NODE_ID: 1
+      KAFKA_CFG_PROCESS_ROLES: broker,controller
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+
+      # External clients use SASL_SSL on 9094. Internal controller traffic stays
+      # inside the compose network.
+      KAFKA_CFG_LISTENERS: SASL_SSL://:9094,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: SASL_SSL://${KAFKA_EXTERNAL_HOST:?}:9094
+      KAFKA_EXTERNAL_HOST: ${KAFKA_EXTERNAL_HOST:?}
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: SASL_SSL:SASL_SSL,CONTROLLER:PLAINTEXT
+      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: SASL_SSL
+      KAFKA_CFG_SASL_ENABLED_MECHANISMS: SCRAM-SHA-512
+      KAFKA_CFG_SASL_MECHANISM_INTER_BROKER_PROTOCOL: SCRAM-SHA-512
+
+      # Bitnami creates SCRAM users from these lists on first start.
+      KAFKA_CLIENT_USERS: ${KAFKA_CLIENT_USER:?}
+      KAFKA_CLIENT_PASSWORDS: ${KAFKA_CLIENT_PASSWORD:?}
+      KAFKA_INTER_BROKER_USER: ${KAFKA_CLIENT_USER:?}
+      KAFKA_INTER_BROKER_PASSWORD: ${KAFKA_CLIENT_PASSWORD:?}
+
+      # Singular copies so the healthcheck shell can read the creds.
+      KAFKA_CLIENT_USER: ${KAFKA_CLIENT_USER:?}
+      KAFKA_CLIENT_PASSWORD: ${KAFKA_CLIENT_PASSWORD:?}
+
+      KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_CFG_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_CFG_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "false"
+
+      # TLS material must be mounted from secrets/provisioning. The keystore must
+      # contain a certificate valid for KAFKA_EXTERNAL_HOST.
+      KAFKA_TLS_TYPE: JKS
+      KAFKA_CFG_SSL_KEYSTORE_LOCATION: /bitnami/kafka/config/certs/kafka.keystore.jks
+      KAFKA_CFG_SSL_KEYSTORE_PASSWORD: ${KAFKA_SSL_KEYSTORE_PASSWORD:?}
+      KAFKA_CFG_SSL_KEY_PASSWORD: ${KAFKA_SSL_KEY_PASSWORD:?}
+      KAFKA_CFG_SSL_TRUSTSTORE_LOCATION: /bitnami/kafka/config/certs/kafka.truststore.jks
+      KAFKA_CFG_SSL_TRUSTSTORE_PASSWORD: ${KAFKA_SSL_TRUSTSTORE_PASSWORD:?}
+      KAFKA_CFG_SSL_CLIENT_AUTH: none
+    ports:
+      # Bind host should be restricted by firewall/security group to app servers only.
+      - "${KAFKA_BIND:-0.0.0.0}:9094:9094"
+    volumes:
+      - kafka_data:/bitnami/kafka
+      - ${KAFKA_CERTS_DIR:?}:/bitnami/kafka/config/certs:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >
+          printf 'security.protocol=SASL_SSL\nsasl.mechanism=SCRAM-SHA-512\nsasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="%s" password="%s";\nssl.truststore.location=/bitnami/kafka/config/certs/kafka.truststore.jks\nssl.truststore.password=%s\n' "$${KAFKA_CLIENT_USER}" "$${KAFKA_CLIENT_PASSWORD}" "$${KAFKA_CFG_SSL_TRUSTSTORE_PASSWORD}" > /tmp/kafka-client.properties &&
+          kafka-topics.sh --bootstrap-server $${KAFKA_EXTERNAL_HOST}:9094
+          --command-config /tmp/kafka-client.properties --list >/dev/null
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  postgres_data:
+  kafka_data:
+

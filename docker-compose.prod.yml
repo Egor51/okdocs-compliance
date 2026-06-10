@@ -1,0 +1,43 @@
+# PROD-оверрайд. НЕ подхватывается автоматически — запуск явно:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Отличия от dev: поднимаются только локальные runtime-зависимости этого хоста:
+# Redis (с AUTH) и browserless. Postgres и Kafka живут на отдельных серверах и
+# передаются приложениям через env (DB_URL/KAFKA_BOOTSTRAP_SERVERS/KAFKA_SASL_*).
+# Порты наружу не пробрасываются.
+#
+# Перед запуском задать в окружении (например через secrets, НЕ коммитить):
+#   REDIS_PASSWORD, CDP_AUTH_TOKEN
+
+services:
+  redis:
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?}
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$${REDIS_PASSWORD}\" ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  browserless:
+    restart: unless-stopped
+    # Порт наружу не пробрасываем: CDP дергает только worker во внутренней сети.
+
+
+#  docker exec compliance_kafka_1 bash -c '
+#  cat > /tmp/admin.properties <<EOF
+#  security.protocol=SASL_SSL
+#  sasl.mechanism=SCRAM-SHA-512
+#  sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="$KAFKA_CLIENT_USER" password="$KAFKA_CLIENT_PASSWORD";
+#  ssl.truststore.location=/bitnami/kafka/config/certs/kafka.truststore.jks
+#  ssl.truststore.password=$KAFKA_CFG_SSL_TRUSTSTORE_PASSWORD
+#  EOF
+#  for t in compliance.scan.requested compliance.scan.completed compliance.scan.failed; do
+#  kafka-topics.sh --bootstrap-server $KAFKA_EXTERNAL_HOST:9094 --command-config /tmp/admin.properties \
+#  --create --if-not-exists --topic $t --partitions 3 --replication-factor 1
+#  done
+#  echo "=== список топиков ==="
+#  kafka-topics.sh --bootstrap-server $KAFKA_EXTERNAL_HOST:9094 --command-config /tmp/admin.properties --list
+#  '
