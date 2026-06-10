@@ -8,6 +8,11 @@ spring:
   # профиль можно через SPRING_PROFILES_ACTIVE.
   profiles:
     default: local
+  config:
+    # Тот же core-yml, что импортирует standalone-worker — единый источник правды для
+    # compliance.crawler/scan/score/dynamic/outbox. Combined-app не может разъехаться с
+    # worker по таймаутам/score/CDP. Ниже — только api-блоки и env-специфика CDP.
+    import: "classpath:application-compliance-core.yml"
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/compliance}
     username: ${DB_USERNAME:compliance}
@@ -25,6 +30,15 @@ spring:
     open-in-view: false
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    # SASL/SCRAM auth (общая для producer/consumer/admin). Combined-app локальный → PLAINTEXT.
+    # Прод деплоит api/worker отдельно; ручки оставлены для единообразия (см. их yml).
+    properties:
+      security.protocol: ${KAFKA_SECURITY_PROTOCOL:PLAINTEXT}
+      sasl.mechanism: ${KAFKA_SASL_MECHANISM:SCRAM-SHA-512}
+      sasl.jaas.config: ${KAFKA_SASL_JAAS_CONFIG:}
+      # Только при SASL_SSL с приватным/самоподписанным CA. Пусто = доверять системному cacerts.
+      ssl.truststore.location: ${KAFKA_SSL_TRUSTSTORE_LOCATION:}
+      ssl.truststore.password: ${KAFKA_SSL_TRUSTSTORE_PASSWORD:}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
@@ -65,12 +79,11 @@ management:
 # (ComplianceWorkerProperties), и messaging (OutboxProperties). Оба биндят prefix=compliance по
 # непересекающимся подключам и сосуществуют. Без auth.jwt-secret api-часть не стартует (дефолта в
 # коде нет) — поэтому он здесь обязателен.
+# compliance.kafka.topic / crawler / scan(worker) / score / geoip / outbox импортируются
+# из application-compliance-core.yml (spring.config.import выше) — общие с standalone-worker.
+# Ниже только то, что есть ЛИШЬ в combined-app: api-блоки (rate-limit/plan/paywall/auth),
+# api-часть scan.* (per-principal лимиты), env-специфика CDP.
 compliance:
-  kafka:
-    topic:
-      scan-requested: compliance.scan.requested
-      scan-completed: compliance.scan.completed
-      scan-failed: compliance.scan.failed
   # ── api: анти-абьюз, продуктовые лимиты, тарифы, paywall, JWT ──────────────────
   rate-limit:
     guest-scans-per-ip-per-hour: 5
@@ -82,8 +95,7 @@ compliance:
     user-max-pages: 100
     guest-retention-days: 7
     free-marketing-retention-days: 7
-    # worker-reaper: порог зависшего скана, строго > crawler.crawler-timeout-seconds (90s)
-    stale-after: 5m
+    # worker-часть scan.* (stale-after/redeliver-delay/total-deadline) — в core-yml.
   plan:
     quota:
       FREE: 1
@@ -102,13 +114,10 @@ compliance:
     # Доверять X-Forwarded-For только за доверенным ingress/proxy (иначе guest-rate-limit
     # по IP обходится подделкой заголовка).
     trust-forwarded-header: ${TRUST_FORWARDED_HEADER:false}
-  # ── worker: краулер, dynamic CDP, GeoIP ───────────────────────────────────────
+  # ── worker: env-специфика CDP (всё остальное crawler/* — в core-yml) ──────────
+  # Combined-app локально целит на свой browserless (env-дефолты отличаются от
+  # standalone-worker), поэтому CDP-блок остаётся здесь, поверх импорта.
   crawler:
-    max-pages: 100
-    max-depth: 3
-    page-timeout-ms: 15000
-    crawler-timeout-seconds: 90
-    rate-limit-ms: 1000
     dynamic:
       # CDP headless Chromium для CABINET_PREMIUM. Прод: enabled=true + base-url на browserless.
       # base-url — HTTP CDP-эндпоинт (http://browserless:3000), НЕ ws:// (см. isBaseUrlHttpScheme).
@@ -119,11 +128,6 @@ compliance:
       # property-инвариант (isPremiumRequiresCdp) роняет старт без base-url, а CdpAvailabilityChecker
       # — если CDP-эндпоинт мёртв. Дефолтный профиль local (application-local.yml) ставит false.
       premium-enabled: ${CDP_PREMIUM_ENABLED:true}
-  geoip:
-    db-path: ${GEOIP_DB_PATH:classpath:ip-db/dbip-country-lite-2026-06.mmdb}
-  # ── messaging: outbox relay (общий для api и worker) ──────────────────────────
-  outbox:
-    max-retries: 10
-    batch-size: 100
-    backoff-base: 10s
-    backoff-max: 10m
+
+
+

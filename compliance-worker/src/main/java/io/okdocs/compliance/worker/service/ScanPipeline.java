@@ -35,9 +35,6 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class ScanPipeline {
 
-    /** Сколько приоритетных страниц перекраулить динамически (формы/политика — там JS-контент важнее). */
-    private static final int MAX_DYNAMIC_PAGES = 20;
-
     private final SiteCrawler siteCrawler;
     private final DynamicCrawler dynamicCrawler;
     private final HostCountryDetector hostCountryDetector;
@@ -180,7 +177,8 @@ public class ScanPipeline {
             meterRegistry.counter("compliance.dynamic.failure").increment();
             throw new DynamicRequiredFailedException("CDP became unavailable during premium scan");
         }
-        List<String> targets = selectDynamicTargets(staticPages);
+        int maxDynamicPages = properties.getCrawler().getDynamic().getMaxPages();
+        List<String> targets = selectDynamicTargets(staticPages, maxDynamicPages);
         if (targets.isEmpty()) {
             // staticPages не пустой, поэтому сюда попадём только если у всех страниц пустой URL.
             log.info("Scan {} premium: no valid URLs for dynamic re-crawl, static result is complete", scanId);
@@ -229,12 +227,12 @@ public class ScanPipeline {
      * SPA может скрывать формы/трекеры до JS-рендера, поэтому всегда рендерим стартовую страницу,
      * затем приоритетные страницы и добиваем первыми URL из static crawl до лимита.
      */
-    private static List<String> selectDynamicTargets(List<PageAnalysisResult> staticPages) {
+    private static List<String> selectDynamicTargets(List<PageAnalysisResult> staticPages, int maxDynamicPages) {
         Set<String> targets = new LinkedHashSet<>();
         addDynamicTarget(targets, staticPages.get(0));
 
         for (PageAnalysisResult page : staticPages) {
-            if (targets.size() >= MAX_DYNAMIC_PAGES) {
+            if (targets.size() >= maxDynamicPages) {
                 break;
             }
             if (isWorthDynamicRecrawl(page)) {
@@ -243,7 +241,7 @@ public class ScanPipeline {
         }
 
         for (PageAnalysisResult page : staticPages) {
-            if (targets.size() >= MAX_DYNAMIC_PAGES) {
+            if (targets.size() >= maxDynamicPages) {
                 break;
             }
             addDynamicTarget(targets, page);

@@ -3,6 +3,7 @@ package io.okdocs.compliance.worker.service;
 import io.okdocs.compliance.contracts.enums.FindingSeverity;
 import io.okdocs.compliance.contracts.enums.VerificationStatus;
 import io.okdocs.compliance.persistence.scan.ComplianceFinding;
+import io.okdocs.compliance.worker.config.ComplianceWorkerProperties;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -11,7 +12,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class ScoreCalculatorTest {
 
-    private final ScoreCalculator calculator = new ScoreCalculator();
+    // Дефолтные properties = эталонная score-модель (core-yml совпадает с Java-дефолтами).
+    private final ScoreCalculator calculator = new ScoreCalculator(new ComplianceWorkerProperties());
 
     private static ComplianceFinding finding(String code, FindingSeverity severity,
                                              VerificationStatus verification, Double confidence) {

@@ -13,6 +13,17 @@ spring:
     open-in-view: false
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    # SASL/SCRAM auth (общая для producer/consumer/admin). По умолчанию PLAINTEXT = без авторизации
+    # (локаль/дев). Прод: KAFKA_SECURITY_PROTOCOL=SASL_SSL, KAFKA_SASL_MECHANISM=SCRAM-SHA-512,
+    # KAFKA_SASL_JAAS_CONFIG=org.apache.kafka.common.security.scram.ScramLoginModule required
+    #   username="..." password="...";
+    properties:
+      security.protocol: ${KAFKA_SECURITY_PROTOCOL:PLAINTEXT}
+      sasl.mechanism: ${KAFKA_SASL_MECHANISM:SCRAM-SHA-512}
+      sasl.jaas.config: ${KAFKA_SASL_JAAS_CONFIG:}
+      # Только при SASL_SSL с приватным/самоподписанным CA. Пусто = доверять системному cacerts.
+      ssl.truststore.location: ${KAFKA_SSL_TRUSTSTORE_LOCATION:}
+      ssl.truststore.password: ${KAFKA_SSL_TRUSTSTORE_PASSWORD:}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
@@ -31,6 +42,13 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+      # Auth/TLS Redis (RedisRateLimitService). По умолчанию пусто = без авторизации (локаль/дев).
+      # Прод: REDIS_PASSWORD обязателен; REDIS_USERNAME — только для Redis 6+ ACL; REDIS_SSL_ENABLED
+      # для rediss://. Пустой password → подключение без AUTH.
+      username: ${REDIS_USERNAME:}
+      password: ${REDIS_PASSWORD:}
+      ssl:
+        enabled: ${REDIS_SSL_ENABLED:false}
 
 server:
   port: 8080
@@ -56,7 +74,7 @@ compliance:
   scan:
     free-marketing-max-pages: 1
     guest-max-pages: 5
-    user-max-pages: 30
+    user-max-pages: 100
     guest-retention-days: 7
     free-marketing-retention-days: 7
   plan:

@@ -87,6 +87,67 @@ class ComplianceWorkerPropertiesTest {
     }
 
     @Test
+    void totalDeadlineBelowCrawlerTimeout_failsCrossFieldInvariant() {
+        // total-deadline — страховка ПОВЕРХ crawler-таймаута; меньше него → PARTIAL на живом крауле.
+        Map<String, String> p = baseValid();
+        p.put("compliance.crawler.crawler-timeout-seconds", "90");
+        p.put("compliance.scan.total-deadline", "30s");
+
+        assertThatThrownBy(() -> bind(p))
+                .isInstanceOfAny(BindException.class, BindValidationException.class)
+                .hasStackTraceContaining("totalDeadline");
+    }
+
+    @Test
+    void dynamicMaxPagesAboveCrawlerMaxPages_failsCrossFieldInvariant() {
+        // dynamic.max-pages не может превышать crawler.max-pages — иначе лимит недостижим.
+        Map<String, String> p = baseValid();
+        p.put("compliance.crawler.max-pages", "10");
+        p.put("compliance.crawler.dynamic.max-pages", "20");
+
+        assertThatThrownBy(() -> bind(p))
+                .isInstanceOfAny(BindException.class, BindValidationException.class)
+                .hasStackTraceContaining("maxPages");
+    }
+
+    @Test
+    void scorePartialOverride_mergesWithDefaults() {
+        // Spring Binder МЁРЖИТ в существующую дефолтную мапу (мутабельный геттер), а не заменяет её:
+        // присланный ключ переопределяет дефолт, остальные severity сохраняют дефолтные очки. Поэтому
+        // yml-override отдельного балла безопасен и не оставляет пробелов в покрытии (инвариант
+        // isAllSeveritiesCovered защищает программно-опустошённую мапу, недостижимую через биндинг).
+        Map<String, String> p = baseValid();
+        p.put("compliance.score.base-points.CRITICAL", "40"); // переопределяем только CRITICAL
+
+        ComplianceWorkerProperties props = bind(p);
+        assertThat(props.getScore().basePointsFor(
+                io.okdocs.compliance.contracts.enums.FindingSeverity.CRITICAL)).isEqualTo(40);
+        assertThat(props.getScore().basePointsFor(
+                io.okdocs.compliance.contracts.enums.FindingSeverity.LOW)).isEqualTo(5); // дефолт цел
+    }
+
+    @Test
+    void scoreWeightOutOfRange_failsValidation() {
+        Map<String, String> p = baseValid();
+        p.put("compliance.score.verification-weight.CONFIRMED", "1.5"); // >1.0
+
+        assertThatThrownBy(() -> bind(p))
+                .isInstanceOfAny(BindException.class, BindValidationException.class)
+                .hasStackTraceContaining("verification-weight");
+    }
+
+    @Test
+    void scoreDefaults_areValid() {
+        // Java-дефолты score-модели должны совпадать с эталоном и проходить инварианты.
+        ComplianceWorkerProperties props = bind(baseValid());
+        assertThat(props.getScore().getInitial()).isEqualTo(100);
+        assertThat(props.getScore().basePointsFor(
+                io.okdocs.compliance.contracts.enums.FindingSeverity.CRITICAL)).isEqualTo(30);
+        assertThat(props.getScore().weightFor("DETECTED")).isEqualTo(0.65);
+        assertThat(props.getScore().weightFor(null)).isEqualTo(0.80); // DEFAULT-фолбэк
+    }
+
+    @Test
     void premiumEnabledWithoutCdp_failsCrossFieldInvariant() {
         // premium обещан, но CDP не сконфигурирован → все premium-сканы были бы FAILED+refund.
         // Инвариант роняет старт, а не тихо ломает платный поток.

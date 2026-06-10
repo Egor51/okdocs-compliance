@@ -1,6 +1,11 @@
 spring:
   application:
     name: compliance-worker
+  config:
+    # Единый источник правды для compliance.* (краулер/scan/score/dynamic/outbox).
+    # Тот же файл импортирует combined-app — worker и app не могут разъехаться по
+    # таймаутам/score/CDP. Здесь остаётся только worker-инфраструктура и env-специфика.
+    import: "classpath:application-compliance-core.yml"
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/compliance}
     username: ${DB_USERNAME:compliance}
@@ -13,6 +18,18 @@ spring:
     open-in-view: false
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    # SASL/SCRAM auth (общая для producer/consumer/admin → под properties). По умолчанию PLAINTEXT
+    # = без авторизации (локаль/дев). Прод: KAFKA_SECURITY_PROTOCOL=SASL_SSL (или SASL_PLAINTEXT),
+    # KAFKA_SASL_MECHANISM=SCRAM-SHA-512, KAFKA_SASL_JAAS_CONFIG=
+    #   org.apache.kafka.common.security.scram.ScramLoginModule required username="..." password="...";
+    # При PLAINTEXT свойства sasl.* клиентом игнорируются (пустой jaas безопасен).
+    properties:
+      security.protocol: ${KAFKA_SECURITY_PROTOCOL:PLAINTEXT}
+      sasl.mechanism: ${KAFKA_SASL_MECHANISM:SCRAM-SHA-512}
+      sasl.jaas.config: ${KAFKA_SASL_JAAS_CONFIG:}
+      # Только при SASL_SSL с приватным/самоподписанным CA. Пусто = доверять системному cacerts.
+      ssl.truststore.location: ${KAFKA_SSL_TRUSTSTORE_LOCATION:}
+      ssl.truststore.password: ${KAFKA_SSL_TRUSTSTORE_PASSWORD:}
     # Worker — НЕ только consumer: OutboxPublisher (§5.6) публикует ScanCompletedEvent/ScanFailedEvent.
     # Producer-сериализаторы обязательны, иначе outbox relay не сможет отправить события.
     producer:
@@ -40,38 +57,19 @@ management:
       exposure:
         include: health,info,metrics,prometheus
 
+# compliance.* (краулер/scan/score/dynamic/outbox) импортируется из
+# application-compliance-core.yml (см. spring.config.import выше). Здесь — только
+# env-специфика CDP, которая по природе различается между деплоями.
 compliance:
-  kafka:
-    topic:
-      scan-requested: compliance.scan.requested
-      scan-completed: compliance.scan.completed
-      scan-failed: compliance.scan.failed
   crawler:
-    max-pages: 20
-    max-depth: 3
-    page-timeout-ms: 15000
-    crawler-timeout-seconds: 90
-    rate-limit-ms: 1000
-    blocked-domains: []
     dynamic:
       # CDP headless Chromium для CABINET_PREMIUM. Прод: enabled=true + base-url на browserless.
       # base-url — HTTP CDP-эндпоинт (http://browserless:3000), НЕ ws:// (см. isBaseUrlHttpScheme).
-      enabled: ${CDP_ENABLED:false}
-      base-url: ${CDP_BASE_URL:}
-      auth-token: ${CDP_AUTH_TOKEN:}
+      enabled: ${CDP_ENABLED:true}
+      base-url: ${CDP_BASE_URL:http://localhost:3000}
+      auth-token: ${CDP_AUTH_TOKEN:local-cdp-token}
       # premium-enabled=true (дефолт, fail-fast) требует сконфигурированного И доступного CDP:
       # property-инвариант (isPremiumRequiresCdp) роняет старт без base-url, а CdpAvailabilityChecker
       # — если CDP-эндпоинт мёртв. Так обычный деплой не стартует с мёртвым платным потоком.
       # Локаль/стейдж без premium: профиль local / test-yml ставят premium-enabled=false.
       premium-enabled: ${CDP_PREMIUM_ENABLED:true}
-  scan:
-    # Порог reaper'а: должен быть строго больше crawler.crawler-timeout-seconds (90s).
-    stale-after: 5m
-  outbox:
-    max-retries: 10
-    batch-size: 100
-    poll-interval-ms: 5000
-    backoff-base: 10s
-    backoff-max: 10m
-  geoip:
-    db-path: ${GEOIP_DB_PATH:classpath:ip-db/dbip-country-lite-2026-06.mmdb}

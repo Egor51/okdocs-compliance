@@ -1,5 +1,6 @@
 package io.okdocs.compliance.worker.config;
 
+import io.okdocs.compliance.contracts.enums.FindingSeverity;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Min;
@@ -12,7 +13,9 @@ import org.springframework.validation.annotation.Validated;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Конфигурация worker'а (§5.7). Префикс {@code compliance}: краулер, лимиты/backpressure, порог
@@ -32,9 +35,9 @@ public class ComplianceWorkerProperties {
     @Valid
     private Scan scan = new Scan();
     @Valid
-    private GeoIp geoip = new GeoIp();
+    private Score score = new Score();
     @Valid
-    private Outbox outbox = new Outbox();
+    private GeoIp geoip = new GeoIp();
     @Valid
     private Kafka kafka = new Kafka();
 
@@ -109,6 +112,23 @@ public class ComplianceWorkerProperties {
         /** Жёсткий deadline на весь CDP-batch (секунды). */
         @Positive
         private int batchTimeoutSeconds = 180;
+        /** Как часто перепроверять живость CDP-эндпоинта ({@code /json/version}) между сканами. */
+        @NotNull
+        private Duration availabilityRecheckInterval = Duration.ofSeconds(10);
+        @Valid
+        private NetworkIdle networkIdle = new NetworkIdle();
+
+        /**
+         * Эвристика «динамика догрузилась»: ждём {@code quietMs} мс сетевой тишины подряд, но не
+         * дольше {@code timeoutMs} (защита от long-polling/websocket, которые тишины не дают).
+         */
+        @Data
+        public static class NetworkIdle {
+            @Positive
+            private int quietMs = 800;
+            @Positive
+            private int timeoutMs = 2000;
+        }
 
         /**
          * Premium-поток обещан, но CDP не сконфигурирован → невалидно: контекст не стартует. Premium
@@ -167,17 +187,81 @@ public class ComplianceWorkerProperties {
         private String dbPath = "classpath:ip-db/dbip-country-lite-2026-06.mmdb";
     }
 
+    // Outbox-настройки (compliance.outbox.*) биндит OutboxProperties (compliance-messaging) —
+    // единый источник для api и worker. Дублирующего worker-класса здесь больше нет.
+
+    /**
+     * Score-модель сайта (§5.5): {@code initial − Σ(basePoints[severity] × verificationWeight)}.
+     * Вынесена в конфиг, чтобы тюнить риск-модель без пересборки и держать единой для worker и app.
+     * Инварианты ({@link #isAllSeveritiesCovered()}, {@link #isWeightsInRange()}) — fail-fast.
+     */
     @Data
-    public static class Outbox {
-        /** После исчерпания событие → {@code DEAD}. */
-        @Min(1)
-        private int maxRetries = 10;
-        /** База экспоненциального backoff между ретраями публикации. */
-        @NotNull
-        private Duration backoffBase = Duration.ofSeconds(10);
-        /** Потолок backoff. */
-        @NotNull
-        private Duration backoffMax = Duration.ofMinutes(10);
+    public static class Score {
+        @Positive
+        private int initial = 100;
+        /**
+         * Базовые очки по severity. Должны покрывать все значения {@link FindingSeverity}. Java-дефолты
+         * совпадают с core-yml — properties самовалидны без yml (worker-IT биндят их напрямую). Заданный
+         * в yml ключ переопределяет дефолт того же ключа (Spring мёржит в ту же мапу).
+         */
+        private Map<FindingSeverity, Integer> basePoints = defaultBasePoints();
+        /**
+         * Вес по verification-статусу (ключи — имена {@code VerificationStatus} + {@code DEFAULT}).
+         * {@code DEFAULT} — фолбэк для UNVERIFIED и null. Строкой, а не enum: нужен синтетический
+         * ключ DEFAULT, которого нет в enum'е.
+         */
+        private Map<String, Double> verificationWeight = defaultVerificationWeight();
+
+        private static Map<FindingSeverity, Integer> defaultBasePoints() {
+            Map<FindingSeverity, Integer> m = new EnumMap<>(FindingSeverity.class);
+            m.put(FindingSeverity.CRITICAL, 30);
+            m.put(FindingSeverity.HIGH, 20);
+            m.put(FindingSeverity.MEDIUM, 12);
+            m.put(FindingSeverity.LOW, 5);
+            return m;
+        }
+
+        private static Map<String, Double> defaultVerificationWeight() {
+            Map<String, Double> m = new java.util.LinkedHashMap<>();
+            m.put("CONFIRMED", 1.00);
+            m.put("DETECTED", 0.65);
+            m.put("DEFAULT", 0.80);
+            return m;
+        }
+
+        public int basePointsFor(FindingSeverity severity) {
+            if (severity == null) {
+                return 0;
+            }
+            return basePoints.getOrDefault(severity, 0);
+        }
+
+        /** Вес статуса; {@code null}/неизвестный → {@code DEFAULT} (обязан присутствовать). */
+        public double weightFor(String statusName) {
+            Double w = statusName == null ? null : verificationWeight.get(statusName);
+            return w != null ? w : verificationWeight.getOrDefault("DEFAULT", 1.0);
+        }
+
+        @AssertTrue(message = "compliance.score.base-points должен покрывать все FindingSeverity "
+                + "(CRITICAL/HIGH/MEDIUM/LOW)")
+        public boolean isAllSeveritiesCovered() {
+            for (FindingSeverity s : FindingSeverity.values()) {
+                if (!basePoints.containsKey(s)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        @AssertTrue(message = "compliance.score.verification-weight должен содержать ключ DEFAULT, "
+                + "а все веса быть в диапазоне [0.0, 1.0]")
+        public boolean isWeightsInRange() {
+            if (!verificationWeight.containsKey("DEFAULT")) {
+                return false;
+            }
+            return verificationWeight.values().stream()
+                    .allMatch(w -> w != null && w >= 0.0 && w <= 1.0);
+        }
     }
 
     @Data
@@ -207,5 +291,31 @@ public class ComplianceWorkerProperties {
             return true; // отдельные @NotNull/@Valid сообщат конкретнее
         }
         return scan.getStaleAfter().getSeconds() > crawler.getCrawlerTimeoutSeconds();
+    }
+
+    /**
+     * {@code total-deadline} — страховочный дедлайн поверх crawler-таймаута; он обязан быть не меньше
+     * самого crawler-таймаута, иначе пайплайн помечал бы PARTIAL ещё живой краул (комментарий поля
+     * это обещал, но без проверки это легко нарушить конфигом). Fail-fast на старте.
+     */
+    @AssertTrue(message = "compliance.scan.totalDeadline must be >= "
+            + "compliance.crawler.crawlerTimeoutSeconds")
+    public boolean isTotalDeadlineAboveCrawlerTimeout() {
+        if (scan == null || scan.getTotalDeadline() == null || crawler == null) {
+            return true;
+        }
+        return scan.getTotalDeadline().getSeconds() >= crawler.getCrawlerTimeoutSeconds();
+    }
+
+    /**
+     * Динамически перекраулить нельзя больше страниц, чем накраулено статикой: {@code dynamic.maxPages}
+     * не должен превышать {@code crawler.maxPages}. Иначе лимит dynamic-прохода — недостижимая ручка.
+     */
+    @AssertTrue(message = "compliance.crawler.dynamic.maxPages must be <= compliance.crawler.maxPages")
+    public boolean isDynamicMaxPagesWithinCrawlerMaxPages() {
+        if (crawler == null || crawler.getDynamic() == null) {
+            return true;
+        }
+        return crawler.getDynamic().getMaxPages() <= crawler.getMaxPages();
     }
 }

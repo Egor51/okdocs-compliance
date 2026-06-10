@@ -14,4 +14,7 @@ target/
 logs/
 
 .env
+compliance-app/.env.app
+compliance-api/.env.api
+compliance-worker/.env.worker
 *.env.local

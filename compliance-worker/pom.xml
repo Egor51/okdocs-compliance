@@ -65,6 +65,17 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
+        <!--
+          Jackson + JacksonAutoConfiguration (авто-ObjectMapper с JavaTimeModule), БЕЗ веб-сервера.
+          Standalone-воркер не тянет starter-web, поэтому ObjectMapper-бин иначе не создаётся, и
+          CdpDynamicCrawler/ScanPipeline/MessagingConfig (все инъектят ObjectMapper) роняют контекст.
+          В combined-app мапер приходит от web api — здесь даём тот же авто-бин напрямую.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-json</artifactId>
+        </dependency>
+
         <!-- Micrometer для метрик -->
         <dependency>
             <groupId>io.micrometer</groupId>

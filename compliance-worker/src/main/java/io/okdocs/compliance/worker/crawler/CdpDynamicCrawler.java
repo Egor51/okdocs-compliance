@@ -57,8 +57,6 @@ import java.util.concurrent.atomic.AtomicLong;
 @ConditionalOnProperty(name = "compliance.crawler.dynamic.enabled", havingValue = "true")
 public class CdpDynamicCrawler implements DynamicCrawler {
 
-    private static final long AVAILABILITY_RECHECK_INTERVAL_MS = 10_000;
-
     /** UA для headless-прохода: настроенный базовый + суффикс, чтобы отличать DYNAMIC от STATIC в логах сайта. */
     private final String userAgent;
     private final String chromiumBaseUrl;
@@ -66,6 +64,9 @@ public class CdpDynamicCrawler implements DynamicCrawler {
     private final int pageTimeoutMs;
     private final int concurrency;
     private final int batchTimeoutSeconds;
+    private final long availabilityRecheckIntervalMs;
+    private final int networkIdleQuietMs;
+    private final int networkIdleTimeoutMs;
     private final HttpClient http;
     private final ObjectMapper objectMapper;
     private final UrlValidator urlValidator;
@@ -81,6 +82,9 @@ public class CdpDynamicCrawler implements DynamicCrawler {
         this.pageTimeoutMs = dyn.getPageTimeoutMs();
         this.concurrency = Math.max(1, dyn.getConcurrency());
         this.batchTimeoutSeconds = dyn.getBatchTimeoutSeconds();
+        this.availabilityRecheckIntervalMs = dyn.getAvailabilityRecheckInterval().toMillis();
+        this.networkIdleQuietMs = dyn.getNetworkIdle().getQuietMs();
+        this.networkIdleTimeoutMs = dyn.getNetworkIdle().getTimeoutMs();
         this.objectMapper = objectMapper;
         this.urlValidator = urlValidator;
         this.http = HttpClient.newBuilder()
@@ -102,7 +106,7 @@ public class CdpDynamicCrawler implements DynamicCrawler {
         long now = System.currentTimeMillis();
         long last = lastAvailabilityCheckMs.get();
         boolean firstCheck = last == 0;
-        if (!force && (now - last) < AVAILABILITY_RECHECK_INTERVAL_MS) {
+        if (!force && (now - last) < availabilityRecheckIntervalMs) {
             return available.get();
         }
         lastAvailabilityCheckMs.set(now);
@@ -440,7 +444,7 @@ public class CdpDynamicCrawler implements DynamicCrawler {
             s.waitForEvent("Page.loadEventFired", pageTimeoutMs);
 
             // Быстрый снимок динамики: ждём короткую "тишину", чтобы не блокироваться на long-polling.
-            s.waitForNetworkIdle(800, 2000);
+            s.waitForNetworkIdle(networkIdleQuietMs, networkIdleTimeoutMs);
 
             try {
                 s.send("Page.stopLoading", null);
