@@ -117,6 +117,8 @@ public class ComplianceWorkerProperties {
         private Duration availabilityRecheckInterval = Duration.ofSeconds(10);
         @Valid
         private NetworkIdle networkIdle = new NetworkIdle();
+        @Valid
+        private PreConsentTracking preConsentTracking = new PreConsentTracking();
 
         /**
          * Эвристика «динамика догрузилась»: ждём {@code quietMs} мс сетевой тишины подряд, но не
@@ -128,6 +130,17 @@ public class ComplianceWorkerProperties {
             private int quietMs = 800;
             @Positive
             private int timeoutMs = 2000;
+        }
+
+        /**
+         * Наблюдение «трекер до согласия» (§3.2): инжект MutationObserver фиксирует момент появления
+         * cookie-баннера, таймлайн запросов — что грузилось раньше. При {@code enabled=false} краулер
+         * не инжектит наблюдатель и отдаёт пустой {@code preConsentTrackerHosts} → правило остаётся на
+         * вероятностном UNVERIFIED. Откат-рубильник на случай, если инжект ломает экзотические страницы.
+         */
+        @Data
+        public static class PreConsentTracking {
+            private boolean enabled = true;
         }
 
         /**

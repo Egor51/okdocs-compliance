@@ -67,6 +67,7 @@ public class CdpDynamicCrawler implements DynamicCrawler {
     private final long availabilityRecheckIntervalMs;
     private final int networkIdleQuietMs;
     private final int networkIdleTimeoutMs;
+    private final boolean preConsentTrackingEnabled;
     private final HttpClient http;
     private final ObjectMapper objectMapper;
     private final UrlValidator urlValidator;
@@ -85,6 +86,7 @@ public class CdpDynamicCrawler implements DynamicCrawler {
         this.availabilityRecheckIntervalMs = dyn.getAvailabilityRecheckInterval().toMillis();
         this.networkIdleQuietMs = dyn.getNetworkIdle().getQuietMs();
         this.networkIdleTimeoutMs = dyn.getNetworkIdle().getTimeoutMs();
+        this.preConsentTrackingEnabled = dyn.getPreConsentTracking().isEnabled();
         this.objectMapper = objectMapper;
         this.urlValidator = urlValidator;
         this.http = HttpClient.newBuilder()
@@ -342,11 +344,12 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                     }
                     long pageStart = System.currentTimeMillis();
                     try {
-                        String[] result = fetchPage(s, url, allowedThirdPartyHosts);
+                        PageFetch result = fetchPage(s, url, allowedThirdPartyHosts);
                         long ms = System.currentTimeMillis() - pageStart;
-                        log.info("CDP crawl ok url={} finalUrl={} html-len={} ms={}",
-                                url, result[0], result[2].length(), ms);
-                        results.put(url, buildResult(result[0], result[2]));
+                        log.info("CDP crawl ok url={} finalUrl={} html-len={} preConsent={} ms={}",
+                                url, result.finalUrl(), result.html().length(),
+                                result.preConsentHosts().size(), ms);
+                        results.put(url, buildResult(result));
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                         break;
@@ -435,10 +438,21 @@ public class CdpDynamicCrawler implements DynamicCrawler {
 
     // ── CDP WebSocket page fetch ──────────────────────────────────────────────
 
-    private String[] fetchPage(CdpSession s, String targetUrl, Set<String> allowedThirdPartyHosts) throws Exception {
+    /** Результат одного fetch: финальные url/title/html + сторонние хосты, запрошенные до согласия. */
+    private record PageFetch(String finalUrl, String title, String html, List<String> preConsentHosts) {
+    }
+
+    private record RequestObservation(String host, double epochMs) {
+    }
+
+    private PageFetch fetchPage(CdpSession s, String targetUrl, Set<String> allowedThirdPartyHosts) throws Exception {
         String allowedDomain = extractDomain(targetUrl);
         s.setDomainPolicy(allowedDomain, allowedThirdPartyHosts);
         try {
+            // Наблюдатель момента баннера ставим ДО навигации, чтобы он исполнился раньше скриптов
+            // страницы (addScriptToEvaluateOnNewDocument) и поймал даже синхронно вставленный баннер.
+            boolean bannerObserverInstalled = !preConsentTrackingEnabled || installBannerObserver(s);
+
             s.send("Page.navigate",
                     objectMapper.createObjectNode().put("url", targetUrl).toString());
             s.waitForEvent("Page.loadEventFired", pageTimeoutMs);
@@ -452,17 +466,67 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                 // best-effort
             }
 
-            // Один round-trip: собираем url+title+html одним JS-вызовом.
+            // Один round-trip: собираем url+title+html+момент баннера одним JS-вызовом.
             String json = s.eval(
-                    "(function(){var r={u:window.location.href,t:document.title,"
-                            + "h:document.documentElement.outerHTML};return JSON.stringify(r);})()");
+                    "(function(){var b=window.__okdocksBannerTs;var r={u:window.location.href,"
+                            + "t:document.title,h:document.documentElement.outerHTML,"
+                            + "b:(typeof b==='number'?b:null),"
+                            + "o:(window.__okdocksBannerObs===1)};return JSON.stringify(r);})()");
             JsonNode node = objectMapper.readTree(json);
-            return new String[]{
+
+            List<String> preConsentHosts = List.of();
+            boolean bannerObserverActive = bannerObserverInstalled && node.path("o").asBoolean(false);
+            if (preConsentTrackingEnabled && bannerObserverActive) {
+                Double bannerTs = node.path("b").isNumber() ? node.path("b").asDouble() : null;
+                preConsentHosts = computePreConsentHosts(
+                        s.firstRequestEpochMsByHost(), bannerTs, allowedDomain);
+            }
+            return new PageFetch(
                     node.path("u").asText(""),
                     node.path("t").asText(""),
-                    node.path("h").asText("")};
+                    node.path("h").asText(""),
+                    preConsentHosts);
         } finally {
             s.clearDomainPolicy();
+        }
+    }
+
+    /**
+     * Инжектит в новый документ наблюдатель момента появления cookie-баннера: фиксирует
+     * {@code window.__okdocksBannerTs = Date.now()} (epoch мс — та же шкала, что {@code wallTime}
+     * запросов) при первом DOM-узле, чей текст/класс матчит маркеры баннера. Маркеры — зеркало
+     * {@code PageExtractor.COOKIE_FLAG_PATTERN}, чтобы детект баннера был согласован со static-слоем.
+     */
+    private boolean installBannerObserver(CdpSession s) {
+        try {
+            String script = "(function(){"
+                    + "if(window.__okdocksBannerObs)return;window.__okdocksBannerObs=1;"
+                    + "window.__okdocksBannerTs=null;"
+                    + "var re=/(cookie[-_ ]?consent|cookie[-_ ]?banner|cookie[-_ ]?notice|"
+                    + "cookie[-_ ]?bar|cookiebot|cookiehub|cookiepro|cc-window|"
+                    + "\\u0438\\u0441\\u043f\\u043e\\u043b\\u044c\\u0437\\u0443[\\u0435\\u0451]\\u0442 cookie|"
+                    + "\\u0444\\u0430\\u0439\\u043b[\\u044b\\u0438] cookie)/i;"
+                    + "function hit(el){if(!el||window.__okdocksBannerTs)return;"
+                    + "var s=((el.className&&el.className.toString?el.className.toString():'')+' '+"
+                    + "(el.id||'')+' '+(el.textContent||'')).slice(0,4000);"
+                    + "if(re.test(s)){window.__okdocksBannerTs=Date.now();}}"
+                    + "var mo=new MutationObserver(function(muts){"
+                    + "for(var i=0;i<muts.length;i++){var a=muts[i].addedNodes;"
+                    + "for(var j=0;j<a.length;j++){if(a[j].nodeType===1)hit(a[j]);}}});"
+                    + "function start(){try{mo.observe(document.documentElement||document,"
+                    + "{childList:true,subtree:true});}catch(e){}"
+                    + "if(document.body)hit(document.body);}"
+                    + "if(document.documentElement)start();"
+                    + "else document.addEventListener('DOMContentLoaded',start);"
+                    + "})();";
+            s.send("Page.addScriptToEvaluateOnNewDocument",
+                    objectMapper.createObjectNode().put("source", script).toString());
+            return true;
+        } catch (Exception e) {
+            // Инжект не критичен: без него не подтверждаем порядок загрузки и отдаём пустой
+            // preConsentHosts, чтобы не получить ложный CONFIRMED.
+            log.debug("CDP banner observer install failed: {}", e.getMessage());
+            return false;
         }
     }
 
@@ -482,6 +546,13 @@ public class CdpDynamicCrawler implements DynamicCrawler {
         // Кэш SSRF-вердикта по хосту: isHostSafe резолвит DNS блокирующе на dispatch-потоке —
         // запоминаем результат, чтобы каждый уникальный хост проверять не более раза за сессию.
         private final ConcurrentHashMap<String, Boolean> hostSafetyCache = new ConcurrentHashMap<>();
+        // Таймлайн «трекер до согласия» (§3.2): хост → минимальный wallTime его запроса (epoch мс).
+        // Заполняется только для Fetch-запросов, которые crawler реально продолжил; обнуляется
+        // per-page в setDomainPolicy.
+        private final ConcurrentHashMap<String, Double> firstRequestEpochMsByHost = new ConcurrentHashMap<>();
+        private final ConcurrentHashMap<String, RequestObservation> requestByNetworkId = new ConcurrentHashMap<>();
+        private final Set<String> continuedNetworkIds = ConcurrentHashMap.newKeySet();
+        private final Set<String> failedNetworkIds = ConcurrentHashMap.newKeySet();
         // Сериализует все WebSocket-отправки — Java WebSocket запрещает конкурентные sendText.
         private final ExecutorService sendExecutor = Executors.newSingleThreadExecutor();
 
@@ -498,6 +569,10 @@ public class CdpDynamicCrawler implements DynamicCrawler {
             this.allowedThirdPartyHosts = normalizeHostSet(allowedThirdPartyHosts);
             this.blockedHostsLogged.clear();
             this.hostSafetyCache.clear();
+            this.firstRequestEpochMsByHost.clear();
+            this.requestByNetworkId.clear();
+            this.continuedNetworkIds.clear();
+            this.failedNetworkIds.clear();
         }
 
         void clearDomainPolicy() {
@@ -505,6 +580,11 @@ public class CdpDynamicCrawler implements DynamicCrawler {
             this.allowedThirdPartyHosts = Set.of();
             this.blockedHostsLogged.clear();
             this.hostSafetyCache.clear();
+        }
+
+        /** Снимок таймлайна запросов текущей страницы (хост → минимальный wallTime, epoch мс). */
+        Map<String, Double> firstRequestEpochMsByHost() {
+            return new LinkedHashMap<>(firstRequestEpochMsByHost);
         }
 
         /** Отправляет CDP-команду и ждёт ответа. Потокобезопасна. */
@@ -618,7 +698,10 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                     String method = node.path("method").asText("");
                     if (!method.isBlank()) {
                         switch (method) {
-                            case "Network.requestWillBeSent" -> inflightRequests.incrementAndGet();
+                            case "Network.requestWillBeSent" -> {
+                                inflightRequests.incrementAndGet();
+                                recordRequestTimeline(node.path("params"));
+                            }
                             case "Network.loadingFinished", "Network.loadingFailed",
                                  "Network.webSocketClosed" -> {
                                 // webSocketClosed: WS не генерирует loadingFinished — декрементируем
@@ -642,20 +725,86 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                 }
             }
 
+            /**
+             * Запоминает момент запроса по {@code wallTime} (Unix-epoch секунды из CDP) → epoch мс.
+             * Берём время именно из {@code requestWillBeSent}, а НЕ {@code Fetch.requestPaused}: там
+             * время искажено нашей паузой/SSRF-фильтром. В итоговый таймлайн хост попадёт только
+             * после {@code Fetch.continueRequest}; заблокированные crawler'ом запросы не считаются
+             * реально ушедшими.
+             */
+            private void recordRequestTimeline(JsonNode params) {
+                String networkId = params.path("requestId").asText("");
+                if (networkId.isBlank() || failedNetworkIds.contains(networkId)) {
+                    return;
+                }
+                double wallTime = params.path("wallTime").asDouble(0.0);
+                if (wallTime <= 0.0) {
+                    return; // без надёжной шкалы времени запрос в таймлайн не кладём
+                }
+                String requestUrl = params.path("request").path("url").asText("");
+                try {
+                    URI uri = new URI(requestUrl);
+                    String scheme = uri.getScheme();
+                    if (scheme == null || (!scheme.equals("http") && !scheme.equals("https"))) {
+                        return;
+                    }
+                    String host = uri.getHost();
+                    if (host == null || host.isBlank()) {
+                        return;
+                    }
+                    double epochMs = wallTime * 1000.0;
+                    RequestObservation observation = new RequestObservation(
+                            host.toLowerCase(Locale.ROOT), epochMs);
+                    requestByNetworkId.put(networkId, observation);
+                    if (continuedNetworkIds.contains(networkId)) {
+                        commitContinuedRequest(observation);
+                    }
+                } catch (URISyntaxException e) {
+                    // нераспарсенный URL в таймлайн не попадает
+                }
+            }
+
+            private void markRequestContinued(String networkId) {
+                if (networkId == null || networkId.isBlank() || failedNetworkIds.contains(networkId)) {
+                    return;
+                }
+                continuedNetworkIds.add(networkId);
+                RequestObservation observation = requestByNetworkId.get(networkId);
+                if (observation != null) {
+                    commitContinuedRequest(observation);
+                }
+            }
+
+            private void markRequestFailed(String networkId) {
+                if (networkId == null || networkId.isBlank()) {
+                    return;
+                }
+                failedNetworkIds.add(networkId);
+                continuedNetworkIds.remove(networkId);
+                requestByNetworkId.remove(networkId);
+            }
+
+            private void commitContinuedRequest(RequestObservation observation) {
+                firstRequestEpochMsByHost.merge(observation.host(), observation.epochMs(), Math::min);
+            }
+
             private void handleFetchRequestPaused(JsonNode node) {
                 JsonNode params = node.path("params");
                 String requestId = params.path("requestId").asText("");
+                String networkId = params.path("networkId").asText("");
                 String requestUrl = params.path("request").path("url").asText("");
                 try {
                     URI uri = new URI(requestUrl);
                     String scheme = uri.getScheme();
                     // data:, blob:, about: — браузерные схемы без сетевого запроса, пропускаем
                     if (scheme != null && !scheme.equals("http") && !scheme.equals("https")) {
+                        markRequestContinued(networkId);
                         cdpContinue(requestId);
                         return;
                     }
                     // browser-level сессия — без фильтрации
                     if (allowedDomain == null) {
+                        markRequestContinued(networkId);
                         cdpContinue(requestId);
                         return;
                     }
@@ -668,6 +817,7 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                         if (blockedHostsLogged.add(hostLower)) {
                             log.debug("CDP blocked third-party host={} url={}", host, requestUrl);
                         }
+                        markRequestFailed(networkId);
                         cdpFail(requestId, "AccessDenied");
                         return;
                     }
@@ -680,11 +830,14 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                             log.warn("CDP blocked host resolving to private/blocked IP host={} url={}",
                                     host, requestUrl);
                         }
+                        markRequestFailed(networkId);
                         cdpFail(requestId, "AccessDenied");
                         return;
                     }
+                    markRequestContinued(networkId);
                     cdpContinue(requestId);
                 } catch (URISyntaxException e) {
+                    markRequestFailed(networkId);
                     cdpFail(requestId, "AddressUnreachable");
                 }
             }
@@ -745,9 +898,11 @@ public class CdpDynamicCrawler implements DynamicCrawler {
      * {@link PageExtractor}, чтобы DYNAMIC и STATIC давали единый набор полей для движка правил
      * (title берётся из {@code doc.title()} отрендеренного DOM).
      */
-    private PageAnalysisResult buildResult(String url, String html) {
-        Document doc = Jsoup.parse(html, url);
-        return PageExtractor.extract(url, doc, extractDomain(url), RenderMode.DYNAMIC);
+    private PageAnalysisResult buildResult(PageFetch fetch) {
+        String url = fetch.finalUrl();
+        Document doc = Jsoup.parse(fetch.html(), url);
+        return PageExtractor.extract(url, doc, extractDomain(url), RenderMode.DYNAMIC,
+                fetch.preConsentHosts());
     }
 
     private static String extractDomain(String url) {
@@ -756,5 +911,47 @@ public class CdpDynamicCrawler implements DynamicCrawler {
         } catch (URISyntaxException e) {
             return null;
         }
+    }
+
+    /**
+     * Чистое ядро правила «трекер до согласия»: из таймлайна первых запросов по хосту и момента
+     * появления cookie-баннера определить сторонние хосты, чьи запросы ушли ДО согласия.
+     * <p>
+     * Семантика момента согласия (краулер НЕ кликает «Принять»): {@code bannerEpochMs == null}
+     * означает «баннер не появился вовсе» → любой сторонний запрос считается pre-consent (трекинг
+     * без всякого механизма согласия). Иначе pre-consent — только запросы строго раньше баннера.
+     * <p>
+     * Свой домен ({@code allowedDomain} и его поддомены) исключается: первый-party запросы — не
+     * сторонний трекинг. Матчинг на справочник трекеров здесь НЕ делается — это ответственность
+     * jurisdiction-зависимого правила. Времена — в единой шкале Unix-epoch мс ({@code wallTime}
+     * запроса и {@code Date.now()} баннера), поэтому сравнимы напрямую.
+     *
+     * @param firstRequestEpochMsByHost хост (lowercase) → минимальный wallTime его запроса, мс
+     * @param bannerEpochMs             момент появления баннера (epoch мс) или {@code null}, если не появился
+     * @param allowedDomain             first-party домен (lowercase) для исключения; может быть {@code null}
+     * @return отсортированные по времени сторонние хосты, запрошенные до согласия (порядок обхода стабилен)
+     */
+    static List<String> computePreConsentHosts(Map<String, Double> firstRequestEpochMsByHost,
+                                               Double bannerEpochMs,
+                                               String allowedDomain) {
+        if (firstRequestEpochMsByHost == null || firstRequestEpochMsByHost.isEmpty()) {
+            return List.of();
+        }
+        String firstParty = allowedDomain == null ? null : allowedDomain.toLowerCase(Locale.ROOT);
+        return firstRequestEpochMsByHost.entrySet().stream()
+                .filter(e -> e.getKey() != null && !e.getKey().isBlank())
+                .filter(e -> !isFirstParty(e.getKey(), firstParty))
+                .filter(e -> bannerEpochMs == null || e.getValue() < bannerEpochMs)
+                .sorted(Map.Entry.comparingByValue())
+                .map(Map.Entry::getKey)
+                .distinct()
+                .toList();
+    }
+
+    private static boolean isFirstParty(String host, String firstPartyDomain) {
+        if (firstPartyDomain == null || firstPartyDomain.isBlank()) {
+            return false;
+        }
+        return host.equals(firstPartyDomain) || host.endsWith("." + firstPartyDomain);
     }
 }

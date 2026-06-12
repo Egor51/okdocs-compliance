@@ -44,6 +44,11 @@ compliance:
         # но ждём не дольше timeout мс (защита от long-polling/websocket).
         quiet-ms: 800
         timeout-ms: 2000
+      pre-consent-tracking:
+        # Наблюдение «трекер до согласия»: инжект MutationObserver фиксирует момент cookie-баннера,
+        # таймлайн запросов — что грузилось раньше. false → краулер не инжектит наблюдатель и отдаёт
+        # пустой preConsentTrackerHosts (правило остаётся на вероятностном UNVERIFIED). Откат-рубильник.
+        enabled: true
   scan:
     # Порог reaper'а: скан без апдейта дольше этого срока считается зависшим.
     # Строго больше crawler.crawler-timeout-seconds (90s) — инвариант, fail-fast.

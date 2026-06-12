@@ -56,6 +56,25 @@ public final class TestFixtures {
         return page(url, "текст", false, List.of(), List.of(), externalScripts, "<html></html>");
     }
 
+    /**
+     * DYNAMIC-страница с трекер-скриптами И зафиксированным таймлайном «до согласия»
+     * ({@code preConsentTrackerHosts}). Баннера нет. Моделирует реальный CDP-проход, где запрос
+     * трекера наблюдался раньше cookie-баннера → правило обязано дать CONFIRMED.
+     */
+    public static PageAnalysisResult dynamicPageWithPreConsent(String url, List<String> externalScripts,
+                                                               List<String> preConsentTrackerHosts) {
+        return dynamicPageWithPreConsent(url, externalScripts, preConsentTrackerHosts, false);
+    }
+
+    public static PageAnalysisResult dynamicPageWithPreConsent(String url, List<String> externalScripts,
+                                                               List<String> preConsentTrackerHosts,
+                                                               boolean cookiePresent) {
+        return new PageAnalysisResult(
+                url, "title", "текст", "<html></html>",
+                externalScripts, List.of(), List.of(),
+                cookiePresent, List.of(), RenderMode.DYNAMIC, preConsentTrackerHosts);
+    }
+
     // ── Формы ────────────────────────────────────────────────────────────────────────────────
 
     // FormInfo: action, method, inputNames, hasPasswordField, hasFileUpload, hasCheckbox,

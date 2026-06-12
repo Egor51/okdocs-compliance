@@ -64,6 +64,15 @@ final class PageExtractor {
 
     /** Извлечение с явным {@link RenderMode}: STATIC для Jsoup, DYNAMIC для headless-рендера (CDP). */
     static PageAnalysisResult extract(String url, Document doc, String startDomain, RenderMode renderMode) {
+        return extract(url, doc, startDomain, renderMode, List.of());
+    }
+
+    /**
+     * Извлечение с таймлайном «трекер до согласия»: {@code preConsentTrackerHosts} — сторонние хосты,
+     * чьи запросы наблюдались до cookie-баннера (DYNAMIC через CDP). На STATIC всегда пусто.
+     */
+    static PageAnalysisResult extract(String url, Document doc, String startDomain, RenderMode renderMode,
+                                      List<String> preConsentTrackerHosts) {
         String html = doc.html();
         String text = doc.text();
 
@@ -126,7 +135,8 @@ final class PageExtractor {
                 List.copyOf(internalLinks),
                 cookiePresent,
                 List.copyOf(forms),
-                renderMode);
+                renderMode,
+                preConsentTrackerHosts == null ? List.of() : List.copyOf(preConsentTrackerHosts));
     }
 
     private static FormInfo extractForm(Element form) {

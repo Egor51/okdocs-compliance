@@ -5,7 +5,6 @@ import io.okdocs.compliance.contracts.crawler.ScanAnalysisContext;
 import io.okdocs.compliance.contracts.enums.EvidenceType;
 import io.okdocs.compliance.contracts.enums.FindingCategory;
 import io.okdocs.compliance.contracts.enums.FindingSeverity;
-import io.okdocs.compliance.contracts.enums.RenderMode;
 import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.contracts.enums.SourceType;
 import io.okdocs.compliance.contracts.enums.VerificationStatus;
@@ -24,9 +23,12 @@ import java.util.Set;
  * Метаданные перенесены из MVP (okdocks {@code TRACKERS_BEFORE_CONSENT}); код приведён к PLAN.md
  * §3.2 ({@code POSSIBLE_TRACKERS_BEFORE_CONSENT}).
  * <p>
- * <b>Честность вероятностного результата (PLAN.md §3.2):</b> на STATIC нельзя наблюдать «трекер
- * сработал ДО клика по согласию» — нет исполнения JS. Поэтому на STATIC факт вероятностный
- * (UNVERIFIED, 0.60). На DYNAMIC (порядок загрузки/баннер виден) — CONFIRMED, 0.95.
+ * <b>Честность вероятностного результата (PLAN.md §3.2):</b> {@code CONFIRMED} (0.95) выдаётся
+ * только когда DYNAMIC-таймлайн через CDP реально зафиксировал запрос трекера ДО появления
+ * cookie-баннера (поле {@code preConsentTrackerHosts}). Если порядок загрузки относительно согласия
+ * не наблюдался — на STATIC (нет исполнения JS) или на DYNAMIC без зафиксированного pre-consent
+ * запроса — факт остаётся вероятностным ({@code UNVERIFIED}, 0.60): трекер присутствует, но что он
+ * сработал именно до согласия, не подтверждено.
  */
 public final class TrackersBeforeConsentRule implements Rule {
 
@@ -59,12 +61,6 @@ public final class TrackersBeforeConsentRule implements Rule {
         if (pages.isEmpty()) {
             return List.of();
         }
-        // Есть баннер — не можем утверждать, что трекеры грузятся до согласия.
-        if (RuPatterns.hasCookieBanner(ctx)) {
-            return List.of();
-        }
-
-        boolean anyDynamic = RuleSupport.evidenceType(ctx) == EvidenceType.DYNAMIC_RENDER;
         List<RuleFact> facts = new ArrayList<>();
         for (PageAnalysisResult page : pages) {
             Set<String> found = new LinkedHashSet<>();
@@ -72,17 +68,28 @@ public final class TrackersBeforeConsentRule implements Rule {
             if (found.isEmpty()) {
                 continue;
             }
-            boolean dynamic = page.renderMode() == RenderMode.DYNAMIC || anyDynamic;
+            // Трекеры, чьи запросы РЕАЛЬНО наблюдались до согласия (DYNAMIC-таймлайн через CDP):
+            // пересекаем наблюдённые pre-consent хосты со справочником тем же matchTracker.
+            Set<String> preConsent = new LinkedHashSet<>();
+            matchTracker(page.preConsentTrackerHosts(), preConsent);
+            boolean confirmed = !preConsent.isEmpty();
+
+            // CONFIRMED 0.95 — только при реально наблюдённом запросе ДО баннера (или при полном
+            // отсутствии баннера). Иначе вероятностный UNVERIFIED 0.60: трекер есть, но порядок
+            // загрузки относительно согласия не подтверждён (весь STATIC + DYNAMIC без pre-consent).
+            Set<String> evidence = confirmed ? preConsent : found;
             facts.add(new RuleFact(
                     DEFINITION.code(),
-                    "Трекеры загружаются без cookie-баннера: " + String.join(", ", found)
-                            + (dynamic ? "." : " (порядок загрузки не подтверждён на статическом анализе)."),
+                    "Трекеры загружаются без cookie-баннера: " + String.join(", ", evidence)
+                            + (confirmed
+                                ? " (запрос наблюдался до появления cookie-баннера)."
+                                : " (порядок загрузки относительно согласия не подтверждён)."),
                     page.url(),
                     SourceType.HTML,
-                    dynamic ? EvidenceType.DYNAMIC_RENDER : EvidenceType.STATIC_ANALYSIS,
-                    dynamic ? 0.95 : 0.60,
-                    String.join(",", found),
-                    dynamic ? VerificationStatus.CONFIRMED : VerificationStatus.UNVERIFIED));
+                    confirmed ? EvidenceType.DYNAMIC_RENDER : EvidenceType.STATIC_ANALYSIS,
+                    confirmed ? 0.95 : 0.60,
+                    String.join(",", evidence),
+                    confirmed ? VerificationStatus.CONFIRMED : VerificationStatus.UNVERIFIED));
         }
         return facts;
     }

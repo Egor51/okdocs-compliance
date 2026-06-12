@@ -36,16 +36,73 @@ class TrackersBeforeConsentRuleTest {
     }
 
     @Test
-    void silentWhenCookieBannerPresent() {
+    void remainsUnverifiedWhenCookieBannerPresentButNoPreConsentObserved() {
         PageAnalysisResult page = TestFixtures.page("https://site.ru", "текст", true,
                 List.of(), List.of(), List.of("mc.yandex.ru"), "<html></html>");
 
-        assertThat(rule.evaluate(TestFixtures.ctx(page))).isEmpty();
+        assertThat(rule.evaluate(TestFixtures.ctx(page))).singleElement().satisfies(f -> {
+            assertThat(f.verificationStatus()).isEqualTo(VerificationStatus.UNVERIFIED);
+            assertThat(f.confidence()).isEqualTo(0.60);
+        });
     }
 
     @Test
     void silentWhenNoTrackers() {
         assertThat(rule.evaluate(TestFixtures.ctx(
                 TestFixtures.pageWithScripts("https://site.ru", List.of("cdn.example.com"))))).isEmpty();
+    }
+
+    @Test
+    void confirmsWhenTrackerRequestObservedBeforeConsent() {
+        // DYNAMIC: CDP-таймлайн зафиксировал запрос трекера до баннера → CONFIRMED 0.95.
+        List<RuleFact> facts = rule.evaluate(TestFixtures.ctx(
+                TestFixtures.dynamicPageWithPreConsent("https://site.ru",
+                        List.of("mc.yandex.ru"), List.of("mc.yandex.ru"))));
+
+        assertThat(facts).singleElement().satisfies(f -> {
+            assertThat(f.verificationStatus()).isEqualTo(VerificationStatus.CONFIRMED);
+            assertThat(f.confidence()).isEqualTo(0.95);
+            assertThat(f.evidence()).contains("mc.yandex.ru");
+        });
+    }
+
+    @Test
+    void confirmsWhenCookieBannerPresentButTrackerRequestObservedBeforeIt() {
+        // Итоговый DOM уже содержит баннер, но CDP-таймлайн доказал, что трекер ушёл раньше.
+        List<RuleFact> facts = rule.evaluate(TestFixtures.ctx(
+                TestFixtures.dynamicPageWithPreConsent("https://site.ru",
+                        List.of("mc.yandex.ru"), List.of("mc.yandex.ru"), true)));
+
+        assertThat(facts).singleElement().satisfies(f -> {
+            assertThat(f.verificationStatus()).isEqualTo(VerificationStatus.CONFIRMED);
+            assertThat(f.confidence()).isEqualTo(0.95);
+        });
+    }
+
+    @Test
+    void downgradesWhenDynamicButNoPreConsentObserved() {
+        // DYNAMIC, трекер есть, но запрос ДО согласия не зафиксирован (preConsent пуст) →
+        // честный UNVERIFIED 0.60, а не ложный 0.95.
+        List<RuleFact> facts = rule.evaluate(TestFixtures.ctx(
+                TestFixtures.dynamicPageWithPreConsent("https://site.ru",
+                        List.of("mc.yandex.ru"), List.of())));
+
+        assertThat(facts).singleElement().satisfies(f -> {
+            assertThat(f.verificationStatus()).isEqualTo(VerificationStatus.UNVERIFIED);
+            assertThat(f.confidence()).isEqualTo(0.60);
+        });
+    }
+
+    @Test
+    void preConsentHostMatchesTrackerBySubdomain() {
+        // Наблюдённый хост — поддомен/конкретный хост, в справочнике запись по корню: matchTracker
+        // должен свести его к трекеру и дать CONFIRMED.
+        List<RuleFact> facts = rule.evaluate(TestFixtures.ctx(
+                TestFixtures.dynamicPageWithPreConsent("https://site.ru",
+                        List.of("www.google-analytics.com"),
+                        List.of("www.google-analytics.com"))));
+
+        assertThat(facts).singleElement().satisfies(f ->
+                assertThat(f.verificationStatus()).isEqualTo(VerificationStatus.CONFIRMED));
     }
 }
