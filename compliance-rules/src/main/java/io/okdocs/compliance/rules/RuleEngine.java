@@ -26,6 +26,8 @@ public final class RuleEngine {
         Objects.requireNonNull(ctx, "ctx");
         List<RuleFact> facts = new ArrayList<>();
         List<RuleEvaluationError> errors = new ArrayList<>();
+        List<RuleOutcome> outcomes = new ArrayList<>();
+        boolean hasPages = ctx.pages() != null && !ctx.pages().isEmpty();
 
         for (Rule rule : rules) {
             // Резолвим code ДО evaluate: если падает не evaluate, а definition(), мы всё равно
@@ -36,10 +38,14 @@ public final class RuleEngine {
             // Если definition() сломан и юрисдикцию не прочитать — правило неклассифицируемо,
             // запускать его на чужом скане небезопасно: фиксируем ошибку и пропускаем.
             ScanJurisdiction ruleJurisdiction;
+            RuleDefinition definition;
             try {
-                ruleJurisdiction = rule.definition().jurisdiction();
+                definition = rule.definition();
+                ruleJurisdiction = definition.jurisdiction();
             } catch (RuntimeException e) {
                 errors.add(new RuleEvaluationError(code, e.getClass().getSimpleName(), e.getMessage()));
+                outcomes.add(new RuleOutcome(code, RuleOutcomeStatus.NOT_EVALUATED,
+                        code, null, null, "Правило не удалось подготовить к проверке."));
                 continue;
             }
             if (ruleJurisdiction != ctx.jurisdiction()) {
@@ -48,18 +54,38 @@ public final class RuleEngine {
 
             try {
                 List<RuleFact> ruleFacts = rule.evaluate(ctx);
-                if (ruleFacts != null) {
+                if (ruleFacts != null && !ruleFacts.isEmpty()) {
                     facts.addAll(ruleFacts);
+                    outcomes.add(outcome(definition, RuleOutcomeStatus.FAILED));
+                } else if (hasPages) {
+                    outcomes.add(outcome(definition, RuleOutcomeStatus.PASSED));
+                } else {
+                    outcomes.add(new RuleOutcome(code, RuleOutcomeStatus.NOT_EVALUATED,
+                            definition.title(), definition.severity(), definition.category(),
+                            "Правило не проверялось: краулер не вернул страниц."));
                 }
             } catch (RuntimeException e) {
                 errors.add(new RuleEvaluationError(
                         code,
                         e.getClass().getSimpleName(),
                         e.getMessage()));
+                outcomes.add(new RuleOutcome(code, RuleOutcomeStatus.NOT_EVALUATED,
+                        definition.title(), definition.severity(), definition.category(),
+                        "Правило не проверялось из-за ошибки выполнения."));
             }
         }
 
-        return new RuleEngineResult(List.copyOf(facts), List.copyOf(errors));
+        return new RuleEngineResult(List.copyOf(facts), List.copyOf(errors), List.copyOf(outcomes));
+    }
+
+    private static RuleOutcome outcome(RuleDefinition definition, RuleOutcomeStatus status) {
+        return new RuleOutcome(
+                definition.code(),
+                status,
+                definition.title(),
+                definition.severity(),
+                definition.category(),
+                null);
     }
 
     /** code из definition(); если definition() сам бросает — fallback на имя класса правила. */

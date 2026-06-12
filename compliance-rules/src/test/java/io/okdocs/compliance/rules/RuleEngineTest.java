@@ -25,6 +25,9 @@ class RuleEngineTest {
         assertThat(result.facts())
                 .extracting(RuleFact::code)
                 .containsExactlyInAnyOrder("UNPROTECTED_DATA_FORMS", "OK");
+        assertThat(result.outcomes())
+                .extracting(RuleOutcome::status)
+                .contains(RuleOutcomeStatus.FAILED);
     }
 
     @Test
@@ -39,6 +42,10 @@ class RuleEngineTest {
             assertThat(err.exceptionType()).isEqualTo("IllegalStateException");
             assertThat(err.message()).isEqualTo("kaboom");
         });
+        assertThat(result.outcomes())
+                .filteredOn(o -> o.code().equals("BOOM"))
+                .singleElement()
+                .satisfies(o -> assertThat(o.status()).isEqualTo(RuleOutcomeStatus.NOT_EVALUATED));
     }
 
     @Test
@@ -51,6 +58,10 @@ class RuleEngineTest {
         assertThat(result.facts()).extracting(RuleFact::code).containsExactly("OK");
         assertThat(result.errors()).singleElement()
                 .satisfies(err -> assertThat(err.ruleCode()).isEqualTo("BrokenDefinitionRule"));
+        assertThat(result.outcomes())
+                .filteredOn(o -> o.code().equals("BrokenDefinitionRule"))
+                .singleElement()
+                .satisfies(o -> assertThat(o.status()).isEqualTo(RuleOutcomeStatus.NOT_EVALUATED));
     }
 
     @Test
@@ -62,6 +73,7 @@ class RuleEngineTest {
 
         assertThat(result.facts()).extracting(RuleFact::code).containsExactly("OK");
         assertThat(result.errors()).isEmpty();
+        assertThat(result.outcomes()).extracting(RuleOutcome::code).doesNotContain("EU_ONLY");
     }
 
     @Test
@@ -69,6 +81,33 @@ class RuleEngineTest {
         RuleEngineResult result = new RuleEngine(List.of()).evaluate(TestFixtures.ctx());
         assertThat(result.facts()).isEmpty();
         assertThat(result.errors()).isEmpty();
+        assertThat(result.outcomes()).isEmpty();
+    }
+
+    @Test
+    void emptyFactsWithPagesYieldsPassedOutcome() {
+        RuleEngine engine = new RuleEngine(List.of(new PassingRule()));
+
+        RuleEngineResult result = engine.evaluate(TestFixtures.ctx(TestFixtures.simplePage("https://site.ru")));
+
+        assertThat(result.facts()).isEmpty();
+        assertThat(result.outcomes()).singleElement().satisfies(o -> {
+            assertThat(o.code()).isEqualTo("PASS");
+            assertThat(o.status()).isEqualTo(RuleOutcomeStatus.PASSED);
+        });
+    }
+
+    @Test
+    void emptyFactsWithoutPagesYieldsNotEvaluatedOutcome() {
+        RuleEngine engine = new RuleEngine(List.of(new PassingRule()));
+
+        RuleEngineResult result = engine.evaluate(TestFixtures.ctx());
+
+        assertThat(result.facts()).isEmpty();
+        assertThat(result.outcomes()).singleElement().satisfies(o -> {
+            assertThat(o.code()).isEqualTo("PASS");
+            assertThat(o.status()).isEqualTo(RuleOutcomeStatus.NOT_EVALUATED);
+        });
     }
 
     private static final class OkRule implements Rule {
@@ -120,6 +159,19 @@ class RuleEngineTest {
         @Override
         public List<RuleFact> evaluate(ScanAnalysisContext ctx) {
             throw new IllegalStateException("kaboom");
+        }
+    }
+
+    private static final class PassingRule implements Rule {
+        @Override
+        public RuleDefinition definition() {
+            return new RuleDefinition("PASS", ScanJurisdiction.RU, FindingSeverity.LOW,
+                    FindingCategory.OTHER, "pass", null, null, null, null);
+        }
+
+        @Override
+        public List<RuleFact> evaluate(ScanAnalysisContext ctx) {
+            return List.of();
         }
     }
 }

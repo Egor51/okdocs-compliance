@@ -273,7 +273,8 @@ public class ScanPipeline {
                 "pagesFetched", diag.pagesFetched(),
                 "pagesFailed", diag.pagesFailed(),
                 "crawlerTimedOut", diag.crawlerTimedOut(),
-                "ruleErrors", engineResult.errors());
+                "ruleErrors", engineResult.errors(),
+                "ruleOutcomes", engineResult.outcomes());
         try {
             return objectMapper.writeValueAsString(merged);
         } catch (JsonProcessingException e) {

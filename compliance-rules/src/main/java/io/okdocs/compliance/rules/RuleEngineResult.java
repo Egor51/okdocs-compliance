@@ -8,6 +8,10 @@ import java.util.List;
  */
 public record RuleEngineResult(
         List<RuleFact> facts,
-        List<RuleEvaluationError> errors
+        List<RuleEvaluationError> errors,
+        List<RuleOutcome> outcomes
 ) {
+    public RuleEngineResult(List<RuleFact> facts, List<RuleEvaluationError> errors) {
+        this(facts, errors, List.of());
+    }
 }
