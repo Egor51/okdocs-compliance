@@ -1,5 +1,7 @@
 package io.okdocs.compliance.contracts.scan;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import java.util.List;
 
 /**
@@ -12,6 +14,22 @@ public record DiagnosticsDto(
         int pagesFetched,
         int pagesFailed,
         boolean crawlerTimedOut,
-        List<String> ruleErrors
+        List<String> ruleErrors,
+        List<RuleOutcomeDto> ruleOutcomes
 ) {
+    public DiagnosticsDto {
+        ruleErrors = ruleErrors == null ? List.of() : List.copyOf(ruleErrors);
+        ruleOutcomes = ruleOutcomes == null ? List.of() : List.copyOf(ruleOutcomes);
+    }
+
+    public DiagnosticsDto(int pagesAttempted, int pagesFetched, int pagesFailed,
+                          boolean crawlerTimedOut, List<String> ruleErrors) {
+        this(pagesAttempted, pagesFetched, pagesFailed, crawlerTimedOut, ruleErrors, List.of());
+    }
+
+    @Override
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    public List<RuleOutcomeDto> ruleOutcomes() {
+        return ruleOutcomes;
+    }
 }

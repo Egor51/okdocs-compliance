@@ -19,6 +19,7 @@ public record ScanReportResponse(
         ScanSummaryDto summary,
         List<FindingDto> findings,
         DiagnosticsDto diagnostics,
+        ReportQualityDto quality,
         PaywallCtaDto paywallCta,
         Long durationMs,
         Instant createdAt,
