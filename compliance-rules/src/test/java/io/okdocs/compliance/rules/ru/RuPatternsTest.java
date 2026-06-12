@@ -55,4 +55,23 @@ class RuPatternsTest {
         assertThat(RuPatterns.trackersMentionedInPolicy(
                 TestFixtures.ctx(policy), Set.of("mc.yandex.ru"))).isTrue();
     }
+
+    @Test
+    void trackersMentionedInPolicyDetectsCyrillicYandexWithAnalyticsContext() {
+        PageAnalysisResult policy = TestFixtures.page("https://site.ru/privacy",
+                "Для анализа посещаемости сайта используется сервис Яндекс.Метрика и cookie.", false,
+                List.of(), List.of(), List.of(), "<html/>");
+        assertThat(RuPatterns.trackersMentionedInPolicy(
+                TestFixtures.ctx(policy), Set.of("mc.yandex.ru"))).isTrue();
+    }
+
+    @Test
+    void trackersMentionedInPolicyIgnoresYandexMapsFooterWithoutAnalyticsContext() {
+        PageAnalysisResult policy = TestFixtures.page("https://site.ru/privacy",
+                "Политика обработки персональных данных. Оператор обрабатывает имя и телефон. "
+                        + "Мы на картах: МурманКлик yandex.ru Агентство недвижимости в Мурманске.",
+                false, List.of(), List.of(), List.of(), "<html/>");
+        assertThat(RuPatterns.trackersMentionedInPolicy(
+                TestFixtures.ctx(policy), Set.of("mc.yandex.ru"))).isFalse();
+    }
 }

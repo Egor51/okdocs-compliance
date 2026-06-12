@@ -4,6 +4,7 @@ import io.okdocs.compliance.rules.Rule;
 import io.okdocs.compliance.rules.RuleEngine;
 import io.okdocs.compliance.rules.ru.ConsentDefaultCheckedRule;
 import io.okdocs.compliance.rules.ru.CrossBorderTransferRule;
+import io.okdocs.compliance.rules.ru.ForeignAuthProviderRule;
 import io.okdocs.compliance.rules.ru.NoCookieConsentRule;
 import io.okdocs.compliance.rules.ru.NoOperatorContactsRule;
 import io.okdocs.compliance.rules.ru.NoPrivacyPolicyRule;
@@ -29,11 +30,17 @@ public class RulesConfiguration {
     @Bean
     List<Rule> ruRules() {
         return List.of(
-                new NoPrivacyPolicyRule(), new UnprotectedDataFormsRule(),
-                new ConsentDefaultCheckedRule(), new NoCookieConsentRule(),
-                new ThirdPartyTrackersRule(), new CrossBorderTransferRule(),
-                new NoOperatorContactsRule(), new NotInRknRegistryRule(),
-                new NonRuHostingRule(), new TrackersBeforeConsentRule());
+                new NoPrivacyPolicyRule(),
+                new UnprotectedDataFormsRule(),
+                new ConsentDefaultCheckedRule(),
+                new NoCookieConsentRule(),
+                new ThirdPartyTrackersRule(),
+                new CrossBorderTransferRule(),
+                new ForeignAuthProviderRule(),
+                new NoOperatorContactsRule(),
+//                new NotInRknRegistryRule(),
+                new NonRuHostingRule(),
+                new TrackersBeforeConsentRule());
     }
 
     @Bean

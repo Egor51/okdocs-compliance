@@ -56,7 +56,35 @@ final class RuPatterns {
                     + "|(соглас|обработк).{0,60}(персональн|данн)",
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE | Pattern.DOTALL);
 
+    /**
+     * Контекст, в котором упоминание домена/бренда трекера в политике действительно похоже на
+     * раскрытие аналитики/cookie, а не на футерную ссылку на карты, соцсети или навигацию.
+     */
+    private static final Pattern TRACKER_DISCLOSURE_CONTEXT = Pattern.compile(
+            "(метрик|metric|analytics?|аналитик|статистик|cookie|куки|трекер|tracking|пиксел"
+                    + "|pixel|маркетинг|реклам|обезлич|посещаемост)",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
     private static final Pattern INN_PATTERN = Pattern.compile("(?<!\\d)(\\d{10}|\\d{12})(?!\\d)");
+
+    /**
+     * Маркеры кнопки/виджета федеративного входа через сторонний сервис: текстовые («Войти через
+     * Google», «Continue with Apple») и структурные классы SDK-кнопок (Google Identity, Facebook
+     * Login и др.). Вход для {@link ForeignAuthProviderRule} наряду со справочником
+     * {@link RuForeignAuthProviders}.
+     */
+    static final Pattern FOREIGN_AUTH_MARKER = Pattern.compile(
+            "((войти|вход|регистрац|sign[\\s\\-_]?in|sign[\\s\\-_]?up|log[\\s\\-_]?in|continue)"
+                    + "[\\s\\S]{0,30}(google|apple|facebook|github|microsoft|discord))"
+                    + "|g_id_signin|gsi-material-button|abcRioButton|data-onsuccess"
+                    + "|fb-login-button|apple-signin|appleid-signin",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    /** Маркеры login/registration-контекста на странице (текст рядом с механизмом входа). */
+    private static final Pattern LOGIN_CONTEXT_PATTERN = Pattern.compile(
+            "войти|вход\\b|авториз|регистрац|зарегистр|личн[ыа][йя]\\s+кабинет"
+                    + "|sign[\\s\\-_]?in|sign[\\s\\-_]?up|log[\\s\\-_]?in|register",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     // ── Хелперы ──────────────────────────────────────────────────────────────────────────────
 
@@ -155,8 +183,28 @@ final class RuPatterns {
             return false;
         }
         for (String domain : domains) {
-            if (policyText.contains(trackerSimpleName(domain))) {
+            if (trackerMentionedWithDisclosureContext(policyText, domain)) {
                 return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean trackerMentionedWithDisclosureContext(String policyText, String domain) {
+        for (String alias : trackerAliases(domain)) {
+            int from = 0;
+            while (from < policyText.length()) {
+                int idx = policyText.indexOf(alias, from);
+                if (idx < 0) {
+                    break;
+                }
+                int start = Math.max(0, idx - 140);
+                int end = Math.min(policyText.length(), idx + alias.length() + 140);
+                String window = policyText.substring(start, end);
+                if (TRACKER_DISCLOSURE_CONTEXT.matcher(window).find()) {
+                    return true;
+                }
+                from = idx + alias.length();
             }
         }
         return false;
@@ -171,6 +219,17 @@ final class RuPatterns {
         return POLICY_TEXT_HINT.matcher(safe(p.text())).find();
     }
 
+    private static Set<String> trackerAliases(String domain) {
+        String simple = trackerSimpleName(domain);
+        return switch (simple) {
+            case "yandex" -> Set.of("yandex", "яндекс");
+            case "google" -> Set.of("google", "google analytics", "гугл");
+            case "facebook" -> Set.of("facebook", "meta", "фейсбук");
+            case "mail" -> Set.of("mail.ru", "mail", "мэйл");
+            default -> Set.of(simple);
+        };
+    }
+
     // "google-analytics.com" → "google", "mc.yandex.ru" → "yandex", "connect.facebook.net" → "facebook"
     private static String trackerSimpleName(String domain) {
         String[] parts = domain.split("\\.");
@@ -180,5 +239,33 @@ final class RuPatterns {
             case "google-analytics" -> "google";
             default -> first;
         };
+    }
+
+    // ── Федеративный вход (ForeignAuthProviderRule) ─────────────────────────────────────────────
+
+    /**
+     * На странице есть маркер кнопки/виджета федеративного входа через сторонний сервис
+     * (текст «Войти через Google» или структурный класс SDK-кнопки) — ищем в html и тексте.
+     */
+    static boolean hasForeignAuthMarker(PageAnalysisResult page) {
+        String hay = safe(page.html()) + " " + safe(page.text());
+        return FOREIGN_AUTH_MARKER.matcher(hay).find();
+    }
+
+    /**
+     * Страница похожа на login/registration: есть password-поле в форме ИЛИ текстовые маркеры входа
+     * («войти», «регистрация», «sign in»). Подтверждающий контекст, отделяющий настоящий вход через
+     * сторонний сервис от голого share-виджета.
+     */
+    static boolean hasLoginContext(PageAnalysisResult page) {
+        if (page.forms() != null) {
+            for (FormInfo form : page.forms()) {
+                if (form.hasPasswordField()) {
+                    return true;
+                }
+            }
+        }
+        String hay = safe(page.title()) + " " + safe(page.text());
+        return LOGIN_CONTEXT_PATTERN.matcher(hay).find();
     }
 }

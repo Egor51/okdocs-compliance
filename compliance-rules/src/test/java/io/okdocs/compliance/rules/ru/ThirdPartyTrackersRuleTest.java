@@ -42,6 +42,22 @@ class ThirdPartyTrackersRuleTest {
     }
 
     @Test
+    void yandexMapsFooterInPolicyDoesNotCountAsTrackerDisclosure() {
+        PageAnalysisResult tracked = TestFixtures.pageWithScripts(
+                "https://site.ru", List.of("mc.yandex.ru"));
+        PageAnalysisResult policy = TestFixtures.page("https://site.ru/privacy",
+                "Политика обработки персональных данных. Мы на картах: yandex.ru.",
+                false, List.of(), List.of(), List.of(), "<html/>");
+
+        List<RuleFact> facts = rule.evaluate(TestFixtures.ctx(tracked, policy));
+
+        assertThat(facts).singleElement().satisfies(f -> {
+            assertThat(f.verificationStatus()).isEqualTo(VerificationStatus.UNVERIFIED);
+            assertThat(f.confidence()).isEqualTo(0.90);
+        });
+    }
+
+    @Test
     void perPageMentionDoesNotLeakToOtherDomains() {
         // Регрессия на «липкий» inPolicy: yandex упомянут в политике (DETECTED), а hubspot на
         // другой странице — нет, и должен остаться UNVERIFIED, а не унаследовать DETECTED.
