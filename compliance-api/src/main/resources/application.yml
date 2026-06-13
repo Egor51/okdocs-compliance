@@ -7,6 +7,11 @@ spring:
     password: ${DB_PASSWORD:compliance}
     hikari:
       maximum-pool-size: 10
+      # Прод-Postgres/firewall рвёт idle TCP раньше дефолтного maxLifetime (30 мин) → housekeeper
+      # ловит «Соединение уже было закрыто». Ротируем коннект раньше серверного таймаута (4 мин) и
+      # пингуем idle-коннекты (keepalive 2 мин), чтобы протухший коннект не дожил до выдачи из пула.
+      max-lifetime: ${DB_MAX_LIFETIME_MS:240000}
+      keepalive-time: ${DB_KEEPALIVE_MS:120000}
   jpa:
     hibernate:
       ddl-auto: validate

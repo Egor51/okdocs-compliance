@@ -25,8 +25,13 @@ compliance:
     max-pages: 100
     max-depth: 3
     page-timeout-ms: 15000
+    # Отдельный (короткий) TCP-connect-таймаут: мёртвый seed (NoRouteToHost/refused) отваливается
+    # быстро, не съедая page-timeout × число resolved-адресов на каждом приоритетном хинте.
+    connect-timeout-ms: 4000
     crawler-timeout-seconds: 90
-    rate-limit-ms: 1000
+    # Вежливая пауза между запросами к одному сайту. 250мс — баланс скорости и анти-429/бан:
+    # при потолке 100 страниц это ~25с суммарного sleep вместо ~100с при 1000мс.
+    rate-limit-ms: 250
     blocked-domains: []
     dynamic:
       # CDP-таймауты/лимиты dynamic-прохода. enabled/base-url/auth-token/premium-enabled

@@ -49,11 +49,19 @@ public class ComplianceWorkerProperties {
         private int maxDepth = 3;
         @Positive
         private int pageTimeoutMs = 15000;
+        /**
+         * Таймаут TCP-connect (мс), отдельный от {@link #pageTimeoutMs} (read). Короче read-таймаута:
+         * мёртвый/недостижимый seed (NoRouteToHost/ConnectionRefused) должен отваливаться быстро, не
+         * съедая 15с × число resolved-адресов — иначе перебор приоритетных хинтов на SPA без этих
+         * путей растягивается на минуту. Живые-но-медленные страницы read-таймаут не теряют.
+         */
+        @Positive
+        private int connectTimeoutMs = 4000;
         @Positive
         private int crawlerTimeoutSeconds = 90;
-        /** Задержка между запросами к сайту (вежливый краул). */
+        /** Задержка между запросами к сайту (вежливый краул). 250мс — баланс скорости/анти-бан. */
         @Min(0)
-        private long rateLimitMs = 1000;
+        private long rateLimitMs = 250;
         // perDomainConcurrency убран: SiteCrawler по дизайну последовательный (один скан = один поток,
         // один домен), параллелизма per-domain нет — конфиг был бы no-op'ом. Вернуть, если краул
         // станет параллельным.
