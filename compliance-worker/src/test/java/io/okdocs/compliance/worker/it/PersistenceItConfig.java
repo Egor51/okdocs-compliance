@@ -6,6 +6,7 @@ import io.okdocs.compliance.messaging.OutboxEventFactory;
 import io.okdocs.compliance.worker.config.ComplianceWorkerProperties;
 import io.okdocs.compliance.worker.service.ScanLifecycleService;
 import io.okdocs.compliance.worker.service.ScanProgressService;
+import io.okdocs.compliance.worker.service.ScanReportBuilder;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
@@ -27,7 +28,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 @EnableJpaRepositories(basePackages = "io.okdocs.compliance.persistence")
 @EntityScan(basePackages = "io.okdocs.compliance.persistence")
 @EnableConfigurationProperties(ComplianceWorkerProperties.class)
-@Import({ScanLifecycleService.class, ScanProgressService.class, OutboxEventFactory.class})
+@Import({ScanLifecycleService.class, ScanProgressService.class, ScanReportBuilder.class, OutboxEventFactory.class})
 public class PersistenceItConfig {
 
     /** ObjectMapper с jsr310 — как в проде (Boot-автоконфиг); иначе Instant в payload не сериализуется. */

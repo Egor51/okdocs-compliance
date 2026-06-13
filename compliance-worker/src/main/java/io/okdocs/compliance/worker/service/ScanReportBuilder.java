@@ -1,14 +1,12 @@
-package io.okdocs.compliance.api.service;
+package io.okdocs.compliance.worker.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.okdocs.compliance.api.config.ComplianceApiProperties;
-import io.okdocs.compliance.contracts.enums.ScanKind;
 import io.okdocs.compliance.contracts.enums.ScanTier;
 import io.okdocs.compliance.contracts.enums.VerificationStatus;
 import io.okdocs.compliance.contracts.scan.AffectedPageDto;
 import io.okdocs.compliance.contracts.scan.DiagnosticsDto;
 import io.okdocs.compliance.contracts.scan.FindingDto;
-import io.okdocs.compliance.contracts.scan.PaywallCtaDto;
 import io.okdocs.compliance.contracts.scan.PositiveCheckDto;
 import io.okdocs.compliance.contracts.scan.ReportQualityDto;
 import io.okdocs.compliance.contracts.scan.RuleOutcomeDto;
@@ -20,11 +18,11 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
-import java.util.Arrays;
-import java.util.ArrayList;
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -33,36 +31,55 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Сборка {@link ScanReportResponse} из {@link ComplianceScan} + findings (§4.2).
- * Premium-поля ({@code explanation}/{@code recommendation}/{@code evidence}/{@code sourceUrl})
- * маскируются для FREE-отчёта; для FREE добавляется {@code paywallCta}. Диагностика
- * десериализуется из {@code diagnosticsJson}.
+ * Сборка снапшотов {@link ScanReportResponse} из {@link ComplianceScan} + findings (§4.2).
+ * Строит сразу оба варианта — полный premium и FREE-маскированный (premium-поля {@code explanation}/{@code recommendation}/
+ * {@code evidence}/{@code sourceUrl}/{@code matchedSignals}/{@code affectedPages} обнулены),
+ * сериализует их в JSON. {@code paywallCta = null} в обоих: product-shell CTA дописывает API.
+ * <p>
+ * Билдер тотален: на пустых findings ({@code groupByCode} держит) и на частичных (PARTIAL)
+ * данных не кидает. Зависит только от contracts + persistence, без compliance-rules.
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class ScanReportAssembler {
+public class ScanReportBuilder {
 
     private static final Pattern FINE_NUMBER_PATTERN = Pattern.compile("(\\d[\\d\\s]*)");
 
-    private final ComplianceApiProperties properties;
     private final ObjectMapper objectMapper;
 
-    public ScanReportResponse assemble(ComplianceScan scan, List<ComplianceFinding> findings) {
-        ScanTier tier = effectiveTier(scan);
-        boolean premium = tier == ScanTier.PREMIUM;
+    public ScanReportSnapshots build(ComplianceScan scan, List<ComplianceFinding> findings) {
         Map<String, List<ComplianceFinding>> groupedFindings = groupByCode(findings);
         List<ComplianceFinding> representativeFindings = groupedFindings.values().stream()
-                .map(ScanReportAssembler::representative)
-                .toList();
-        List<FindingDto> findingDtos = groupedFindings.values().stream()
-                .map(group -> toDto(representative(group), group, premium))
+                .map(ScanReportBuilder::representative)
                 .toList();
         ScanSummaryDto summary = summarize(representativeFindings);
         DiagnosticsDto diagnostics = diagnostics(scan);
         ReportQualityDto quality = quality(diagnostics);
-        PaywallCtaDto cta = premium ? null : paywallCta();
 
+        ScanReportResponse premium = response(scan, ScanTier.PREMIUM, groupedFindings, summary, diagnostics, quality, true);
+        ScanReportResponse free = response(scan, ScanTier.FREE, groupedFindings, summary, diagnostics, quality, false);
+
+        return new ScanReportSnapshots(serialize(scan, premium), serialize(scan, free));
+    }
+
+    private String serialize(ComplianceScan scan, ScanReportResponse response) {
+        try {
+            return objectMapper.writeValueAsString(response);
+        } catch (JsonProcessingException e) {
+            // Сериализация record'а из примитивов/строк/enum не должна падать; если упала — финализация
+            // откатится целиком (snapshot пишется в той же транзакции), скан не завершится наполовину.
+            throw new IllegalStateException("Не удалось сериализовать отчёт скана " + scan.getId(), e);
+        }
+    }
+
+    private ScanReportResponse response(ComplianceScan scan, ScanTier tier,
+                                        Map<String, List<ComplianceFinding>> groupedFindings,
+                                        ScanSummaryDto summary, DiagnosticsDto diagnostics,
+                                        ReportQualityDto quality, boolean premium) {
+        List<FindingDto> findingDtos = groupedFindings.values().stream()
+                .map(group -> toDto(representative(group), group, premium))
+                .toList();
         return new ScanReportResponse(
                 scan.getId(),
                 scan.getSiteUrl(),
@@ -75,7 +92,7 @@ public class ScanReportAssembler {
                 findingDtos,
                 diagnostics,
                 quality,
-                cta,
+                null, // paywallCta дописывает API при выдаче FREE (product-shell, не compliance-данные)
                 durationMs(scan),
                 scan.getCreatedAt(),
                 scan.getFinishedAt());
@@ -89,17 +106,6 @@ public class ScanReportAssembler {
             return null;
         }
         return Duration.between(scan.getStartedAt(), scan.getFinishedAt()).toMillis();
-    }
-
-    /**
-     * CABINET_PREMIUM is paid at scan start via balance debit, so its report is premium even if an
-     * older row still has the historical default tier=FREE.
-     */
-    private static ScanTier effectiveTier(ComplianceScan scan) {
-        if (scan.getTier() == ScanTier.PREMIUM || scan.getKind() == ScanKind.CABINET_PREMIUM) {
-            return ScanTier.PREMIUM;
-        }
-        return ScanTier.FREE;
     }
 
     private static Map<String, List<ComplianceFinding>> groupByCode(List<ComplianceFinding> findings) {
@@ -117,7 +123,7 @@ public class ScanReportAssembler {
 
     private static ComplianceFinding representative(List<ComplianceFinding> findings) {
         return findings.stream()
-                .reduce(ScanReportAssembler::betterRepresentative)
+                .reduce(ScanReportBuilder::betterRepresentative)
                 .orElseThrow();
     }
 
@@ -320,49 +326,13 @@ public class ScanReportAssembler {
     }
 
     private static PositiveCheckDto positiveCheck(RuleOutcomeDto outcome) {
-        if (!hasText(outcome.code())) {
+        if (!hasText(outcome.code()) || !hasText(outcome.positiveTitle())) {
             return null;
         }
-        return switch (outcome.code()) {
-            case "NO_PRIVACY_POLICY" -> new PositiveCheckDto(
-                    outcome.code(),
-                    "Политика обработки персональных данных найдена",
-                    outcome.category(),
-                    "На сайте найдена страница или ссылка на политику обработки персональных данных.");
-            case "NO_COOKIE_CONSENT" -> new PositiveCheckDto(
-                    outcome.code(),
-                    "Механизм cookie-согласия обнаружен",
-                    outcome.category(),
-                    "На сайте найден cookie-баннер или иной механизм запроса согласия.");
-            case "UNPROTECTED_DATA_FORMS" -> new PositiveCheckDto(
-                    outcome.code(),
-                    "Небезопасные формы с персональными данными не обнаружены",
-                    outcome.category(),
-                    "Сканер не нашёл формы с персональными данными, отправляемые по незащищённому HTTP.");
-            case "CONSENT_DEFAULT_CHECKED" -> new PositiveCheckDto(
-                    outcome.code(),
-                    "Предотмеченное согласие не обнаружено",
-                    outcome.category(),
-                    "Сканер не нашёл чекбоксы согласия, отмеченные по умолчанию.");
-            case "THIRD_PARTY_TRACKERS" -> new PositiveCheckDto(
-                    outcome.code(),
-                    "Нераскрытые сторонние трекеры не обнаружены",
-                    outcome.category(),
-                    "Сканер не выявил сторонние трекеры, не раскрытые в политике обработки ПДн.");
-            case "HOSTING_OUTSIDE_RU_DETECTED" -> new PositiveCheckDto(
-                    outcome.code(),
-                    "Сервер сайта расположен в Российской Федерации",
-                    outcome.category(),
-                    "GeoIP-проверка основного домена определила страну хостинга как RU.");
-            default -> null;
-        };
-    }
-
-    private PaywallCtaDto paywallCta() {
-        var cta = properties.paywallCta();
-        if (cta == null) {
-            return null;
-        }
-        return new PaywallCtaDto(cta.title(), cta.text(), cta.actionUrl());
+        return new PositiveCheckDto(
+                outcome.code(),
+                outcome.positiveTitle(),
+                outcome.category(),
+                outcome.positiveMessage());
     }
 }

@@ -5,6 +5,7 @@ import io.okdocs.compliance.contracts.exception.ComplianceRateLimitException;
 import io.okdocs.compliance.contracts.exception.ComplianceValidationException;
 import io.okdocs.compliance.contracts.exception.InsufficientScanBalanceException;
 import io.okdocs.compliance.contracts.exception.ScanNotFoundException;
+import io.okdocs.compliance.contracts.exception.ScanReportNotReadyException;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -25,6 +26,12 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ScanNotFoundException.class)
     public ResponseEntity<Map<String, Object>> handleNotFound(ScanNotFoundException e, HttpServletRequest req) {
         return error(HttpStatus.NOT_FOUND, e.getMessage(), req);
+    }
+
+    @ExceptionHandler(ScanReportNotReadyException.class)
+    public ResponseEntity<Map<String, Object>> handleReportNotReady(ScanReportNotReadyException e,
+                                                                    HttpServletRequest req) {
+        return error(HttpStatus.CONFLICT, e.getMessage(), req);
     }
 
     @ExceptionHandler(AccessDeniedToScanException.class)

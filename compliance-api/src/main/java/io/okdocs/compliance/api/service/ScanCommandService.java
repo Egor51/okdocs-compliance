@@ -7,11 +7,14 @@ import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.contracts.enums.ScanKind;
 import io.okdocs.compliance.contracts.enums.ScanStatus;
 import io.okdocs.compliance.contracts.enums.ScanTier;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.okdocs.compliance.contracts.event.ScanRequestedEvent;
 import io.okdocs.compliance.contracts.exception.AccessDeniedToScanException;
 import io.okdocs.compliance.contracts.exception.ComplianceValidationException;
 import io.okdocs.compliance.contracts.exception.ScanNotFoundException;
+import io.okdocs.compliance.contracts.exception.ScanReportNotReadyException;
 import io.okdocs.compliance.contracts.scan.FreeScanRequest;
+import io.okdocs.compliance.contracts.scan.PaywallCtaDto;
 import io.okdocs.compliance.contracts.scan.ScanEmailRequest;
 import io.okdocs.compliance.contracts.scan.ScanListResponse;
 import io.okdocs.compliance.contracts.scan.ScanReportResponse;
@@ -19,9 +22,9 @@ import io.okdocs.compliance.contracts.scan.ScanRequest;
 import io.okdocs.compliance.contracts.scan.ScanStatusResponse;
 import io.okdocs.compliance.persistence.outbox.OutboxEvent;
 import io.okdocs.compliance.persistence.outbox.OutboxEventRepository;
-import io.okdocs.compliance.persistence.scan.ComplianceFinding;
-import io.okdocs.compliance.persistence.scan.ComplianceFindingRepository;
 import io.okdocs.compliance.persistence.scan.ComplianceScan;
+import io.okdocs.compliance.persistence.scan.ComplianceScanReport;
+import io.okdocs.compliance.persistence.scan.ComplianceScanReportRepository;
 import io.okdocs.compliance.persistence.scan.ComplianceScanRepository;
 import io.okdocs.compliance.persistence.scan.ScanEmail;
 import io.okdocs.compliance.persistence.scan.ScanEmailRepository;
@@ -32,7 +35,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
-import java.util.List;
 import java.util.UUID;
 
 /**
@@ -44,7 +46,7 @@ import java.util.UUID;
 public class ScanCommandService {
 
     private final ComplianceScanRepository scanRepository;
-    private final ComplianceFindingRepository findingRepository;
+    private final ComplianceScanReportRepository scanReportRepository;
     private final ScanEmailRepository scanEmailRepository;
     private final OutboxEventRepository outboxRepository;
     private final OutboxEventFactory outboxEventFactory;
@@ -52,8 +54,8 @@ public class ScanCommandService {
     private final RateLimitService rateLimitService;
     private final UrlValidatorService urlValidator;
     private final ScanMapper scanMapper;
-    private final ScanReportAssembler reportAssembler;
     private final ComplianceApiProperties properties;
+    private final ObjectMapper objectMapper;
 
     /**
      * Бесплатный маркетинговый скан ({@code POST /api/free-scans}): {@code FREE_MARKETING}, 1 страница,
@@ -144,8 +146,58 @@ public class ScanCommandService {
     @Transactional(readOnly = true)
     public ScanReportResponse getReport(UUID scanId, CompliancePrincipal principal) {
         ComplianceScan scan = loadOwned(scanId, principal);
-        List<ComplianceFinding> findings = findingRepository.findByScanIdOrderByCreatedAtAsc(scanId);
-        return reportAssembler.assemble(scan, findings);
+
+        // Снапшот строит worker (premium + free JSON) в той же транзакции, что findings/status.
+        // API — чистый passthrough: выбираем нужный JSON по effectiveTier и дописываем paywallCta
+        // (product-shell, не compliance-данные) для FREE.
+        ComplianceScanReport snapshot = scanReportRepository.findById(scanId).orElse(null);
+        if (snapshot != null) {
+            return fromSnapshot(scan, snapshot);
+        }
+        throw new ScanReportNotReadyException(scanId);
+    }
+
+    private ScanReportResponse fromSnapshot(ComplianceScan scan, ComplianceScanReport snapshot) {
+        boolean premium = effectiveTier(scan) == ScanTier.PREMIUM;
+        String json = premium ? snapshot.getPremiumReportJson() : snapshot.getFreeReportJson();
+        ScanReportResponse report = deserializeReport(scan.getId(), json);
+        return premium ? report : withPaywallCta(report, paywallCta());
+    }
+
+    private ScanReportResponse deserializeReport(UUID scanId, String json) {
+        try {
+            return objectMapper.readValue(json, ScanReportResponse.class);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException("Повреждённый снапшот отчёта скана " + scanId, e);
+        }
+    }
+
+    /**
+     * CABINET_PREMIUM оплачен списанием баланса при запуске, поэтому отчёт premium даже если старая
+     * строка ещё несёт исторический дефолт tier=FREE. Дешёвая не-доменная проверка двух полей —
+     * остаётся в API как выбор, какой снапшот считать premium.
+     */
+    private static ScanTier effectiveTier(ComplianceScan scan) {
+        if (scan.getTier() == ScanTier.PREMIUM || scan.getKind() == ScanKind.CABINET_PREMIUM) {
+            return ScanTier.PREMIUM;
+        }
+        return ScanTier.FREE;
+    }
+
+    private PaywallCtaDto paywallCta() {
+        var cta = properties.paywallCta();
+        if (cta == null) {
+            return null;
+        }
+        return new PaywallCtaDto(cta.title(), cta.text(), cta.actionUrl());
+    }
+
+    private static ScanReportResponse withPaywallCta(ScanReportResponse report, PaywallCtaDto cta) {
+        return new ScanReportResponse(
+                report.id(), report.siteUrl(), report.siteDomain(), report.status(), report.score(),
+                report.tier(), report.parentScanId(), report.summary(), report.findings(),
+                report.diagnostics(), report.quality(), cta, report.durationMs(),
+                report.createdAt(), report.finishedAt());
     }
 
     /** История сканов юзера с фильтрами domain/status (§2.2). Только для USER. */

@@ -6,8 +6,11 @@ import io.okdocs.compliance.contracts.event.ScanFailedEvent;
 import io.okdocs.compliance.messaging.OutboxEventFactory;
 import io.okdocs.compliance.persistence.outbox.OutboxEvent;
 import io.okdocs.compliance.persistence.outbox.OutboxEventRepository;
+import io.okdocs.compliance.persistence.scan.ComplianceFinding;
 import io.okdocs.compliance.persistence.scan.ComplianceFindingRepository;
 import io.okdocs.compliance.persistence.scan.ComplianceScan;
+import io.okdocs.compliance.persistence.scan.ComplianceScanReport;
+import io.okdocs.compliance.persistence.scan.ComplianceScanReportRepository;
 import io.okdocs.compliance.persistence.scan.ComplianceScanRepository;
 import io.okdocs.compliance.worker.config.ComplianceWorkerProperties;
 import lombok.RequiredArgsConstructor;
@@ -17,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -40,6 +44,8 @@ public class ScanLifecycleService {
 
     private final ComplianceScanRepository scanRepository;
     private final ComplianceFindingRepository findingRepository;
+    private final ComplianceScanReportRepository scanReportRepository;
+    private final ScanReportBuilder scanReportBuilder;
     private final OutboxEventRepository outboxRepository;
     private final OutboxEventFactory outboxEventFactory;
     private final ComplianceWorkerProperties properties;
@@ -109,7 +115,8 @@ public class ScanLifecycleService {
             return;
         }
         findingRepository.deleteByScanId(scanId); // идемпотентность при перезапуске зависшего скана
-        findingRepository.saveAll(result.findings());
+        List<ComplianceFinding> findings = result.findings();
+        findingRepository.saveAll(findings);
 
         scan.setStatus(terminal);
         scan.setScore(result.score());
@@ -120,7 +127,47 @@ public class ScanLifecycleService {
         markDuration(scan);
         recordDuration(scan);
 
+        // Снапшот отчёта строим из УЖЕ финализированного scan (status/finishedAt/durationMs выставлены
+        // выше) + тех же findings, что сохранили — не перечитывая из БД. Та же транзакция: если
+        // сериализация упадёт, весь finalize откатится, скан не завершится наполовину.
+        saveReportSnapshot(scan, findings);
+
         outboxRepository.save(scanCompletedEvent(scan, terminal, result));
+    }
+
+    /**
+     * Backfill снапшота для уже завершённого скана (этап 3.5): читает findings из БД и строит/сохраняет
+     * snapshot, НЕ трогая статус/outbox/findings — отчёт уже финализирован, меняем только наличие
+     * снапшота. Идемпотентен (overwriting upsert) и в своей транзакции на скан (как {@link #failStuck}):
+     * сбой одного не валит пачку. Вызывается backfill-джобом через прокси.
+     */
+    @Transactional
+    public void backfillReportSnapshot(UUID scanId) {
+        ComplianceScan scan = scanRepository.findById(scanId).orElseThrow();
+        if (scan.getStatus() != ScanStatus.COMPLETED && scan.getStatus() != ScanStatus.PARTIAL) {
+            log.debug("Skip report snapshot backfill for non-terminal scan {} with status {}",
+                    scanId, scan.getStatus());
+            return;
+        }
+        List<ComplianceFinding> findings = findingRepository.findByScanIdOrderByCreatedAtAsc(scanId);
+        saveReportSnapshot(scan, findings);
+    }
+
+    /**
+     * Перезаписывающий upsert снапшота: при перезапуске зависшего скана старый snapshot полностью
+     * заменяется новым — та же явная семантика, что {@code findingRepository.deleteByScanId} выше,
+     * без опоры на JPA merge по PK. {@code flush} перед {@code save} гарантирует порядок DELETE→INSERT.
+     */
+    private void saveReportSnapshot(ComplianceScan scan, List<ComplianceFinding> findings) {
+        ScanReportSnapshots snapshots = scanReportBuilder.build(scan, findings);
+        scanReportRepository.deleteById(scan.getId());
+        scanReportRepository.flush();
+
+        ComplianceScanReport report = new ComplianceScanReport();
+        report.setScanId(scan.getId());
+        report.setPremiumReportJson(snapshots.premiumJson());
+        report.setFreeReportJson(snapshots.freeJson());
+        scanReportRepository.save(report);
     }
 
     /** Метрика длительности скана (§5.7): timer с тегами status/kind. */
