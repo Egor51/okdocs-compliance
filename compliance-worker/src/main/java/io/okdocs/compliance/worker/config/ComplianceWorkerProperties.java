@@ -194,6 +194,30 @@ public class ComplianceWorkerProperties {
         private Duration totalDeadline = Duration.ofMinutes(3);
     }
 
+    private Backfill backfill = new Backfill();
+
+    /**
+     * Разовый backfill отчётных снапшотов (этап 3.5 переноса сборки отчёта в worker): для старых
+     * terminal-сканов ({@code COMPLETED}/{@code PARTIAL}) без строки в {@code compliance_scan_reports}
+     * строит и сохраняет snapshot, чтобы API мог отдавать их через snapshot-путь без доменной сборки
+     * отчёта. Включается флагом на время миграции; по исчерпании пачек джоб делает no-op, после чего
+     * флаг выключается.
+     */
+    @Data
+    public static class Backfill {
+        /** Включён ли разовый backfill-джоб. По умолчанию выключен — включается только на миграцию. */
+        private boolean reportsEnabled = false;
+        /** Размер пачки сканов за один проход джоба (ограничивает память и длину транзакций). */
+        @Min(1)
+        private int batchSize = 100;
+        /** Сколько раз пробовать один scan за жизнь процесса перед временным skip до рестарта. */
+        @Min(1)
+        private int maxAttempts = 3;
+        /** Период между проходами джоба, мс (используется как {@code fixedDelayString}). */
+        @Min(1)
+        private long fixedDelayMs = 30_000;
+    }
+
     @Data
     public static class GeoIp {
         @NotBlank

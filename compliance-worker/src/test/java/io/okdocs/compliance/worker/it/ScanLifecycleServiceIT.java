@@ -12,6 +12,8 @@ import io.okdocs.compliance.persistence.outbox.OutboxEventRepository;
 import io.okdocs.compliance.persistence.scan.ComplianceFinding;
 import io.okdocs.compliance.persistence.scan.ComplianceFindingRepository;
 import io.okdocs.compliance.persistence.scan.ComplianceScan;
+import io.okdocs.compliance.persistence.scan.ComplianceScanReport;
+import io.okdocs.compliance.persistence.scan.ComplianceScanReportRepository;
 import io.okdocs.compliance.persistence.scan.ComplianceScanRepository;
 import io.okdocs.compliance.worker.service.ScanLifecycleService;
 import io.okdocs.compliance.worker.service.ScanResult;
@@ -43,6 +45,8 @@ class ScanLifecycleServiceIT extends AbstractPostgresIT {
     ComplianceScanRepository scanRepository;
     @Autowired
     OutboxEventRepository outboxRepository;
+    @Autowired
+    ComplianceScanReportRepository scanReportRepository;
     // Spy подменяет реальный бин findingRepository в контексте — можно и читать, и инъецировать сбой.
     @MockitoSpyBean
     ComplianceFindingRepository findingRepository;
@@ -52,6 +56,7 @@ class ScanLifecycleServiceIT extends AbstractPostgresIT {
         reset(findingRepository);
         findingRepository.deleteAll();
         outboxRepository.deleteAll();
+        scanReportRepository.deleteAll();
         scanRepository.deleteAll();
     }
 
@@ -70,6 +75,11 @@ class ScanLifecycleServiceIT extends AbstractPostgresIT {
         assertThat(reloaded.getScore()).isEqualTo(73);
         assertThat(reloaded.getProgressPct()).isEqualTo(100);
         assertThat(findingRepository.findByScanIdOrderByCreatedAtAsc(scan.getId())).hasSize(2);
+
+        // Снапшот отчёта пишется в той же транзакции: оба JSON присутствуют и сериализуют score=73.
+        ComplianceScanReport snapshot = scanReportRepository.findById(scan.getId()).orElseThrow();
+        assertThat(snapshot.getPremiumReportJson()).contains("\"score\":73");
+        assertThat(snapshot.getFreeReportJson()).contains("\"score\":73");
 
         List<OutboxEvent> outbox = outboxRepository.findAll();
         assertThat(outbox).hasSize(1);
@@ -127,6 +137,55 @@ class ScanLifecycleServiceIT extends AbstractPostgresIT {
         assertThat(reloaded.getScore()).isNull();
         assertThat(findingRepository.findByScanIdOrderByCreatedAtAsc(scan.getId())).isEmpty();
         assertThat(outboxRepository.findAll()).isEmpty(); // outbox-событие тоже откатилось
+        assertThat(scanReportRepository.findById(scan.getId())).isEmpty(); // снапшот тоже откатился
+    }
+
+    @Test
+    void backfill_findsTerminalScansWithoutSnapshotAndFillsThem() {
+        // Старый завершённый скан с findings, но без снапшота (как до переноса сборки в worker).
+        ComplianceScan old = persistQueuedScan();
+        old.setStatus(ScanStatus.COMPLETED);
+        old.setScore(42);
+        old.setDiagnosticsJson("{}");
+        scanRepository.saveAndFlush(old);
+        findingRepository.saveAll(List.of(finding(old.getId(), "RULE_A"), finding(old.getId(), "RULE_B")));
+
+        var batch = scanRepository.findTerminalWithoutReport(
+                List.of(ScanStatus.COMPLETED, ScanStatus.PARTIAL),
+                org.springframework.data.domain.PageRequest.of(0, 100));
+        assertThat(batch).extracting(ComplianceScan::getId).contains(old.getId());
+
+        lifecycle.backfillReportSnapshot(old.getId());
+
+        ComplianceScanReport snapshot = scanReportRepository.findById(old.getId()).orElseThrow();
+        assertThat(snapshot.getPremiumReportJson()).contains("\"score\":42");
+        // После backfill запрос больше не возвращает этот скан — миграция для него завершена.
+        assertThat(scanRepository.findTerminalWithoutReport(
+                List.of(ScanStatus.COMPLETED, ScanStatus.PARTIAL),
+                org.springframework.data.domain.PageRequest.of(0, 100)))
+                .extracting(ComplianceScan::getId).doesNotContain(old.getId());
+    }
+
+    @Test
+    void backfill_query_excludesFailedScans() {
+        ComplianceScan failed = persistQueuedScan();
+        failed.setStatus(ScanStatus.FAILED);
+        scanRepository.saveAndFlush(failed);
+
+        assertThat(scanRepository.findTerminalWithoutReport(
+                List.of(ScanStatus.COMPLETED, ScanStatus.PARTIAL),
+                org.springframework.data.domain.PageRequest.of(0, 100)))
+                .extracting(ComplianceScan::getId).doesNotContain(failed.getId());
+    }
+
+    @Test
+    void backfillReportSnapshot_skipsNonTerminalScans() {
+        ComplianceScan queued = persistQueuedScan();
+        findingRepository.save(finding(queued.getId(), "RULE_A"));
+
+        lifecycle.backfillReportSnapshot(queued.getId());
+
+        assertThat(scanReportRepository.findById(queued.getId())).isEmpty();
     }
 
     private ComplianceScan persistQueuedScan() {

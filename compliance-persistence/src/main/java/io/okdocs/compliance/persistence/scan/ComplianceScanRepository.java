@@ -37,6 +37,21 @@ public interface ComplianceScanRepository extends JpaRepository<ComplianceScan, 
     /** Reaper зависших сканов (§5.3): статус в работе + давно не обновлялся. */
     List<ComplianceScan> findByStatusInAndUpdatedAtBefore(Collection<ScanStatus> statuses, Instant cutoff);
 
+    /**
+     * Backfill отчётных снапшотов (этап 3.5): terminal-сканы с findings ({@code COMPLETED}/{@code PARTIAL}),
+     * у которых ещё нет строки в {@code compliance_scan_reports}. {@code FAILED} исключён — у него нет
+     * findings и отчёт не строится. Пачками (через {@link Pageable}), чтобы джоб не держал длинную
+     * транзакцию и не тянул всё в память.
+     */
+    @Query("""
+            SELECT s FROM ComplianceScan s
+            WHERE s.status IN :statuses
+              AND NOT EXISTS (SELECT 1 FROM ComplianceScanReport r WHERE r.scanId = s.id)
+            ORDER BY s.createdAt ASC
+            """)
+    List<ComplianceScan> findTerminalWithoutReport(@Param("statuses") Collection<ScanStatus> statuses,
+                                                    Pageable pageable);
+
     /** История кабинета с опциональными фильтрами domain (ILIKE substring) и status (§4.1). */
     @Query("""
             SELECT s FROM ComplianceScan s

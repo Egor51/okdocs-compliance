@@ -58,6 +58,13 @@ compliance:
     # Жёсткий общий дедлайн на весь скан сверх crawler-таймаута (страховка от
     # зависания не в краулере). Не меньше crawler.crawler-timeout-seconds.
     total-deadline: 3m
+  backfill:
+    # Разовый backfill старых terminal-сканов без report snapshot. Включать только на время миграции.
+    reports-enabled: ${REPORT_BACKFILL_ENABLED:false}
+    batch-size: ${REPORT_BACKFILL_BATCH_SIZE:100}
+    # После N падений один scan пропускается до рестарта worker, чтобы poison-запись не блокировала пачки.
+    max-attempts: ${REPORT_BACKFILL_MAX_ATTEMPTS:3}
+    fixed-delay-ms: ${REPORT_BACKFILL_FIXED_DELAY_MS:30000}
   score:
     # Score-модель сайта (§5.5): 100 − Σ(base[severity] × weight[verification]).
     # Вынесена сюда, чтобы тюнить риск-модель без пересборки и держать её единой
