@@ -2,9 +2,11 @@ package io.okdocs.compliance.persistence.outbox;
 
 import io.okdocs.compliance.contracts.enums.OutboxStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -21,8 +23,9 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
      * <p>
      * Без {@code @Modifying}: запрос возвращает строки (захваченные события), а не update-count.
      * {@code @Modifying} в Spring Data ожидает void/int/boolean и конфликтует с {@code List<Entity>};
-     * Hibernate 6 на PostgreSQL отдаёт {@code RETURNING *} как selecting-запрос. Вызывать строго
-     * внутри {@code @Transactional} — захват и публикация должны быть в одной транзакции.
+     * Hibernate 6 на PostgreSQL отдаёт {@code RETURNING *} как selecting-запрос. Вызывать внутри
+     * короткой {@code @Transactional}: после claim транзакция закрывается, Kafka publish идёт вне
+     * DB-транзакции, а финальный update fenced по {@code lock_token}.
      * <p>
      * <b>TZ-safety:</b> временные колонки — naive {@code TIMESTAMP}, а Hibernate пишет {@code Instant}
      * в UTC. Поэтому сравниваем с {@code now() AT TIME ZONE 'UTC'} (naive UTC), а не с голым
@@ -32,7 +35,9 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
      */
     @Query(value = """
             UPDATE outbox_events
-            SET locked_at = (now() AT TIME ZONE 'UTC'), locked_by = :instanceId
+            SET locked_at = (now() AT TIME ZONE 'UTC'),
+                locked_by = :instanceId,
+                lock_token = :lockToken
             WHERE id IN (
                 SELECT id FROM outbox_events
                 WHERE status = 'PENDING'
@@ -44,5 +49,60 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
                 FOR UPDATE SKIP LOCKED)
             RETURNING *
             """, nativeQuery = true)
-    List<OutboxEvent> lockBatch(@Param("instanceId") String instanceId, @Param("limit") int limit);
+    List<OutboxEvent> claimBatch(@Param("instanceId") String instanceId,
+                                 @Param("lockToken") UUID lockToken,
+                                 @Param("limit") int limit);
+
+    @Modifying
+    @Query(value = """
+            UPDATE outbox_events
+            SET status = 'PUBLISHED',
+                published_at = :publishedAt,
+                locked_at = NULL,
+                locked_by = NULL,
+                lock_token = NULL
+            WHERE id = :id
+              AND status = 'PENDING'
+              AND lock_token = :lockToken
+            """, nativeQuery = true)
+    int markPublishedIfLocked(@Param("id") UUID id,
+                              @Param("lockToken") UUID lockToken,
+                              @Param("publishedAt") Instant publishedAt);
+
+    @Modifying
+    @Query(value = """
+            UPDATE outbox_events
+            SET retry_count = :retryCount,
+                last_error = :lastError,
+                next_attempt_at = :nextAttemptAt,
+                locked_at = NULL,
+                locked_by = NULL,
+                lock_token = NULL
+            WHERE id = :id
+              AND status = 'PENDING'
+              AND lock_token = :lockToken
+            """, nativeQuery = true)
+    int markRetryIfLocked(@Param("id") UUID id,
+                          @Param("lockToken") UUID lockToken,
+                          @Param("retryCount") int retryCount,
+                          @Param("lastError") String lastError,
+                          @Param("nextAttemptAt") Instant nextAttemptAt);
+
+    @Modifying
+    @Query(value = """
+            UPDATE outbox_events
+            SET status = 'DEAD',
+                retry_count = :retryCount,
+                last_error = :lastError,
+                locked_at = NULL,
+                locked_by = NULL,
+                lock_token = NULL
+            WHERE id = :id
+              AND status = 'PENDING'
+              AND lock_token = :lockToken
+            """, nativeQuery = true)
+    int markDeadIfLocked(@Param("id") UUID id,
+                         @Param("lockToken") UUID lockToken,
+                         @Param("retryCount") int retryCount,
+                         @Param("lastError") String lastError);
 }

@@ -12,6 +12,8 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionOperations;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -19,8 +21,8 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
@@ -36,7 +38,7 @@ class OutboxPublisherTest {
 
     @Mock OutboxEventRepository repository;
     @Mock KafkaTemplate<String, Object> kafkaTemplate;
-    @Captor ArgumentCaptor<OutboxEvent> savedCaptor;
+    @Captor ArgumentCaptor<UUID> lockTokenCaptor;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private OutboxProperties properties;
@@ -46,63 +48,63 @@ class OutboxPublisherTest {
     void setUp() {
         // maxRetries=3, base=10s, max=10m
         properties = new OutboxProperties(3, 100, Duration.ofSeconds(10), Duration.ofMinutes(10));
-        publisher = new OutboxPublisher(repository, kafkaTemplate, objectMapper, properties);
+        TransactionOperations transactions = new TransactionOperations() {
+            @Override
+            public <T> T execute(TransactionCallback<T> action) {
+                return action.doInTransaction(null);
+            }
+        };
+        publisher = new OutboxPublisher(repository, kafkaTemplate, objectMapper, properties, transactions);
     }
 
     @Test
     void successfulPublish_marksPublished() {
         OutboxEvent event = pending(0);
-        when(repository.lockBatch(anyString(), eq(100))).thenReturn(List.of(event));
+        when(repository.claimBatch(anyString(), any(UUID.class), eq(100))).thenReturn(List.of(event));
         when(kafkaTemplate.send(eq("test.topic"), anyString(), any()))
                 .thenReturn(CompletableFuture.completedFuture(null));
+        when(repository.markPublishedIfLocked(eq(event.getId()), any(UUID.class), any(Instant.class))).thenReturn(1);
 
         publisher.publishPending();
 
-        verify(repository).save(savedCaptor.capture());
-        OutboxEvent saved = savedCaptor.getValue();
-        assertThat(saved.getStatus()).isEqualTo(OutboxStatus.PUBLISHED);
-        assertThat(saved.getPublishedAt()).isNotNull();
-        assertThat(saved.getLockedBy()).isNull();
+        verify(repository).claimBatch(anyString(), lockTokenCaptor.capture(), eq(100));
+        verify(repository).markPublishedIfLocked(eq(event.getId()), eq(lockTokenCaptor.getValue()), any(Instant.class));
     }
 
     @Test
     void publishFailure_belowMaxRetries_staysPendingWithBackoff() {
         OutboxEvent event = pending(0);
-        when(repository.lockBatch(anyString(), eq(100))).thenReturn(List.of(event));
+        when(repository.claimBatch(anyString(), any(UUID.class), eq(100))).thenReturn(List.of(event));
         when(kafkaTemplate.send(eq("test.topic"), anyString(), any()))
                 .thenReturn(CompletableFuture.failedFuture(new RuntimeException("broker down")));
+        when(repository.markRetryIfLocked(eq(event.getId()), any(UUID.class), eq(1), contains("broker down"), any(Instant.class)))
+                .thenReturn(1);
 
         Instant before = Instant.now();
         publisher.publishPending();
 
-        verify(repository).save(savedCaptor.capture());
-        OutboxEvent saved = savedCaptor.getValue();
-        assertThat(saved.getStatus()).isEqualTo(OutboxStatus.PENDING);
-        assertThat(saved.getRetryCount()).isEqualTo(1);
-        assertThat(saved.getLastError()).contains("broker down");
-        assertThat(saved.getNextAttemptAt()).isAfter(before); // отодвинут backoff'ом
-        assertThat(saved.getLockedBy()).isNull(); // lock снят
+        verify(repository).markRetryIfLocked(eq(event.getId()), any(UUID.class), eq(1),
+                contains("broker down"), org.mockito.ArgumentMatchers.argThat(t -> t.isAfter(before)));
     }
 
     @Test
     void publishFailure_atMaxRetries_marksDead() {
         // retryCount уже 2; ещё одна неудача → 3 == maxRetries → DEAD.
         OutboxEvent event = pending(2);
-        when(repository.lockBatch(anyString(), eq(100))).thenReturn(List.of(event));
+        when(repository.claimBatch(anyString(), any(UUID.class), eq(100))).thenReturn(List.of(event));
         when(kafkaTemplate.send(eq("test.topic"), anyString(), any()))
                 .thenReturn(CompletableFuture.failedFuture(new RuntimeException("still down")));
+        when(repository.markDeadIfLocked(eq(event.getId()), any(UUID.class), eq(3), contains("still down")))
+                .thenReturn(1);
 
         publisher.publishPending();
 
-        verify(repository).save(savedCaptor.capture());
-        OutboxEvent saved = savedCaptor.getValue();
-        assertThat(saved.getStatus()).isEqualTo(OutboxStatus.DEAD);
-        assertThat(saved.getRetryCount()).isEqualTo(3);
+        verify(repository).markDeadIfLocked(eq(event.getId()), any(UUID.class), eq(3), contains("still down"));
     }
 
     @Test
     void emptyBatch_noKafkaSend_noSave() {
-        when(repository.lockBatch(anyString(), eq(100))).thenReturn(List.of());
+        when(repository.claimBatch(anyString(), any(UUID.class), eq(100))).thenReturn(List.of());
         // никаких send/save
         lenient().when(kafkaTemplate.send(anyString(), anyString(), any())).thenReturn(null);
 
@@ -110,6 +112,7 @@ class OutboxPublisherTest {
 
         verify(kafkaTemplate, org.mockito.Mockito.never()).send(anyString(), anyString(), any());
         verify(repository, org.mockito.Mockito.never()).save(any());
+        verify(repository, org.mockito.Mockito.never()).markPublishedIfLocked(any(), any(), any());
     }
 
     private OutboxEvent pending(int retryCount) {

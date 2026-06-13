@@ -23,7 +23,7 @@ import java.util.stream.IntStream;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * IT на {@link OutboxEventRepository#lockBatch} — native {@code UPDATE ... FROM (SELECT ... FOR
+ * IT на {@link OutboxEventRepository#claimBatch} — native {@code UPDATE ... FROM (SELECT ... FOR
  * UPDATE SKIP LOCKED) RETURNING *}. Проверяет ровно то, что нельзя проверить на H2:
  * <ul>
  *   <li>захват только PENDING с {@code next_attempt_at <= now} и не-залоченных;</li>
@@ -33,7 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 // SKIP LOCKED проверяется на РЕАЛЬНО закоммиченных строках в параллельных транзакциях. @SpringBootTest
 // (без @Transactional) не оборачивает тест в откатываемую tx, поэтому saveAndFlush коммитит сразу и
-// lockBatch в отдельной tx их видит. Чистим вручную в @BeforeEach.
+// claimBatch в отдельной tx их видит. Чистим вручную в @BeforeEach.
 @SpringBootTest(classes = PersistenceItConfig.class)
 class OutboxEventRepositoryIT extends AbstractPostgresIT {
 
@@ -49,21 +49,23 @@ class OutboxEventRepositoryIT extends AbstractPostgresIT {
     }
 
     @Test
-    void lockBatch_capturesOnlyReadyPendingEvents() {
+    void claimBatch_capturesOnlyReadyPendingEvents() {
         OutboxEvent ready = save(OutboxStatus.PENDING, Instant.now().minusSeconds(1), null, null);
         save(OutboxStatus.PENDING, Instant.now().plus(1, ChronoUnit.HOURS), null, null); // future
         save(OutboxStatus.PUBLISHED, Instant.now().minusSeconds(1), null, null);          // not pending
         save(OutboxStatus.DEAD, Instant.now().minusSeconds(1), null, null);               // not pending
 
-        List<OutboxEvent> locked = txTemplate.execute(s -> repository.lockBatch("inst-A", 100));
+        UUID token = UUID.randomUUID();
+        List<OutboxEvent> locked = txTemplate.execute(s -> repository.claimBatch("inst-A", token, 100));
 
         assertThat(locked).extracting(OutboxEvent::getId).containsExactly(ready.getId());
         assertThat(locked.get(0).getLockedBy()).isEqualTo("inst-A");
+        assertThat(locked.get(0).getLockToken()).isEqualTo(token);
         assertThat(locked.get(0).getLockedAt()).isNotNull();
     }
 
     @Test
-    void lockBatch_reclaimsStaleLocks() {
+    void claimBatch_reclaimsStaleLocks() {
         // Залочено другим инстансом 3 минуты назад (> 2 мин lease) → должно переподобраться.
         OutboxEvent stale = save(OutboxStatus.PENDING, Instant.now().minusSeconds(1),
                 Instant.now().minus(3, ChronoUnit.MINUTES), "dead-instance");
@@ -71,14 +73,16 @@ class OutboxEventRepositoryIT extends AbstractPostgresIT {
         save(OutboxStatus.PENDING, Instant.now().minusSeconds(1),
                 Instant.now().minusSeconds(30), "live-instance");
 
-        List<OutboxEvent> locked = txTemplate.execute(s -> repository.lockBatch("inst-A", 100));
+        UUID token = UUID.randomUUID();
+        List<OutboxEvent> locked = txTemplate.execute(s -> repository.claimBatch("inst-A", token, 100));
 
         assertThat(locked).extracting(OutboxEvent::getId).containsExactly(stale.getId());
         assertThat(locked.get(0).getLockedBy()).isEqualTo("inst-A");
+        assertThat(locked.get(0).getLockToken()).isEqualTo(token);
     }
 
     @Test
-    void lockBatch_twoPublishers_skipLocked_noOverlap() throws Exception {
+    void claimBatch_twoPublishers_skipLocked_noOverlap() throws Exception {
         IntStream.range(0, 20).forEach(i ->
                 save(OutboxStatus.PENDING, Instant.now().minusSeconds(1), null, null));
 
@@ -106,7 +110,7 @@ class OutboxEventRepositoryIT extends AbstractPostgresIT {
     /** Захват батча в отдельной транзакции, держим её открытой пока второй поток тоже захватывает. */
     private Set<UUID> lockIdsInTx(String instance, int limit) {
         return txTemplate.execute(s -> {
-            List<OutboxEvent> locked = repository.lockBatch(instance, limit);
+            List<OutboxEvent> locked = repository.claimBatch(instance, UUID.randomUUID(), limit);
             Set<UUID> ids = locked.stream().map(OutboxEvent::getId).collect(Collectors.toSet());
             // Небольшая пауза, чтобы транзакции реально пересеклись во времени и SKIP LOCKED сработал.
             try {

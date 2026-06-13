@@ -20,7 +20,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
 public abstract class AbstractPostgresIT {
 
     // Без принудительного UTC у контейнера: запросы должны быть TZ-safe сами по себе
-    // (now() AT TIME ZONE 'UTC' в lockBatch). Тест под дефолтной TZ — регрессионный сторож этого.
+    // (now() AT TIME ZONE 'UTC' в claimBatch). Тест под дефолтной TZ — регрессионный сторож этого.
     static final PostgreSQLContainer<?> POSTGRES =
             new PostgreSQLContainer<>("postgres:16-alpine");
 

@@ -37,7 +37,7 @@ public class PersistenceItConfig {
         return new ObjectMapper().registerModule(new JavaTimeModule());
     }
 
-    /** Ручной контроль границ транзакций (lockBatch SKIP LOCKED надо вызывать в открытой tx). */
+    /** Ручной контроль границ транзакций (claimBatch SKIP LOCKED надо вызывать в открытой tx). */
     @Bean
     TransactionTemplate txTemplate(PlatformTransactionManager tm) {
         return new TransactionTemplate(tm);

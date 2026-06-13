@@ -69,6 +69,9 @@ public class OutboxEvent {
     @Column(name = "locked_by", length = 100)
     private String lockedBy;
 
+    @Column(name = "lock_token")
+    private UUID lockToken;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
