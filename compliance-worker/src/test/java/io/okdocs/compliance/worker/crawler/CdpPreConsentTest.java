@@ -83,4 +83,17 @@ class CdpPreConsentTest {
         assertThat(CdpDynamicCrawler.computePreConsentHosts(tl, 2000.0, "site.ru"))
                 .containsExactly("mc.yandex.ru", "hotjar.com");
     }
+
+    @Test
+    void browserInternalUrlsAreNotValidDynamicPages() {
+        assertThat(CdpDynamicCrawler.isBrowserInternalUrl("chrome-error://chromewebdata/")).isTrue();
+        assertThat(CdpDynamicCrawler.isBrowserInternalUrl("chrome://new-tab-page/")).isTrue();
+        assertThat(CdpDynamicCrawler.isBrowserInternalUrl("devtools://devtools/bundled/inspector.html")).isTrue();
+        assertThat(CdpDynamicCrawler.isBrowserInternalUrl("about:blank")).isTrue();
+        assertThat(CdpDynamicCrawler.isBrowserInternalUrl("")).isTrue();
+        assertThat(CdpDynamicCrawler.isBrowserInternalUrl(null)).isTrue();
+
+        assertThat(CdpDynamicCrawler.isBrowserInternalUrl("http://my-traffic.online")).isFalse();
+        assertThat(CdpDynamicCrawler.isBrowserInternalUrl("https://my-traffic.online/")).isFalse();
+    }
 }

@@ -453,8 +453,12 @@ public class CdpDynamicCrawler implements DynamicCrawler {
             // страницы (addScriptToEvaluateOnNewDocument) и поймал даже синхронно вставленный баннер.
             boolean bannerObserverInstalled = !preConsentTrackingEnabled || installBannerObserver(s);
 
-            s.send("Page.navigate",
+            JsonNode navigation = s.send("Page.navigate",
                     objectMapper.createObjectNode().put("url", targetUrl).toString());
+            String navigationError = navigation.path("errorText").asText("");
+            if (!navigationError.isBlank()) {
+                throw new IllegalStateException("CDP navigation failed: " + navigationError);
+            }
             s.waitForEvent("Page.loadEventFired", pageTimeoutMs);
 
             // Быстрый снимок динамики: ждём короткую "тишину", чтобы не блокироваться на long-polling.
@@ -473,6 +477,10 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                             + "b:(typeof b==='number'?b:null),"
                             + "o:(window.__okdocksBannerObs===1)};return JSON.stringify(r);})()");
             JsonNode node = objectMapper.readTree(json);
+            String finalUrl = node.path("u").asText("");
+            if (isBrowserInternalUrl(finalUrl)) {
+                throw new IllegalStateException("CDP navigation ended on browser internal page: " + finalUrl);
+            }
 
             List<String> preConsentHosts = List.of();
             boolean bannerObserverActive = bannerObserverInstalled && node.path("o").asBoolean(false);
@@ -482,7 +490,7 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                         s.firstRequestEpochMsByHost(), bannerTs, allowedDomain);
             }
             return new PageFetch(
-                    node.path("u").asText(""),
+                    finalUrl,
                     node.path("t").asText(""),
                     node.path("h").asText(""),
                     preConsentHosts);
@@ -793,6 +801,7 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                 String requestId = params.path("requestId").asText("");
                 String networkId = params.path("networkId").asText("");
                 String requestUrl = params.path("request").path("url").asText("");
+                String resourceType = params.path("resourceType").asText("");
                 try {
                     URI uri = new URI(requestUrl);
                     String scheme = uri.getScheme();
@@ -810,13 +819,20 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                     }
                     String host = uri.getHost();
                     String hostLower = host == null ? "" : host.toLowerCase(Locale.ROOT);
-                    boolean allowed = hostLower.equals(allowedDomain)
+                    // Навигационный Document-запрос (включая redirect-хопы главной: http→https, на www,
+                    // на другой хост/CDN) НЕ фильтруем по allowlist домена — мы сами выбрали этот URL
+                    // в selectDynamicTargets, и allowedDomain снят со СТАРТОВОГО хоста, а не финального.
+                    // Иначе редирект главной режется как third-party → Fetch.failRequest →
+                    // net::ERR_BLOCKED_BY_CLIENT и весь dynamic-проход падает. SSRF-проверку ниже
+                    // навигация всё равно проходит. Allowlist по домену остаётся для суб-ресурсов
+                    // (script/img/xhr) ради pre-consent трекинга.
+                    boolean isNavigation = "Document".equalsIgnoreCase(resourceType);
+                    boolean allowed = isNavigation
+                            || hostLower.equals(allowedDomain)
                             || hostLower.endsWith("." + allowedDomain)
                             || isHostAllowedBySet(hostLower, allowedThirdPartyHosts);
                     if (!allowed) {
-                        if (blockedHostsLogged.add(hostLower)) {
-                            log.debug("CDP blocked third-party host={} url={}", host, requestUrl);
-                        }
+                        logBlockedRequest(resourceType, hostLower, requestUrl, "third-party host is not allowed");
                         markRequestFailed(networkId);
                         cdpFail(requestId, "AccessDenied");
                         return;
@@ -826,10 +842,7 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                     // приватный/loopback адрес (DNS-rebinding, allowlist на внутренний хост) — этого
                     // не ловит static UrlValidator на границе SiteCrawler. Резолвим тем же валидатором.
                     if (!hostSafetyCache.computeIfAbsent(hostLower, urlValidator::isHostSafe)) {
-                        if (blockedHostsLogged.add(hostLower)) {
-                            log.warn("CDP blocked host resolving to private/blocked IP host={} url={}",
-                                    host, requestUrl);
-                        }
+                        logBlockedRequest(resourceType, hostLower, requestUrl, "host resolves to private/blocked IP");
                         markRequestFailed(networkId);
                         cdpFail(requestId, "AccessDenied");
                         return;
@@ -839,6 +852,19 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                 } catch (URISyntaxException e) {
                     markRequestFailed(networkId);
                     cdpFail(requestId, "AddressUnreachable");
+                }
+            }
+
+            private void logBlockedRequest(String resourceType, String host, String requestUrl, String reason) {
+                String key = (resourceType == null ? "" : resourceType) + "|" + host + "|" + reason;
+                if (!blockedHostsLogged.add(key)) {
+                    return;
+                }
+                if ("Document".equalsIgnoreCase(resourceType)) {
+                    log.warn("CDP blocked document request host={} url={} reason={}", host, requestUrl, reason);
+                } else {
+                    log.debug("CDP blocked request type={} host={} url={} reason={}",
+                            resourceType, host, requestUrl, reason);
                 }
             }
 
@@ -900,9 +926,26 @@ public class CdpDynamicCrawler implements DynamicCrawler {
      */
     private PageAnalysisResult buildResult(PageFetch fetch) {
         String url = fetch.finalUrl();
+        if (isBrowserInternalUrl(url)) {
+            throw new IllegalStateException("Refusing to build PageAnalysisResult for browser internal URL: " + url);
+        }
         Document doc = Jsoup.parse(fetch.html(), url);
         return PageExtractor.extract(url, doc, extractDomain(url), RenderMode.DYNAMIC,
                 fetch.preConsentHosts());
+    }
+
+    static boolean isBrowserInternalUrl(String url) {
+        if (url == null || url.isBlank()) {
+            return true;
+        }
+        String lower = url.trim().toLowerCase(Locale.ROOT);
+        return lower.startsWith("chrome-error://")
+                || lower.startsWith("chrome://")
+                || lower.startsWith("chrome-untrusted://")
+                || lower.startsWith("devtools://")
+                || lower.startsWith("about:")
+                || lower.startsWith("edge://")
+                || lower.startsWith("brave://");
     }
 
     private static String extractDomain(String url) {

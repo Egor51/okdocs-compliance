@@ -32,9 +32,10 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 /**
- * Поведение {@link ScanPipeline} для CABINET_PREMIUM + dynamicRequired (Этап 5.5, C3): если динамика
- * обязательна и проваливается, скан → FAILED (никакого degraded static за деньги). FREE_MARKETING
- * dynamic не зовёт.
+ * Поведение {@link ScanPipeline} для CABINET_PREMIUM + dynamicRequired: если динамика проваливается,
+ * но static-страницы есть (типично для одностраничного SPA), скан деградирует на static → PARTIAL
+ * с непустым результатом (а не FAILED+refund). FAILED остаётся только когда нечего анализировать
+ * (CDP недоступен ещё до краула / 0 static-страниц).
  */
 @ExtendWith(MockitoExtension.class)
 class ScanPipelineTest {
@@ -73,35 +74,37 @@ class ScanPipelineTest {
     }
 
     @Test
-    void premium_dynamicReturnsEmpty_failsWithRefund() {
+    void premium_dynamicReturnsEmpty_degradesToPartialOnStatic() {
         ComplianceScan scan = premiumScan();
         when(dynamicCrawler.isAvailable()).thenReturn(true);
         // static вернул страницу, достойную dynamic (URL с "privacy")
         var page = page("https://example.com/privacy");
         when(siteCrawler.crawl(anyString(), anyInt()))
                 .thenReturn(new SiteCrawler.CrawlResult(List.of(page), new CrawlerDiagnostics(1, 1, 0, false)));
-        // dynamic вернул пусто → premium dynamicRequired → FAILED
+        // dynamic вернул пусто → деградируем на static → PARTIAL с результатом (не FAILED+refund)
         when(dynamicCrawler.crawlPages(any(), any())).thenReturn(Map.of());
+        stubAnalysis();
 
         ScanPipeline.PipelineOutcome outcome = pipeline.run(scan, scan.getId());
 
-        assertThat(outcome.finalStatus()).isEqualTo(ScanStatus.FAILED);
-        assertThat(outcome.result()).isNull();
-        assertThat(outcome.failureMessage()).contains("Динамический анализ");
+        assertThat(outcome.finalStatus()).isEqualTo(ScanStatus.PARTIAL);
+        assertThat(outcome.result()).isNotNull();
     }
 
     @Test
-    void premium_dynamicThrows_failsWithRefund() {
+    void premium_dynamicThrows_degradesToPartialOnStatic() {
         ComplianceScan scan = premiumScan();
         when(dynamicCrawler.isAvailable()).thenReturn(true);
         var page = page("https://example.com/privacy");
         when(siteCrawler.crawl(anyString(), anyInt()))
                 .thenReturn(new SiteCrawler.CrawlResult(List.of(page), new CrawlerDiagnostics(1, 1, 0, false)));
         when(dynamicCrawler.crawlPages(any(), any())).thenThrow(new RuntimeException("CDP boom"));
+        stubAnalysis();
 
         ScanPipeline.PipelineOutcome outcome = pipeline.run(scan, scan.getId());
 
-        assertThat(outcome.finalStatus()).isEqualTo(ScanStatus.FAILED);
+        assertThat(outcome.finalStatus()).isEqualTo(ScanStatus.PARTIAL);
+        assertThat(outcome.result()).isNotNull();
     }
 
     @Test

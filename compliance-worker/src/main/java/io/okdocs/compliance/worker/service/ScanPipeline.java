@@ -94,13 +94,18 @@ public class ScanPipeline {
         // FREE_MARKETING остаётся на static. Режим — из строки скана (kind/dynamicRequired), не из события.
         boolean dynamicEnabled = scan.getKind() == ScanKind.CABINET_PREMIUM && scan.isDynamicRequired();
         List<PageAnalysisResult> pages;
+        boolean dynamicDegraded = false;
         try {
             pages = maybeDynamicRecrawl(crawl.pages(), domain, scanId, dynamicEnabled);
         } catch (DynamicRequiredFailedException e) {
-            // premium с dynamicRequired: динамика предпринята и провалилась → FAILED + refund,
-            // не отдаём degraded static за деньги (консистентно с pre-crawl проверкой CDP).
-            log.warn("Scan {} dynamic required but failed → FAILED (refund): {}", scanId, e.getMessage());
-            return PipelineOutcome.failed("Динамический анализ не выполнен: " + e.getMessage());
+            // premium с dynamicRequired, но динамика провалилась, а static-страницы есть (типично для
+            // одностраничного SPA): не валим скан в FAILED+refund, а отдаём отчёт на static-данных со
+            // статусом PARTIAL — клиент получает результат, степень полноты помечена degraded.
+            log.warn("Scan {} dynamic required but failed → PARTIAL on static ({}): {}",
+                    scanId, crawl.pages().size(), e.getMessage());
+            meterRegistry.counter("compliance.dynamic.degraded").increment();
+            pages = crawl.pages();
+            dynamicDegraded = true;
         }
 
         progressService.updateProgress(scanId, 60, "Анализ соответствия");
@@ -138,8 +143,9 @@ public class ScanPipeline {
                     scanId, properties.getScan().getTotalDeadline());
         }
 
-        // pagesFailed > 0 || crawlerTimedOut || превышен общий дедлайн → PARTIAL; иначе COMPLETED.
-        var status = (diag.pagesFailed() > 0 || diag.crawlerTimedOut() || deadlineExceeded)
+        // pagesFailed > 0 || crawlerTimedOut || превышен общий дедлайн || dynamic упал (degraded на
+        // static) → PARTIAL; иначе COMPLETED.
+        var status = (diag.pagesFailed() > 0 || diag.crawlerTimedOut() || deadlineExceeded || dynamicDegraded)
                 ? io.okdocs.compliance.contracts.enums.ScanStatus.PARTIAL
                 : io.okdocs.compliance.contracts.enums.ScanStatus.COMPLETED;
 
@@ -147,7 +153,10 @@ public class ScanPipeline {
                 new ScanResult(findings, score, diag.pagesFetched(), diagnosticsJson));
     }
 
-    /** Сигнал: dynamic-проход был обязателен (dynamicRequired) и провалился — premium → FAILED+refund. */
+    /**
+     * Сигнал: dynamic-проход был обязателен (dynamicRequired) и провалился. Обрабатывается в
+     * {@link #run} как graceful degrade на static (PARTIAL), а не FAILED — если static-страницы есть.
+     */
     static final class DynamicRequiredFailedException extends RuntimeException {
         DynamicRequiredFailedException(String message) {
             super(message);
@@ -159,10 +168,10 @@ public class ScanPipeline {
      * наложить DYNAMIC-версии поверх STATIC (по URL).
      * <p>
      * Семантика при {@code dynamicEnabled} (= CABINET_PREMIUM + dynamicRequired): dynamic-проход
-     * обязателен. Берём стартовую страницу, приоритетные URL (формы/политика/контакты) и fallback
+     * желателен. Берём стартовую страницу, приоритетные URL (формы/политика/контакты) и fallback
      * из первых static-страниц. Если CDP упал или вернул пусто — это
-     * {@link DynamicRequiredFailedException} → весь скан FAILED + refund (не отдаём degraded static
-     * за деньги).
+     * {@link DynamicRequiredFailedException}, которую {@link #run} перехватывает и деградирует на
+     * static-результат (PARTIAL), вместо того чтобы валить весь скан.
      */
     private List<PageAnalysisResult> maybeDynamicRecrawl(List<PageAnalysisResult> staticPages,
                                                          String domain, UUID scanId, boolean dynamicEnabled) {
