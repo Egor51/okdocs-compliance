@@ -27,10 +27,25 @@ public record RuleDefinition(
         String fineAmount,
         String legalBasis,
         String explanation,
-        String recommendation
+        String recommendation,
+        String positiveTitle,
+        String positiveMessage
 ) {
 
     public RuleDefinition {
         Objects.requireNonNull(jurisdiction, "jurisdiction");
+    }
+
+    public RuleDefinition(String code,
+                          ScanJurisdiction jurisdiction,
+                          FindingSeverity severity,
+                          FindingCategory category,
+                          String title,
+                          String fineAmount,
+                          String legalBasis,
+                          String explanation,
+                          String recommendation) {
+        this(code, jurisdiction, severity, category, title, fineAmount, legalBasis, explanation,
+                recommendation, null, null);
     }
 }

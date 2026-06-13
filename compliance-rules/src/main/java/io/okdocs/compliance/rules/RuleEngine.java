@@ -85,7 +85,9 @@ public final class RuleEngine {
                 definition.title(),
                 definition.severity(),
                 definition.category(),
-                null);
+                null,
+                definition.positiveTitle(),
+                definition.positiveMessage());
     }
 
     /** code из definition(); если definition() сам бросает — fallback на имя класса правила. */

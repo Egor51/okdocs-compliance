@@ -10,6 +10,16 @@ public record RuleOutcomeDto(
         String title,
         FindingSeverity severity,
         FindingCategory category,
-        String message
+        String message,
+        String positiveTitle,
+        String positiveMessage
 ) {
+    public RuleOutcomeDto(String code,
+                          String status,
+                          String title,
+                          FindingSeverity severity,
+                          FindingCategory category,
+                          String message) {
+        this(code, status, title, severity, category, message, null, null);
+    }
 }

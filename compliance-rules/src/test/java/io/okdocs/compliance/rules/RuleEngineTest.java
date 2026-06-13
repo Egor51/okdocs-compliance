@@ -94,6 +94,8 @@ class RuleEngineTest {
         assertThat(result.outcomes()).singleElement().satisfies(o -> {
             assertThat(o.code()).isEqualTo("PASS");
             assertThat(o.status()).isEqualTo(RuleOutcomeStatus.PASSED);
+            assertThat(o.positiveTitle()).isEqualTo("pass positive");
+            assertThat(o.positiveMessage()).isEqualTo("pass positive message");
         });
     }
 
@@ -166,7 +168,8 @@ class RuleEngineTest {
         @Override
         public RuleDefinition definition() {
             return new RuleDefinition("PASS", ScanJurisdiction.RU, FindingSeverity.LOW,
-                    FindingCategory.OTHER, "pass", null, null, null, null);
+                    FindingCategory.OTHER, "pass", null, null, null, null,
+                    "pass positive", "pass positive message");
         }
 
         @Override
