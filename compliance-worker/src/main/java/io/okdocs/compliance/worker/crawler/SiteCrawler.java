@@ -5,7 +5,6 @@ import io.okdocs.compliance.contracts.crawler.PageAnalysisResult;
 import io.okdocs.compliance.worker.config.ComplianceWorkerProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.jsoup.Connection;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -13,6 +12,7 @@ import org.jsoup.parser.Parser;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayDeque;
@@ -83,6 +83,7 @@ public class SiteCrawler {
 
     private final ComplianceWorkerProperties properties;
     private final UrlValidator urlValidator;
+    private final PinnedHttpFetcher pinnedHttpFetcher;
 
     public CrawlResult crawl(String startUrl, int maxPages) {
         var cfg = properties.getCrawler();
@@ -155,9 +156,13 @@ public class SiteCrawler {
 
             try {
                 Document doc = fetchWithRedirectValidation(normalized, hostSafetyCache);
-                PageAnalysisResult page = PageExtractor.extract(normalized, doc, startDomain);
+                String pageUrl = normalizeUrl(doc.location());
+                if (pageUrl == null) {
+                    pageUrl = normalized;
+                }
+                PageAnalysisResult page = PageExtractor.extract(pageUrl, doc, startDomain);
 
-                if (current.depth() > 0 && !acceptPage(normalized, page, acceptedFingerprints)) {
+                if (current.depth() > 0 && !acceptPage(pageUrl, page, acceptedFingerprints)) {
                     continue;
                 }
                 results.add(page);
@@ -239,14 +244,10 @@ public class SiteCrawler {
             throws IOException {
         String currentUrl = startUrl;
         for (int hop = 0; hop < MAX_REDIRECT_HOPS; hop++) {
-            Connection.Response resp = Jsoup.connect(currentUrl)
-                    .userAgent(properties.getCrawler().getUserAgent())
-                    .maxBodySize((int) Math.min(Integer.MAX_VALUE, properties.getCrawler().getMaxBodyBytes()))
-                    .timeout(properties.getCrawler().getPageTimeoutMs())
-                    .followRedirects(false)
-                    .ignoreHttpErrors(true)
-                    .ignoreContentType(true)
-                    .execute();
+            PinnedHttpFetcher.Response resp = fetchPinned(
+                    currentUrl,
+                    properties.getCrawler().getPageTimeoutMs(),
+                    properties.getCrawler().getMaxBodyBytes());
 
             int status = resp.statusCode();
             if (status >= 300 && status < 400) {
@@ -264,7 +265,7 @@ public class SiteCrawler {
                 }
                 currentUrl = nextUrl;
             } else if (status == 200) {
-                return resp.parse();
+                return Jsoup.parse(resp.body(), currentUrl);
             } else {
                 throw new IOException("HTTP " + status + " for " + currentUrl);
             }
@@ -297,9 +298,7 @@ public class SiteCrawler {
         if (!isSafeHost(PageExtractor.extractDomain(sitemapUrl), hostSafetyCache)) {
             return List.of();
         }
-        Connection.Response resp = Jsoup.connect(sitemapUrl)
-                .userAgent(properties.getCrawler().getUserAgent()).timeout(5000)
-                .ignoreContentType(true).ignoreHttpErrors(true).execute();
+        PinnedHttpFetcher.Response resp = fetchPinned(sitemapUrl, 5000, properties.getCrawler().getMaxBodyBytes());
         if (resp.statusCode() != 200) {
             return List.of();
         }
@@ -373,9 +372,7 @@ public class SiteCrawler {
                 return RobotsTxt.allowAll();
             }
             String robotsUrl = uri.getScheme() + "://" + uri.getAuthority() + "/robots.txt";
-            Connection.Response resp = Jsoup.connect(robotsUrl)
-                    .userAgent(properties.getCrawler().getUserAgent()).timeout(5000)
-                    .ignoreContentType(true).ignoreHttpErrors(true).execute();
+            PinnedHttpFetcher.Response resp = fetchPinned(robotsUrl, 5000, properties.getCrawler().getMaxBodyBytes());
             if (resp.statusCode() != 200) {
                 return RobotsTxt.allowAll();
             }
@@ -392,6 +389,31 @@ public class SiteCrawler {
             return false;
         }
         return hostSafetyCache.computeIfAbsent(host.toLowerCase(Locale.ROOT), urlValidator::isHostSafe);
+    }
+
+    private PinnedHttpFetcher.Response fetchPinned(String url, int timeoutMs, long maxBodyBytes) throws IOException {
+        URI uri;
+        try {
+            uri = new URI(url);
+        } catch (URISyntaxException e) {
+            throw new IOException("Invalid URL: " + url, e);
+        }
+        UrlValidator.ResolvedHost resolved = urlValidator.resolvePublicHost(uri.getHost());
+        if (!resolved.valid()) {
+            throw new SsrfBlockedException(resolved.errorMessage());
+        }
+
+        int connectTimeoutMs = Math.min(properties.getCrawler().getConnectTimeoutMs(), timeoutMs);
+        IOException last = null;
+        for (InetAddress address : resolved.addresses()) {
+            try {
+                return pinnedHttpFetcher.fetch(uri, address, properties.getCrawler().getUserAgent(),
+                        connectTimeoutMs, timeoutMs, maxBodyBytes);
+            } catch (IOException e) {
+                last = e;
+            }
+        }
+        throw last == null ? new IOException("No resolved addresses for " + url) : last;
     }
 
     /** Нормализация URL: убираем fragment, utm_* и tracking-параметры. */

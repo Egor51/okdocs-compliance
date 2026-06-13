@@ -10,6 +10,7 @@ import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.UnknownHostException;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -61,17 +62,9 @@ public class UrlValidator {
             return ValidationResult.invalid("Домен не входит в список разрешённых");
         }
 
-        InetAddress[] addresses;
-        try {
-            addresses = InetAddress.getAllByName(hostLower);
-        } catch (UnknownHostException e) {
-            return ValidationResult.invalid("Не удалось разрешить DNS-имя");
-        }
-
-        for (InetAddress addr : addresses) {
-            if (isPrivateOrSpecial(addr)) {
-                return ValidationResult.invalid("Запрещён приватный/локальный IP-адрес");
-            }
+        ResolvedHost resolved = resolvePublicHost(hostLower);
+        if (!resolved.valid()) {
+            return ValidationResult.invalid(resolved.errorMessage());
         }
 
         return ValidationResult.ok(hostLower);
@@ -89,20 +82,34 @@ public class UrlValidator {
         if (hostLower == null) {
             return false;
         }
-        if (isBlockedDomain(hostLower) || !isAllowedDomain(hostLower)) {
-            return false;
+        return resolvePublicHost(hostLower).valid();
+    }
+
+    ResolvedHost resolvePublicHost(String host) {
+        String hostLower = normalizeHost(host);
+        if (hostLower == null || hostLower.isBlank()) {
+            return ResolvedHost.invalid("URL не содержит host");
         }
+        if (isBlockedDomain(hostLower)) {
+            return ResolvedHost.invalid("Сканирование этого домена запрещено");
+        }
+        if (!isAllowedDomain(hostLower)) {
+            return ResolvedHost.invalid("Домен не входит в список разрешённых");
+        }
+
+        InetAddress[] addresses;
         try {
-            InetAddress[] addresses = InetAddress.getAllByName(hostLower);
-            for (InetAddress addr : addresses) {
-                if (isPrivateOrSpecial(addr)) {
-                    return false;
-                }
-            }
-            return true;
+            addresses = InetAddress.getAllByName(hostLower);
         } catch (UnknownHostException e) {
-            return false;
+            return ResolvedHost.invalid("Не удалось разрешить DNS-имя");
         }
+        for (InetAddress addr : addresses) {
+            if (isPrivateOrSpecial(addr)) {
+                log.warn("Заблокирован SSRF-адрес {} для хоста {}", addr.getHostAddress(), hostLower);
+                return ResolvedHost.invalid("Запрещён приватный/локальный IP-адрес");
+            }
+        }
+        return ResolvedHost.ok(hostLower, Arrays.asList(addresses));
     }
 
     private boolean isBlockedDomain(String host) {
@@ -268,6 +275,17 @@ public class UrlValidator {
 
         public static ValidationResult invalid(String message) {
             return new ValidationResult(false, null, message);
+        }
+    }
+
+    record ResolvedHost(boolean valid, String host, List<InetAddress> addresses, String errorMessage) {
+
+        static ResolvedHost ok(String host, List<InetAddress> addresses) {
+            return new ResolvedHost(true, host, List.copyOf(addresses), null);
+        }
+
+        static ResolvedHost invalid(String message) {
+            return new ResolvedHost(false, null, List.of(), message);
         }
     }
 }
