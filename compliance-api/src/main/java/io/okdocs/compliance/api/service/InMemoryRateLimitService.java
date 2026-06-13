@@ -27,12 +27,9 @@ public class InMemoryRateLimitService implements RateLimitService {
 
     @Override
     public void checkScanAllowed(CompliancePrincipal principal, String ipAddress) {
-        // Списываем последовательно и ПРОВЕРЯЕМ результат каждого tryConsume (probe-then-consume
-        // под конкуренцией пропускал лишнее). Два отдельных бакета нельзя атомарно зарезервировать,
-        // поэтому осознанный trade-off: при отказе на ip-бакете уже списанный user-слот не
-        // возвращается — лимит лишь чуть строже к абьюзеру, лишнего не пропускает.
         if (principal.isUser()) {
             consumeOrThrow("user:" + principal.userId(), properties.rateLimit().userScansPerHour());
+            return;
         }
         consumeOrThrow("ip:" + ipAddress, properties.rateLimit().guestScansPerIpPerHour());
     }

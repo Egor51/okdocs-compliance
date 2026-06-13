@@ -7,8 +7,8 @@ import io.okdocs.compliance.api.security.CompliancePrincipal;
  * Ключ зависит от типа принципала:
  * <ul>
  *   <li>GUEST → {@code ip:<ip>}, лимит {@code guestScansPerIpPerHour};</li>
- *   <li>USER → {@code user:<userId>}, лимит {@code userScansPerHour}, плюс грубый потолок
- *       {@code ip:<ip>} как нижний слой.</li>
+ *   <li>USER/ADMIN → {@code user:<userId>}, лимит {@code userScansPerHour}. IP bucket намеренно
+ *       не применяется к авторизованным: общий NAT/CGNAT не должен сжигать пользовательские слоты.</li>
  * </ul>
  */
 public interface RateLimitService {
