@@ -62,7 +62,7 @@ Current implementation status:
 | `EU` | Architecture-ready | The contract and rule engine support EU/GDPR rule isolation; concrete GDPR/ePrivacy rules are planned as a separate rule package. |
 | `GM` | Contract value reserved | Present in contracts for future generic/global checks. |
 
-European privacy standards that the EU-oriented rule set can cover:
+EU/GDPR planned, see roadmap
 
 | Scope | Standard or law | Typical website audit coverage |
 |---|---|---|
