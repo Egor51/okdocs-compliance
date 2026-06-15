@@ -241,7 +241,6 @@ Currently implemented RU rule areas include:
 ├── docker-compose.override.yml
 ├── docker-compose.prod.yml
 ├── docker-compose.infra.prod.yml
-├── PLAN.md
 ├── PROJECT.md
 └── pom.xml
 ```
