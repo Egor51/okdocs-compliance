@@ -1,95 +1,51 @@
-services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: compliance
-      POSTGRES_USER: compliance
-      POSTGRES_PASSWORD: compliance
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U compliance"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+# БАЗОВЫЙ compose: runtime-сервисы, которые поднимаются и в dev, и в prod.
+#
+# Dev:  docker compose up
+#       docker-compose.override.yml подхватывается автоматически и добавляет
+#       postgres/kafka/kafka-ui, dev-порты и небезопасные dev-дефолты.
+#
+# Prod: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#       поднимаются только redis + browserless. Postgres и Kafka — внешние сервисы
+#       на отдельных серверах, приложения подключаются к ним через env.
+#
+# Базовый файл не содержит postgres/kafka намеренно: они не являются частью prod
+# runtime на этом хосте.
 
+services:
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    # Базовый command — БЕЗ пароля (dev по умолчанию). Прод-оверрайд заменяет его на
+    # redis-server --requirepass ${REDIS_PASSWORD:?} (там переменная обязательна).
+    command: ["redis-server"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
 
-  kafka:
-    image: confluentinc/cp-kafka:7.7.0
-    ports:
-      - "9092:9092"
-    environment:
-      KAFKA_NODE_ID: 1
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_LOG_DIRS: /var/lib/kafka/data
-      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
-    volumes:
-      - kafka_data:/var/lib/kafka/data
-    healthcheck:
-      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092"]
-      interval: 10s
-      timeout: 10s
-      retries: 5
-
-  kafka-ui:
-    image: provectuslabs/kafka-ui:latest
-    ports:
-      - "8090:8080"
-    environment:
-      KAFKA_CLUSTERS_0_NAME: local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
-    depends_on:
-      kafka:
-        condition: service_healthy
-
   browserless:
     image: ghcr.io/browserless/chromium:${BROWSERLESS_VERSION:-latest}
     restart: unless-stopped
-    ports:
-      - "${BROWSERLESS_PORT:-3000}:3000"
     environment:
-      # CDP HTTP endpoint:
-      # - host app/worker:      CDP_BASE_URL=http://localhost:${BROWSERLESS_PORT:-3000}
-      # - compose app/worker:   CDP_BASE_URL=http://browserless:3000
-      # Use the same value in app/worker as CDP_AUTH_TOKEN.
-      TOKEN: ${CDP_AUTH_TOKEN:-local-cdp-token}
+      # CDP HTTP endpoint. Токен общий с приложением (CDP_AUTH_TOKEN).
+      TOKEN: ${CDP_AUTH_TOKEN:?set CDP_AUTH_TOKEN}
       HOST: 0.0.0.0
       PORT: 3000
-
-      # Browserless resource limits.
       CONCURRENT: ${BROWSERLESS_CONCURRENT:-3}
       QUEUED: ${BROWSERLESS_QUEUED:-10}
       TIMEOUT: ${BROWSERLESS_TIMEOUT_MS:-30000}
       MAX_RECONNECT_TIME: ${BROWSERLESS_MAX_RECONNECT_TIME_MS:-300000}
       MAX_CPU_PERCENT: ${BROWSERLESS_MAX_CPU_PERCENT:-90}
       MAX_MEMORY_PERCENT: ${BROWSERLESS_MAX_MEMORY_PERCENT:-90}
-
-      # Security defaults: keep CDP token-protected and do not expose local files.
+      # Security defaults: токен-защита CDP, без доступа к локальным файлам.
       ALLOW_GET: ${BROWSERLESS_ALLOW_GET:-false}
       CORS: ${BROWSERLESS_CORS:-false}
       ALLOW_FILE_PROTOCOL: ${BROWSERLESS_ALLOW_FILE_PROTOCOL:-false}
-      DISABLE_BLOCKLIST: ${BROWSERLESS_DISABLE_BLOCKLIST:-false}
-
-      # Observability / diagnostics.
+      # Встроенный ad/tracker-blocklist Browserless ОБЯЗАН быть выключен: compliance-сканер сам
+      # анализирует трекеры (pre-consent logic) и должен видеть реальные сетевые запросы. Хуже того,
+      # blocklist режет и сам Document навигации, если домен сайта похож на рекламный/трекерный
+      # (напр. *-traffic.online) → net::ERR_BLOCKED_BY_CLIENT и весь dynamic-проход падает.
+      DISABLE_BLOCKLIST: ${BROWSERLESS_DISABLE_BLOCKLIST:-true}
       HEALTH: ${BROWSERLESS_HEALTH:-true}
       LOG_LEVEL: ${BROWSERLESS_LOG_LEVEL:-info}
       LOG_FORMAT: ${BROWSERLESS_LOG_FORMAT:-json}
@@ -97,17 +53,16 @@ services:
       TZ: ${TZ:-UTC}
     shm_size: "${BROWSERLESS_SHM_SIZE:-1gb}"
     healthcheck:
+      # Токен берём из process.env внутри node, а НЕ интерполируем голым в JS: числовой токен
+      # ломает парсер (SyntaxError: Identifier cannot follow number). TOKEN уже в env контейнера.
       test:
         - CMD-SHELL
         - >
-          node -e "fetch('http://127.0.0.1:3000/json/version?token='+encodeURIComponent(process.env.TOKEN || ''),
-          {headers:{Authorization:'Bearer '+process.env.TOKEN}})
+          node -e "const t=process.env.TOKEN||'';
+          fetch('http://127.0.0.1:3000/json/version?token='+encodeURIComponent(t),
+          {headers:{Authorization:'Bearer '+t}})
           .then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
       interval: ${BROWSERLESS_HEALTH_INTERVAL:-10s}
       timeout: ${BROWSERLESS_HEALTH_TIMEOUT:-5s}
       retries: ${BROWSERLESS_HEALTH_RETRIES:-10}
       start_period: ${BROWSERLESS_HEALTH_START_PERIOD:-20s}
-
-volumes:
-  postgres_data:
-  kafka_data:

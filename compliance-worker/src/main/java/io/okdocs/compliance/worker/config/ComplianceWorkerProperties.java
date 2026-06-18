@@ -59,9 +59,19 @@ public class ComplianceWorkerProperties {
         private int connectTimeoutMs = 4000;
         @Positive
         private int crawlerTimeoutSeconds = 90;
-        /** Задержка между запросами к сайту (вежливый краул). 250мс — баланс скорости/анти-бан. */
+        /**
+         * Задержка между запросами к сайту НА ОДИН ПОТОК (вежливый краул). При concurrency потоков
+         * фактический rps на домен ≈ concurrency / (rateLimitMs/1000). 500мс × 5 потоков ≈ 10 rps.
+         */
         @Min(0)
-        private long rateLimitMs = 250;
+        private long rateLimitMs = 500;
+        /**
+         * Число параллельных fetch-потоков static-краула (один домен, N страниц одновременно). Сам
+         * пул служит throttle'ом нагрузки на сайт (см. rateLimitMs). 1 = старое последовательное
+         * поведение.
+         */
+        @Min(1)
+        private int concurrency = 5;
         // perDomainConcurrency убран: SiteCrawler по дизайну последовательный (один скан = один поток,
         // один домен), параллелизма per-domain нет — конфиг был бы no-op'ом. Вернуть, если краул
         // станет параллельным.
