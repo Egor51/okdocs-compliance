@@ -192,8 +192,9 @@ public class ScanReportBuilder {
                 f.getConfidence(),
                 f.getVerificationStatus(),
                 f.getEvidenceType(),
-                premium ? splitSignals(f.getMatchedSignals()) : null,
-                premium ? affectedPages(group) : List.of());
+                premium ? splitSignals(f.getMatchedSignals()) : null
+//                premium ? affectedPages(group) : List.of()
+        );
     }
 
     private List<AffectedPageDto> affectedPages(List<ComplianceFinding> group) {

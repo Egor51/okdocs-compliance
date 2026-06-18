@@ -1,8 +1,12 @@
 package io.okdocs.compliance.rules;
 
+import io.okdocs.compliance.contracts.crawler.DnsInfo;
 import io.okdocs.compliance.contracts.crawler.FormInfo;
+import io.okdocs.compliance.contracts.crawler.HttpResponseInfo;
 import io.okdocs.compliance.contracts.crawler.PageAnalysisResult;
 import io.okdocs.compliance.contracts.crawler.ScanAnalysisContext;
+import io.okdocs.compliance.contracts.crawler.TechnicalAnalysisResult;
+import io.okdocs.compliance.contracts.crawler.TlsInfo;
 import io.okdocs.compliance.contracts.enums.EvidenceType;
 import io.okdocs.compliance.contracts.enums.RenderMode;
 
@@ -57,6 +61,41 @@ public final class RuleSupport {
     /** Совпадает ли домен с эталонным (точное равенство или поддомен). */
     public static boolean domainMatches(String domain, String reference) {
         return domain.equals(reference) || domain.endsWith("." + reference);
+    }
+
+    /**
+     * HTTP-ответы из технического паспорта скана (headers/redirect-цепочка). Пусто, если
+     * technical-анализ не проводился ({@code ctx.technical() == null}) — technical-правила тогда
+     * не создают находок. Централизует null-проверку, чтобы 9 security-header правил её не дублировали.
+     */
+    public static List<HttpResponseInfo> httpResponses(ScanAnalysisContext ctx) {
+        TechnicalAnalysisResult technical = ctx.technical();
+        if (technical == null || technical.responses() == null) {
+            return List.of();
+        }
+        return technical.responses();
+    }
+
+    /**
+     * DNS-обогащение из технического паспорта или {@code null}, если technical-анализ не проводился
+     * ({@code ctx.technical() == null}). DNS-правила при {@code null} не создают находок.
+     */
+    public static DnsInfo dnsInfo(ScanAnalysisContext ctx) {
+        TechnicalAnalysisResult technical = ctx.technical();
+        return technical == null ? null : technical.dns();
+    }
+
+    /**
+     * Результаты TLS-осмотра из технического паспорта. Пусто, если technical-анализ не проводился
+     * ({@code ctx.technical() == null}) — TLS-правила тогда не создают находок. Централизует
+     * null-проверку, чтобы TLS-правила её не дублировали.
+     */
+    public static List<TlsInfo> tlsInfos(ScanAnalysisContext ctx) {
+        TechnicalAnalysisResult technical = ctx.technical();
+        if (technical == null || technical.tls() == null) {
+            return List.of();
+        }
+        return technical.tls();
     }
 
     /**

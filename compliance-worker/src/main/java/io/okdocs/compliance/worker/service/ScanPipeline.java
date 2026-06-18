@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.okdocs.compliance.contracts.crawler.CrawlerDiagnostics;
 import io.okdocs.compliance.contracts.crawler.PageAnalysisResult;
 import io.okdocs.compliance.contracts.crawler.ScanAnalysisContext;
+import io.okdocs.compliance.contracts.crawler.TechnicalAnalysisResult;
 import io.okdocs.compliance.contracts.enums.RegistryStatus;
 import io.okdocs.compliance.contracts.enums.ScanKind;
 import io.okdocs.compliance.persistence.scan.ComplianceFinding;
@@ -37,7 +38,8 @@ public class ScanPipeline {
 
     private final SiteCrawler siteCrawler;
     private final DynamicCrawler dynamicCrawler;
-    private final HostCountryDetector hostCountryDetector;
+    private final io.okdocs.compliance.worker.crawler.TlsInspector tlsInspector;
+    private final DnsInspector dnsInspector;
     private final RknRegistryClient rknRegistryClient;
     private final RuleEngine ruleEngine;
     private final FindingAssembler findingAssembler;
@@ -111,14 +113,25 @@ public class ScanPipeline {
         progressService.updateProgress(scanId, 60, "Анализ соответствия");
 
         // Enrichment ДО RuleEngine (правила остаются чистыми функциями ctx → facts).
-        String hostCountry = hostCountryDetector.detectCountry(domain).orElse(null);
-        List<String> resolvedIps = hostCountryDetector.resolveIps(domain);
+        // DNS — ОДИН lookup в enrichment-фазе (§ Этап 3): A/AAAA+GeoIP+MX+CNAME за вызов. hostCountry/
+        // resolvedIps берём из того же DnsInfo — больше не два независимых getAllByName.
+        io.okdocs.compliance.contracts.crawler.DnsInfo dns = dnsInspector.inspect(domain);
+        String hostCountry = dns.hostCountry();
+        List<String> resolvedIps = dns.resolvedIps();
         RegistryStatus registryStatus = rknRegistryClient.lookup(domain, null);
+
+        // Technical-паспорт (§ technical-rules): Этап 1 — HTTP-ответы static-краула (headers +
+        // redirect-цепочка); Этап 2 — TLS-осмотр; Этап 3 — DNS. responses собраны без второго запроса.
+        // TLS снимается отдельным сокетом (битый сертификат → находка, а не pagesFailed) по уже
+        // разрешённым DNS-адресам, чтобы cert-finding относился к тому же IP, что и DNS-анализ.
+        List<io.okdocs.compliance.contracts.crawler.TlsInfo> tls =
+                List.of(tlsInspector.inspect(domain, resolvedIps));
+        TechnicalAnalysisResult technical = new TechnicalAnalysisResult(crawl.responses(), tls, dns);
 
         // jurisdiction («по какому закону проверяем») — из строки скана, не из hostCountry:
         // RuleEngine по нему выбирает набор правил (RU=152-ФЗ / EU=GDPR).
         ScanAnalysisContext ctx = new ScanAnalysisContext(
-                scan.getJurisdiction(), pages, hostCountry, resolvedIps, registryStatus, diag);
+                scan.getJurisdiction(), pages, hostCountry, resolvedIps, registryStatus, diag, technical);
 
         RuleEngineResult engineResult = ruleEngine.evaluate(ctx);
         List<ComplianceFinding> findings = findingAssembler.assemble(scanId, engineResult.facts());

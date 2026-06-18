@@ -94,4 +94,45 @@ class ScoreCalculatorTest {
                 finding("C", FindingSeverity.MEDIUM, VerificationStatus.CONFIRMED, 1.0));
         assertThat(calculator.calculate(findings)).isEqualTo(56);
     }
+
+    private static ComplianceFinding finding(String code, FindingSeverity severity,
+                                             VerificationStatus verification, Double confidence,
+                                             io.okdocs.compliance.contracts.enums.FindingCategory category) {
+        ComplianceFinding f = finding(code, severity, verification, confidence);
+        f.setCategory(category);
+        return f;
+    }
+
+    @Test
+    void securityCategoryDeductionIsCappedAt20() {
+        // 9 SECURITY findings: 5×MEDIUM(12) + 4×LOW(5) @ DETECTED 0.65 = 5×8 + 4×3 = 52 без cap.
+        // Cap SECURITY=20 ограничивает вклад → 100-20 = 80.
+        var c = io.okdocs.compliance.contracts.enums.FindingCategory.SECURITY;
+        var findings = List.of(
+                finding("S1", FindingSeverity.MEDIUM, VerificationStatus.DETECTED, 0.9, c),
+                finding("S2", FindingSeverity.MEDIUM, VerificationStatus.DETECTED, 0.9, c),
+                finding("S3", FindingSeverity.MEDIUM, VerificationStatus.DETECTED, 0.9, c),
+                finding("S4", FindingSeverity.MEDIUM, VerificationStatus.DETECTED, 0.9, c),
+                finding("S5", FindingSeverity.MEDIUM, VerificationStatus.DETECTED, 0.9, c),
+                finding("S6", FindingSeverity.LOW, VerificationStatus.DETECTED, 0.9, c),
+                finding("S7", FindingSeverity.LOW, VerificationStatus.DETECTED, 0.9, c),
+                finding("S8", FindingSeverity.LOW, VerificationStatus.DETECTED, 0.9, c),
+                finding("S9", FindingSeverity.LOW, VerificationStatus.DETECTED, 0.9, c));
+        assertThat(calculator.calculate(findings)).isEqualTo(80);
+    }
+
+    @Test
+    void capDoesNotAffectCoreCategories_securityCappedSeparately() {
+        // Core 152-ФЗ (DOCUMENTS, без cap) HIGH CONFIRMED=20 + пачка SECURITY (capped 20).
+        var sec = io.okdocs.compliance.contracts.enums.FindingCategory.SECURITY;
+        var doc = io.okdocs.compliance.contracts.enums.FindingCategory.DOCUMENTS;
+        var findings = List.of(
+                finding("CORE", FindingSeverity.HIGH, VerificationStatus.CONFIRMED, 1.0, doc),
+                finding("S1", FindingSeverity.MEDIUM, VerificationStatus.DETECTED, 0.9, sec),
+                finding("S2", FindingSeverity.MEDIUM, VerificationStatus.DETECTED, 0.9, sec),
+                finding("S3", FindingSeverity.MEDIUM, VerificationStatus.DETECTED, 0.9, sec),
+                finding("S4", FindingSeverity.MEDIUM, VerificationStatus.DETECTED, 0.9, sec));
+        // DOCUMENTS: 20 (не capped). SECURITY: 4×8=32 → cap 20. Σ=40 → 100-40 = 60.
+        assertThat(calculator.calculate(findings)).isEqualTo(60);
+    }
 }

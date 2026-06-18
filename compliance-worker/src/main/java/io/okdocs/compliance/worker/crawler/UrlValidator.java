@@ -85,7 +85,19 @@ public class UrlValidator {
         return resolvePublicHost(hostLower).valid();
     }
 
-    ResolvedHost resolvePublicHost(String host) {
+    public ResolvedHost resolvePublicHost(String host) {
+        return resolvePublicHost(host, true);
+    }
+
+    /**
+     * Безопасный DNS-resolve для enrichment-целей (например MX), куда worker не подключается как к
+     * crawl target. Allowlist доменов не применяем, но приватные/special IP и blocked domains режем.
+     */
+    public ResolvedHost resolvePublicDnsHost(String host) {
+        return resolvePublicHost(host, false);
+    }
+
+    private ResolvedHost resolvePublicHost(String host, boolean enforceAllowedDomains) {
         String hostLower = normalizeHost(host);
         if (hostLower == null || hostLower.isBlank()) {
             return ResolvedHost.invalid("URL не содержит host");
@@ -93,7 +105,7 @@ public class UrlValidator {
         if (isBlockedDomain(hostLower)) {
             return ResolvedHost.invalid("Сканирование этого домена запрещено");
         }
-        if (!isAllowedDomain(hostLower)) {
+        if (enforceAllowedDomains && !isAllowedDomain(hostLower)) {
             return ResolvedHost.invalid("Домен не входит в список разрешённых");
         }
 
@@ -214,6 +226,11 @@ public class UrlValidator {
         return false;
     }
 
+    /** Публичный адрес, разрешённый для сетевых enrichment-проверок (DNS/TLS). */
+    public boolean isPublicAddress(InetAddress address) {
+        return address != null && !isPrivateOrSpecial(address);
+    }
+
     private static String resolveNormalizedHost(URI uri) {
         String host = uri.getHost();
         if (host == null || host.isBlank()) {
@@ -278,13 +295,13 @@ public class UrlValidator {
         }
     }
 
-    record ResolvedHost(boolean valid, String host, List<InetAddress> addresses, String errorMessage) {
+    public record ResolvedHost(boolean valid, String host, List<InetAddress> addresses, String errorMessage) {
 
-        static ResolvedHost ok(String host, List<InetAddress> addresses) {
+        public static ResolvedHost ok(String host, List<InetAddress> addresses) {
             return new ResolvedHost(true, host, List.copyOf(addresses), null);
         }
 
-        static ResolvedHost invalid(String message) {
+        public static ResolvedHost invalid(String message) {
             return new ResolvedHost(false, null, List.of(), message);
         }
     }
