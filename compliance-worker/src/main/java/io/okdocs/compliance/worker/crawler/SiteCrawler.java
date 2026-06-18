@@ -1,6 +1,7 @@
 package io.okdocs.compliance.worker.crawler;
 
 import io.okdocs.compliance.contracts.crawler.CrawlerDiagnostics;
+import io.okdocs.compliance.contracts.crawler.HttpResponseInfo;
 import io.okdocs.compliance.contracts.crawler.PageAnalysisResult;
 import io.okdocs.compliance.worker.config.ComplianceWorkerProperties;
 import lombok.RequiredArgsConstructor;
@@ -150,6 +151,7 @@ public class SiteCrawler {
 
         return new CrawlResult(
                 List.copyOf(ordered),
+                List.copyOf(state.responses),
                 new CrawlerDiagnostics(state.attempted.get(), fetched, state.failed.get(), timedOut));
     }
 
@@ -278,7 +280,8 @@ public class SiteCrawler {
         boolean accepted = false;
         boolean isStart = current.depth() == 0;
         try {
-            Document doc = fetchWithRedirectValidation(normalized, state.hostSafetyCache);
+            FetchedDocument fetched = fetchWithRedirectValidation(normalized, state.hostSafetyCache);
+            Document doc = fetched.document();
             String pageUrl = normalizeUrl(doc.location());
             if (pageUrl == null) {
                 pageUrl = normalized;
@@ -288,6 +291,10 @@ public class SiteCrawler {
             if (!isStart && !acceptPage(pageUrl, page, state.acceptedFingerprints)) {
                 return;
             }
+            // Technical-паспорт: responses всей redirect-цепочки. URL финального ответа выравниваем
+            // с page.url() (= doc.location() после редиректов), чтобы security-header правила
+            // адресовали находку к той же странице, что и остальной анализ.
+            state.responses.addAll(alignFinalResponseUrl(fetched.responses(), pageUrl));
             accepted = true;
             state.accepted.incrementAndGet(); // монотонный счётчик реально принятых (для лимита/лога)
             if (isStart) {
@@ -341,6 +348,9 @@ public class SiteCrawler {
         final java.util.concurrent.atomic.AtomicReference<PageAnalysisResult> startPage =
                 new java.util.concurrent.atomic.AtomicReference<>();
         final ConcurrentLinkedQueue<PageAnalysisResult> results = new ConcurrentLinkedQueue<>();
+        // HTTP-ответы всех успешно дошедших до fetch страниц (вкл. redirect-хопы) — technical-паспорт.
+        // Собираются даже для непринятых страниц (soft-404/дубликат): заголовки ответа от этого валидны.
+        final ConcurrentLinkedQueue<HttpResponseInfo> responses = new ConcurrentLinkedQueue<>();
         final AtomicInteger attempted = new AtomicInteger();
         final AtomicInteger failed = new AtomicInteger();
         // reserved = занятые слоты (in-flight + принятые), ВРЕМЕННЫЙ счётчик: резервируется перед
@@ -463,10 +473,17 @@ public class SiteCrawler {
         return true;
     }
 
-    /** Ручная обработка редиректов с SSRF-валидацией каждого хопа. */
-    private Document fetchWithRedirectValidation(String startUrl, Map<String, Boolean> hostSafetyCache)
+    /**
+     * Ручная обработка редиректов с SSRF-валидацией каждого хопа. Помимо финального документа
+     * собирает {@link HttpResponseInfo} на КАЖДОМ хопе (3xx-хопы + финальный 200): это даёт
+     * security-header правилам заголовки каждого ответа и redirect-цепочку (http→https) без второго
+     * запроса. Промежуточные ответы тоже несут свой URL/Location, чтобы правила могли проверить
+     * принудительный HTTPS и кэширование на конкретном URL.
+     */
+    private FetchedDocument fetchWithRedirectValidation(String startUrl, Map<String, Boolean> hostSafetyCache)
             throws IOException {
         String currentUrl = startUrl;
+        List<HttpResponseInfo> responses = new ArrayList<>();
         for (int hop = 0; hop < MAX_REDIRECT_HOPS; hop++) {
             PinnedHttpFetcher.Response resp = fetchPinned(
                     currentUrl,
@@ -476,6 +493,7 @@ public class SiteCrawler {
             int status = resp.statusCode();
             if (status >= 300 && status < 400) {
                 String location = resp.header("Location");
+                responses.add(new HttpResponseInfo(currentUrl, status, resp.headers(), true, location));
                 if (location == null || location.isBlank()) {
                     throw new IOException("Empty Location header on redirect from " + currentUrl);
                 }
@@ -489,12 +507,18 @@ public class SiteCrawler {
                 }
                 currentUrl = nextUrl;
             } else if (status == 200) {
-                return Jsoup.parse(resp.body(), currentUrl);
+                responses.add(new HttpResponseInfo(currentUrl, status, resp.headers(), false, null));
+                return new FetchedDocument(Jsoup.parse(resp.body(), currentUrl), responses);
             } else {
+                responses.add(new HttpResponseInfo(currentUrl, status, resp.headers(), false, null));
                 throw new IOException("HTTP " + status + " for " + currentUrl);
             }
         }
         throw new IOException("Too many redirects (>" + MAX_REDIRECT_HOPS + ") for " + startUrl);
+    }
+
+    /** Финальный документ + HTTP-ответы всей redirect-цепочки (для technical-паспорта). */
+    private record FetchedDocument(Document document, List<HttpResponseInfo> responses) {
     }
 
     private List<String> loadSitemapUrls(String baseUrl, String domain, int maxUrls,
@@ -701,6 +725,27 @@ public class SiteCrawler {
                 : kept.stream().filter(Objects::nonNull).collect(Collectors.joining("&"));
     }
 
+    /**
+     * Выравнивает URL ФИНАЛЬНОГО (не-redirect) ответа с нормализованным URL страницы. Промежуточные
+     * redirect-хопы сохраняют свой исходный URL — они нужны правилам как доказательство цепочки
+     * (http://… → https://…). Финальный ответ адресуем к {@code page.url()}, чтобы «на /login нет CSP»
+     * указывало на ту же страницу, что и остальной анализ.
+     */
+    private static List<HttpResponseInfo> alignFinalResponseUrl(List<HttpResponseInfo> responses, String pageUrl) {
+        if (responses.isEmpty() || pageUrl == null) {
+            return responses;
+        }
+        List<HttpResponseInfo> aligned = new ArrayList<>(responses.size());
+        for (HttpResponseInfo r : responses) {
+            if (!r.redirect() && !pageUrl.equals(r.url())) {
+                aligned.add(new HttpResponseInfo(pageUrl, r.statusCode(), r.headers(), false, null));
+            } else {
+                aligned.add(r);
+            }
+        }
+        return aligned;
+    }
+
     private static String resolveUrl(String base, String location) {
         try {
             return new URI(base).resolve(new URI(location)).toString();
@@ -783,11 +828,16 @@ public class SiteCrawler {
     private record UrlWithDepth(String url, int depth) {
     }
 
-    /** Результат обхода: страницы для движка правил + метрики (§1.6). */
-    public record CrawlResult(List<PageAnalysisResult> pages, CrawlerDiagnostics diagnostics) {
+    /** Результат обхода: страницы для движка правил + HTTP-ответы (technical) + метрики (§1.6). */
+    public record CrawlResult(List<PageAnalysisResult> pages, List<HttpResponseInfo> responses,
+                              CrawlerDiagnostics diagnostics) {
+
+        public CrawlResult {
+            responses = responses == null ? List.of() : List.copyOf(responses);
+        }
 
         public static CrawlResult failed() {
-            return new CrawlResult(List.of(), new CrawlerDiagnostics(0, 0, 0, false));
+            return new CrawlResult(List.of(), List.of(), new CrawlerDiagnostics(0, 0, 0, false));
         }
     }
 }

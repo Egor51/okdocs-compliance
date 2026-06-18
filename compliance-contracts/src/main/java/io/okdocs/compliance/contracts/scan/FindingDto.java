@@ -27,7 +27,7 @@ public record FindingDto(
         Double confidence,
         VerificationStatus verificationStatus,
         EvidenceType evidenceType,
-        List<String> matchedSignals,
-        List<AffectedPageDto> affectedPages
+        List<String> matchedSignals
+//        , List<AffectedPageDto> affectedPages
 ) {
 }

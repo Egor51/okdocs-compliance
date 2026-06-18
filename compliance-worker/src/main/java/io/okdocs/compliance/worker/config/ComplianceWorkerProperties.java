@@ -1,5 +1,6 @@
 package io.okdocs.compliance.worker.config;
 
+import io.okdocs.compliance.contracts.enums.FindingCategory;
 import io.okdocs.compliance.contracts.enums.FindingSeverity;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.AssertTrue;
@@ -266,6 +267,13 @@ public class ComplianceWorkerProperties {
          * ключ DEFAULT, которого нет в enum'е.
          */
         private Map<String, Double> verificationWeight = defaultVerificationWeight();
+        /**
+         * Потолок суммарного вычета очков по категории. Технические категории (SECURITY, COOKIES)
+         * дают пачку findings (9 security-заголовков, набор cookie-флагов), которые иначе просадили
+         * бы score сильнее core 152-ФЗ нарушений (DOCUMENTS/HOSTING/CONSENT). Cap ограничивает их
+         * совокупный вклад. Категории без записи здесь не ограничиваются. Тюнится из yml.
+         */
+        private Map<FindingCategory, Integer> categoryCap = defaultCategoryCap();
 
         private static Map<FindingSeverity, Integer> defaultBasePoints() {
             Map<FindingSeverity, Integer> m = new EnumMap<>(FindingSeverity.class);
@@ -282,6 +290,20 @@ public class ComplianceWorkerProperties {
             m.put("DETECTED", 0.65);
             m.put("DEFAULT", 0.80);
             return m;
+        }
+
+        private static Map<FindingCategory, Integer> defaultCategoryCap() {
+            Map<FindingCategory, Integer> m = new EnumMap<>(FindingCategory.class);
+            // Технические категории: совокупный вклад ограничен, чтобы пачка security-заголовков/
+            // cookie-флагов не перевешивала core 152-ФЗ нарушения.
+            m.put(FindingCategory.SECURITY, 20);
+            m.put(FindingCategory.COOKIES, 15);
+            return m;
+        }
+
+        /** Потолок вычета по категории или {@code null}, если категория не ограничена. */
+        public Integer capFor(FindingCategory category) {
+            return category == null ? null : categoryCap.get(category);
         }
 
         public int basePointsFor(FindingSeverity severity) {

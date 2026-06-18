@@ -30,11 +30,24 @@ public class ScoreCalculator {
     }
 
     public int calculate(List<ComplianceFinding> findings) {
-        int score = config.getInitial();
+        // Считаем вычет по категориям: технические категории (SECURITY/COOKIES) дают пачку findings,
+        // чей совокупный вклад ограничивается capFor(category), чтобы они не перевешивали core
+        // 152-ФЗ нарушения. Категории без cap вычитаются полностью.
+        // HashMap, а не EnumMap: finding может иметь category == null (наследие/тесты), EnumMap бросает
+        // NPE на null-ключе. null-категория не имеет cap → вычитается полностью.
+        java.util.Map<io.okdocs.compliance.contracts.enums.FindingCategory, Integer> byCategory =
+                new java.util.HashMap<>();
         for (ComplianceFinding f : deduplicate(findings)) {
-            score -= weighted(f);
+            byCategory.merge(f.getCategory(), weighted(f), Integer::sum);
         }
-        return Math.max(score, 0);
+
+        int totalDeduction = 0;
+        for (var entry : byCategory.entrySet()) {
+            Integer cap = config.capFor(entry.getKey());
+            int deduction = cap == null ? entry.getValue() : Math.min(entry.getValue(), cap);
+            totalDeduction += deduction;
+        }
+        return Math.max(config.getInitial() - totalDeduction, 0);
     }
 
     /** Returns one finding per rule code, picking the highest-confidence instance. */

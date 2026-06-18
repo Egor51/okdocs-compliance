@@ -14,8 +14,8 @@ import java.io.InputStream;
 
 /**
  * Поднимает {@link DatabaseReader} MaxMind/db-ip из {@code compliance.geoip.db-path}.
- * Используется {@link io.okdocs.compliance.worker.service.HostCountryDetector} для определения
- * страны хостинга по IP (§5.5).
+ * Используется {@link io.okdocs.compliance.worker.service.DnsInspector} для определения стран
+ * веб- и почтовой инфраструктуры по IP (§5.5).
  */
 @Slf4j
 @Configuration

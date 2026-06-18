@@ -2,13 +2,17 @@ package io.okdocs.compliance.rules;
 
 import io.okdocs.compliance.contracts.crawler.CrawlerDiagnostics;
 import io.okdocs.compliance.contracts.crawler.FormInfo;
+import io.okdocs.compliance.contracts.crawler.HttpResponseInfo;
 import io.okdocs.compliance.contracts.crawler.PageAnalysisResult;
 import io.okdocs.compliance.contracts.crawler.ScanAnalysisContext;
+import io.okdocs.compliance.contracts.crawler.TechnicalAnalysisResult;
+import io.okdocs.compliance.contracts.crawler.TlsInfo;
 import io.okdocs.compliance.contracts.enums.RegistryStatus;
 import io.okdocs.compliance.contracts.enums.RenderMode;
 import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 
 import java.util.List;
+import java.util.Map;
 
 /** Минимальные билдеры для конструирования контекста в unit-тестах правил. */
 public final class TestFixtures {
@@ -32,6 +36,97 @@ public final class TestFixtures {
                 List.of("1.2.3.4"),
                 registry,
                 new CrawlerDiagnostics(pages.length, pages.length, 0, false));
+    }
+
+    // ── Technical (headers) ─────────────────────────────────────────────────────────────────
+
+    /** Контекст с techical-паспортом из заданных HTTP-ответов (одна fake-страница для hasPages). */
+    public static ScanAnalysisContext ctxWithResponses(HttpResponseInfo... responses) {
+        return new ScanAnalysisContext(
+                ScanJurisdiction.RU,
+                List.of(simplePage("https://site.ru")),
+                "RU",
+                List.of("1.2.3.4"),
+                RegistryStatus.FOUND,
+                new CrawlerDiagnostics(1, 1, 0, false),
+                new TechnicalAnalysisResult(List.of(responses), List.of(), null));
+    }
+
+    /** Финальный 200-ответ с заданными заголовками (имена → значения). */
+    public static HttpResponseInfo response(String url, Map<String, String> headers) {
+        return response(url, 200, headers);
+    }
+
+    public static HttpResponseInfo response(String url, int status, Map<String, String> headers) {
+        Map<String, List<String>> multi = new java.util.HashMap<>();
+        headers.forEach((k, v) -> multi.put(k.toLowerCase(java.util.Locale.ROOT), List.of(v)));
+        return new HttpResponseInfo(url, status, multi, false, null);
+    }
+
+    /** 3xx redirect-хоп (исключается из анализа security-заголовков). */
+    public static HttpResponseInfo redirect(String url, String location) {
+        return new HttpResponseInfo(url, 301, Map.of(), true, location);
+    }
+
+    /** Контекст с явными страницами + HTTP-ответами (для правил группы B: form-action, mixed-content). */
+    public static ScanAnalysisContext ctxTechnical(List<PageAnalysisResult> pages,
+                                                   List<HttpResponseInfo> responses,
+                                                   List<TlsInfo> tls) {
+        return new ScanAnalysisContext(
+                ScanJurisdiction.RU,
+                pages,
+                "RU",
+                List.of("1.2.3.4"),
+                RegistryStatus.FOUND,
+                new CrawlerDiagnostics(pages.size(), pages.size(), 0, false),
+                new TechnicalAnalysisResult(responses, tls, null));
+    }
+
+    // ── Technical (TLS) ─────────────────────────────────────────────────────────────────────
+
+    /** Контекст с TLS-паспортом (одна fake-страница для hasPages). */
+    public static ScanAnalysisContext ctxWithTls(TlsInfo... tls) {
+        return ctxTechnical(List.of(simplePage("https://site.ru")), List.of(), List.of(tls));
+    }
+
+    /** Успешный handshake: protocol/SAN/notAfter задаются явно. */
+    public static TlsInfo tlsOk(String host, String protocol, List<String> san,
+                                java.time.Instant notAfter) {
+        return new TlsInfo(host, true, null, protocol, "TLS_AES_128_GCM_SHA256",
+                "CN=" + host, "CN=Test CA", san, java.time.Instant.now().minusSeconds(86400), notAfter);
+    }
+
+    /** Проваленный handshake с заданной ошибкой. */
+    public static TlsInfo tlsFailed(String host, String error) {
+        return new TlsInfo(host, false, error, null, null, null, null, List.of(), null, null);
+    }
+
+    // ── Technical (DNS) ─────────────────────────────────────────────────────────────────────
+
+    /** Контекст с DNS-паспортом (одна fake-страница для hasPages). */
+    public static ScanAnalysisContext ctxWithDns(io.okdocs.compliance.contracts.crawler.DnsInfo dns) {
+        return new ScanAnalysisContext(
+                ScanJurisdiction.RU,
+                List.of(simplePage("https://site.ru")),
+                dns == null ? null : dns.hostCountry(),
+                dns == null ? List.of() : dns.resolvedIps(),
+                RegistryStatus.FOUND,
+                new CrawlerDiagnostics(1, 1, 0, false),
+                new TechnicalAnalysisResult(List.of(), List.of(), dns));
+    }
+
+    /** DnsInfo с явными странами IP / MX / CNAME (host=site.ru, lookupOk). */
+    public static io.okdocs.compliance.contracts.crawler.DnsInfo dns(
+            List<String> ips, List<String> ipCountries, List<String> cnameChain, List<String> mailCountries) {
+        String hostCountry = ipCountries.contains("RU") ? "RU"
+                : (ipCountries.isEmpty() ? null : ipCountries.get(0));
+        return new io.okdocs.compliance.contracts.crawler.DnsInfo(
+                "site.ru", false, hostCountry, ips, ipCountries, cnameChain, List.of(), mailCountries);
+    }
+
+    public static io.okdocs.compliance.contracts.crawler.DnsInfo dnsFailed() {
+        return new io.okdocs.compliance.contracts.crawler.DnsInfo(
+                "site.ru", true, null, List.of(), List.of(), List.of(), List.of(), List.of());
     }
 
     // ── Страницы ─────────────────────────────────────────────────────────────────────────────
@@ -73,6 +168,30 @@ public final class TestFixtures {
                 url, "title", "текст", "<html></html>",
                 externalScripts, List.of(), List.of(),
                 cookiePresent, List.of(), RenderMode.DYNAMIC, preConsentTrackerHosts);
+    }
+
+    /** DYNAMIC-страница с наблюдёнными до согласия cookies и ключами localStorage. */
+    public static PageAnalysisResult dynamicPageWithCookies(
+            String url, List<io.okdocs.compliance.contracts.crawler.ObservedCookie> cookies,
+            List<String> storageKeys) {
+        return new PageAnalysisResult(
+                url, "title", "текст", "<html></html>",
+                List.of(), List.of(), List.of(),
+                false, List.of(), RenderMode.DYNAMIC, List.of(), cookies, storageKeys, true, true);
+    }
+
+    /** Cookie с явными флагами (persistent, не session). */
+    public static io.okdocs.compliance.contracts.crawler.ObservedCookie cookie(
+            String name, boolean secure, boolean httpOnly) {
+        return new io.okdocs.compliance.contracts.crawler.ObservedCookie(
+                name, "site.ru", secure, httpOnly, "Lax", false);
+    }
+
+    /** Сессионная cookie (нет expires). */
+    public static io.okdocs.compliance.contracts.crawler.ObservedCookie sessionCookie(
+            String name, boolean secure, boolean httpOnly) {
+        return new io.okdocs.compliance.contracts.crawler.ObservedCookie(
+                name, "site.ru", secure, httpOnly, "Lax", true);
     }
 
     // ── Формы ────────────────────────────────────────────────────────────────────────────────

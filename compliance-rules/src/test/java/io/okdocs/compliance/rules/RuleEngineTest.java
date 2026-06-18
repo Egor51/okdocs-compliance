@@ -112,6 +112,39 @@ class RuleEngineTest {
         });
     }
 
+    @Test
+    void notApplicableRuleYieldsNotEvaluatedNotPassed() {
+        // Страницы есть, но правилу нечего анализировать (appliesTo=false) → NOT_EVALUATED, НЕ PASSED:
+        // «не проверяли» ≠ «нарушений нет». Регрессия на ложный positive (cookie-правило без cookies).
+        RuleEngine engine = new RuleEngine(List.of(new NotApplicableRule()));
+
+        RuleEngineResult result = engine.evaluate(TestFixtures.ctx(TestFixtures.simplePage("https://site.ru")));
+
+        assertThat(result.facts()).isEmpty();
+        assertThat(result.outcomes()).singleElement().satisfies(o -> {
+            assertThat(o.code()).isEqualTo("NA");
+            assertThat(o.status()).isEqualTo(RuleOutcomeStatus.NOT_EVALUATED);
+        });
+    }
+
+    private static final class NotApplicableRule implements Rule {
+        @Override
+        public RuleDefinition definition() {
+            return new RuleDefinition("NA", ScanJurisdiction.RU, FindingSeverity.LOW,
+                    FindingCategory.OTHER, "na", null, null, null, null, "na positive", "na message");
+        }
+
+        @Override
+        public boolean appliesTo(ScanAnalysisContext ctx) {
+            return false;
+        }
+
+        @Override
+        public List<RuleFact> evaluate(ScanAnalysisContext ctx) {
+            return List.of();
+        }
+    }
+
     private static final class OkRule implements Rule {
         @Override
         public RuleDefinition definition() {
