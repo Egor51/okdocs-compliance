@@ -55,7 +55,7 @@ class ScanRequestedListenerTest {
         properties.getScan().setRedeliverDelay(REDELIVER);
         properties.getScan().setStaleAfter(STALE_AFTER);
         listener = new ScanRequestedListener(scanRepository, pipeline, lifecycle, properties,
-                new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
+                new io.okdocs.compliance.worker.config.WorkerMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
     }
 
     @Test

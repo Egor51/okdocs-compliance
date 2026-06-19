@@ -7,7 +7,6 @@ import io.okdocs.compliance.persistence.scan.ComplianceScanRepository;
 import io.okdocs.compliance.worker.config.ComplianceWorkerProperties;
 import io.okdocs.compliance.worker.service.ScanLifecycleService;
 import io.okdocs.compliance.worker.service.ScanPipeline;
-import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
@@ -47,7 +46,7 @@ public class ScanRequestedListener {
     private final ScanPipeline pipeline;
     private final ScanLifecycleService lifecycle;
     private final ComplianceWorkerProperties properties;
-    private final MeterRegistry meterRegistry;
+    private final io.okdocs.compliance.worker.config.WorkerMetrics metrics;
 
     @KafkaListener(
             topics = "${compliance.kafka.topic.scan-requested}",
@@ -103,7 +102,7 @@ public class ScanRequestedListener {
             process(scan);
             acknowledgment.acknowledge(); // ack только после успешного коммита финального статуса
         } catch (Exception e) {
-            meterRegistry.counter("compliance.scan.listener.failures").increment();
+            metrics.listenerFailure();
             log.error("Pipeline failed for scan {}: {}", scanId, e.getMessage(), e);
             // Финальный fail коммитим в БД (+ ScanFailedEvent через outbox), затем ack — иначе
             // бесконечный redelivery упавшего скана. Reaper подстрахует, если этот fail тоже упадёт.

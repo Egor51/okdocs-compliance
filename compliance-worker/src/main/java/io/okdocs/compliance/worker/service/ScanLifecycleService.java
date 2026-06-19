@@ -49,7 +49,7 @@ public class ScanLifecycleService {
     private final OutboxEventRepository outboxRepository;
     private final OutboxEventFactory outboxEventFactory;
     private final ComplianceWorkerProperties properties;
-    private final io.micrometer.core.instrument.MeterRegistry meterRegistry;
+    private final io.okdocs.compliance.worker.config.WorkerMetrics metrics;
 
     @Transactional
     public void markCrawling(UUID scanId) {
@@ -79,7 +79,7 @@ public class ScanLifecycleService {
         }
         scan.fail(errorMessage);
         markDuration(scan);
-        recordDuration(scan);
+        recordTerminal(scan);
         outboxRepository.save(scanFailedEvent(scan));
     }
 
@@ -92,7 +92,7 @@ public class ScanLifecycleService {
         }
         scan.fail("Scan timed out — no progress for " + staleAfter);
         markDuration(scan);
-        recordDuration(scan);
+        recordTerminal(scan);
         outboxRepository.save(scanFailedEvent(scan));
         log.info("Reaper failed stuck scan {} (was {})", scanId, scan.getStatus());
     }
@@ -125,7 +125,7 @@ public class ScanLifecycleService {
         scan.setProgressPct(100);
         scan.setFinishedAt(Instant.now());
         markDuration(scan);
-        recordDuration(scan);
+        recordTerminal(scan);
 
         // Снапшот отчёта строим из УЖЕ финализированного scan (status/finishedAt/durationMs выставлены
         // выше) + тех же findings, что сохранили — не перечитывая из БД. Та же транзакция: если
@@ -170,15 +170,16 @@ public class ScanLifecycleService {
         scanReportRepository.save(report);
     }
 
-    /** Метрика длительности скана (§5.7): timer с тегами status/kind. */
-    private void recordDuration(ComplianceScan scan) {
-        if (scan.getDurationMs() == null) {
-            return;
+    /**
+     * Метрики терминального скана (§5.7): длительность (timer status/kind) + исход
+     * (counter kind/jurisdiction/status — главный SLO-срез free vs premium). Зовётся из
+     * complete/partial/fail/failStuck — единственная точка, где статус уже терминальный.
+     */
+    private void recordTerminal(ComplianceScan scan) {
+        metrics.scanOutcome(scan.getKind(), scan.getJurisdiction(), scan.getStatus());
+        if (scan.getDurationMs() != null) {
+            metrics.recordScanDuration(scan.getStatus(), scan.getKind(), scan.getDurationMs());
         }
-        meterRegistry.timer("compliance.scan.duration",
-                        "status", String.valueOf(scan.getStatus()),
-                        "kind", String.valueOf(scan.getKind()))
-                .record(java.time.Duration.ofMillis(scan.getDurationMs()));
     }
 
     private static void markDuration(ComplianceScan scan) {

@@ -38,7 +38,7 @@ public class ScanReaper {
     private final ComplianceScanRepository scanRepository;
     private final ScanLifecycleService lifecycle;
     private final ComplianceWorkerProperties properties;
-    private final io.micrometer.core.instrument.MeterRegistry meterRegistry;
+    private final io.okdocs.compliance.worker.config.WorkerMetrics metrics;
 
     @Scheduled(fixedDelay = 60_000)
     public void reapStuckScans() {
@@ -52,7 +52,7 @@ public class ScanReaper {
         for (ComplianceScan scan : stuck) {
             try {
                 lifecycle.failStuck(scan.getId(), staleAfter); // отдельная транзакция на скан
-                meterRegistry.counter("compliance.reaper.failed").increment();
+                metrics.reaperFailed();
             } catch (OptimisticLockingFailureException ignored) {
                 // скан ожил между выборкой и апдейтом (живой листенер двинул version) — не наш случай
                 log.debug("Stuck scan {} revived concurrently — skipping", scan.getId());

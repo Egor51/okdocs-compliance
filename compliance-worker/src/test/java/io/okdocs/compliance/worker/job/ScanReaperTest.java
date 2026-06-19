@@ -47,7 +47,7 @@ class ScanReaperTest {
         properties = new ComplianceWorkerProperties();
         properties.getScan().setStaleAfter(STALE_AFTER);
         reaper = new ScanReaper(scanRepository, lifecycle, properties,
-                new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
+                new io.okdocs.compliance.worker.config.WorkerMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
     }
 
     @Test

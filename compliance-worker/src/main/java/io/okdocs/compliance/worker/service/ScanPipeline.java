@@ -46,7 +46,7 @@ public class ScanPipeline {
     private final ScoreCalculator scoreCalculator;
     private final ScanProgressService progressService;
     private final ObjectMapper objectMapper;
-    private final io.micrometer.core.instrument.MeterRegistry meterRegistry;
+    private final io.okdocs.compliance.worker.config.WorkerMetrics metrics;
     private final io.okdocs.compliance.worker.config.ComplianceWorkerProperties properties;
 
     /**
@@ -84,8 +84,8 @@ public class ScanPipeline {
         long staticStart = System.currentTimeMillis();
         SiteCrawler.CrawlResult crawl = siteCrawler.crawl(siteUrl, scan.getMaxPages());
         long staticCrawlMs = System.currentTimeMillis() - staticStart;
-        meterRegistry.timer("compliance.phase", "phase", "static-crawl")
-                .record(staticCrawlMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+        metrics.recordPhase(io.okdocs.compliance.worker.config.WorkerMetrics.PHASE_STATIC_CRAWL,
+                scan.getKind(), staticCrawlMs);
         CrawlerDiagnostics diag = crawl.diagnostics();
 
         // pagesFetched == 0 → анализировать нечего → FAILED (событие ScanFailedEvent сформирует lifecycle).
@@ -110,13 +110,13 @@ public class ScanPipeline {
             // статусом PARTIAL — клиент получает результат, степень полноты помечена degraded.
             log.warn("Scan {} dynamic required but failed → PARTIAL on static ({}): {}",
                     scanId, crawl.pages().size(), e.getMessage());
-            meterRegistry.counter("compliance.dynamic.degraded").increment();
+            metrics.dynamicResult(io.okdocs.compliance.worker.config.WorkerMetrics.DynamicResult.DEGRADED);
             pages = crawl.pages();
             dynamicDegraded = true;
         }
         long dynamicMs = System.currentTimeMillis() - dynamicStart;
-        meterRegistry.timer("compliance.phase", "phase", "dynamic-recrawl")
-                .record(dynamicMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+        metrics.recordPhase(io.okdocs.compliance.worker.config.WorkerMetrics.PHASE_DYNAMIC_RECRAWL,
+                scan.getKind(), dynamicMs);
         // Разбивка тяжёлых фаз: static-краул vs dynamic CDP-проход. Enrichment (dns/rkn/tls) логируется
         // отдельно ниже. Главный потребитель времени на premium-скане — обычно dynamic recrawl.
         log.info("Scan {} phase timing (ms): staticCrawl={} dynamicRecrawl={} (pagesFetched={})",
@@ -160,11 +160,11 @@ public class ScanPipeline {
         List<ComplianceFinding> findings = findingAssembler.assemble(scanId, engineResult.facts());
         int score = scoreCalculator.calculate(findings);
 
-        // Observability: метрики краула и ошибок правил (§5.7).
-        meterRegistry.counter("compliance.crawl.pages.fetched").increment(diag.pagesFetched());
-        meterRegistry.counter("compliance.crawl.pages.failed").increment(diag.pagesFailed());
-        if (engineResult.errors() != null && !engineResult.errors().isEmpty()) {
-            meterRegistry.counter("compliance.rule.errors").increment(engineResult.errors().size());
+        // Observability: метрики краула, findings и ошибок правил (§5.7).
+        metrics.recordCrawlPages(diag.pagesFetched(), diag.pagesFailed());
+        metrics.recordFindings(findings);
+        if (engineResult.errors() != null) {
+            metrics.recordRuleErrors(engineResult.errors().size());
         }
 
         String diagnosticsJson = serializeDiagnostics(diag, engineResult);
@@ -219,7 +219,7 @@ public class ScanPipeline {
         }
         // CDP стал недоступен после pre-crawl проверки → premium без dynamic недопустим.
         if (!dynamicCrawler.isAvailable()) {
-            meterRegistry.counter("compliance.dynamic.failure").increment();
+            metrics.dynamicResult(io.okdocs.compliance.worker.config.WorkerMetrics.DynamicResult.FAILURE);
             throw new DynamicRequiredFailedException("CDP became unavailable during premium scan");
         }
         int maxDynamicPages = properties.getCrawler().getDynamic().getMaxPages();
@@ -247,12 +247,12 @@ public class ScanPipeline {
             progressService.updateProgress(scanId, 50, "Динамический анализ (рендеринг)");
             dynamic = dynamicCrawler.crawlPages(targets, allowedThirdParty);
         } catch (Exception e) {
-            meterRegistry.counter("compliance.dynamic.failure").increment();
+            metrics.dynamicResult(io.okdocs.compliance.worker.config.WorkerMetrics.DynamicResult.FAILURE);
             // dynamicRequired: проход предпринят и упал → весь скан FAILED + refund.
             throw new DynamicRequiredFailedException("Dynamic re-crawl failed: " + e.getMessage());
         }
         if (dynamic.isEmpty()) {
-            meterRegistry.counter("compliance.dynamic.failure").increment();
+            metrics.dynamicResult(io.okdocs.compliance.worker.config.WorkerMetrics.DynamicResult.FAILURE);
             throw new DynamicRequiredFailedException("Dynamic re-crawl returned no pages");
         }
         // DYNAMIC заменяет STATIC по тому же URL, порядок static сохраняется.
@@ -261,7 +261,7 @@ public class ScanPipeline {
             byUrl.put(p.url(), p);
         }
         dynamic.forEach(byUrl::put);
-        meterRegistry.counter("compliance.dynamic.success").increment();
+        metrics.dynamicResult(io.okdocs.compliance.worker.config.WorkerMetrics.DynamicResult.SUCCESS);
         log.info("Scan {} dynamic re-crawl: {} of {} target pages enriched",
                 scanId, dynamic.size(), targets.size());
         return new ArrayList<>(byUrl.values());
@@ -318,8 +318,7 @@ public class ScanPipeline {
      */
     private long recordEnrichment(String step, long startMs) {
         long elapsed = System.currentTimeMillis() - startMs;
-        meterRegistry.timer("compliance.enrichment", "step", step)
-                .record(elapsed, java.util.concurrent.TimeUnit.MILLISECONDS);
+        metrics.recordEnrichment(step, elapsed);
         return elapsed;
     }
 

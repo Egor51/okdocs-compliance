@@ -56,7 +56,7 @@ class ScanPipelineTest {
     void setUp() {
         pipeline = new ScanPipeline(siteCrawler, dynamicCrawler, tlsInspector, dnsInspector,
                 rknRegistryClient, ruleEngine, findingAssembler, scoreCalculator, progressService,
-                new ObjectMapper(), new SimpleMeterRegistry(), new ComplianceWorkerProperties());
+                new ObjectMapper(), new io.okdocs.compliance.worker.config.WorkerMetrics(new SimpleMeterRegistry()), new ComplianceWorkerProperties());
     }
 
     @Test
