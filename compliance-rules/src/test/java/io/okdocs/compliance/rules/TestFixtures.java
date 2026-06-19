@@ -89,11 +89,49 @@ public final class TestFixtures {
         return ctxTechnical(List.of(simplePage("https://site.ru")), List.of(), List.of(tls));
     }
 
-    /** Успешный handshake: protocol/SAN/notAfter задаются явно. */
+    /**
+     * Успешный handshake: protocol/SAN/notAfter задаются явно. Зондирование версий считается
+     * выполненным — {@code supportedProtocols = [protocol]} (только согласованная версия). Для
+     * сценариев с реально принимаемым legacy используйте {@link #tlsOkSupporting}.
+     */
     public static TlsInfo tlsOk(String host, String protocol, List<String> san,
                                 java.time.Instant notAfter) {
-        return new TlsInfo(host, true, null, protocol, "TLS_AES_128_GCM_SHA256",
-                "CN=" + host, "CN=Test CA", san, java.time.Instant.now().minusSeconds(86400), notAfter);
+        return tlsOkSupporting(host, protocol, san, notAfter, List.of(protocol));
+    }
+
+    /**
+     * Успешный handshake с явным набором принимаемых сервером версий ({@code supportedProtocols}).
+     * Моделирует «согласовано TLS 1.3, но TLS 1.0/1.1 включены»: probe инспектора выполнен.
+     */
+    public static TlsInfo tlsOkSupporting(String host, String protocol, List<String> san,
+                                          java.time.Instant notAfter, List<String> supportedProtocols) {
+        return new TlsInfo(host, true, null, true,
+                hostMatchesAny(host, san), false, protocol, "TLS_AES_128_GCM_SHA256",
+                "CN=" + host, "CN=Test CA", san,
+                java.time.Instant.now().minusSeconds(86400), notAfter, supportedProtocols);
+    }
+
+    /** Совпадение host с SAN с поддержкой левого wildcard — повторяет логику TlsInfo для фикстур. */
+    private static boolean hostMatchesAny(String host, List<String> names) {
+        if (host == null || names == null) {
+            return false;
+        }
+        String h = host.toLowerCase(java.util.Locale.ROOT);
+        for (String name : names) {
+            if (name == null) {
+                continue;
+            }
+            String n = name.toLowerCase(java.util.Locale.ROOT).trim();
+            if (n.startsWith("*.")) {
+                int dot = h.indexOf('.');
+                if (dot > 0 && h.substring(dot).equals(n.substring(1))) {
+                    return true;
+                }
+            } else if (h.equals(n)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Проваленный handshake с заданной ошибкой. */

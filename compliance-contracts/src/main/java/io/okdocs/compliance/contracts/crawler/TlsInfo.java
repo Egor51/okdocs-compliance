@@ -25,16 +25,28 @@ public record TlsInfo(
         boolean hostnameMatched,
         /** Сбой похож на сетевой/resolution/timeout, а не на проблему сертификата. */
         boolean networkError,
+        /** Протокол, по которому фактически согласовано основное соединение (напр. {@code TLSv1.3}). */
         String protocol,
         String cipherSuite,
         String subject,
         String issuer,
         List<String> subjectAltNames,
         Instant notBefore,
-        Instant notAfter
+        Instant notAfter,
+        /**
+         * Все версии протокола, которые сервер реально принимает — снимаются активными probe-сокетами
+         * по версиям, а не из одного handshake ({@link #protocol()} вернул бы только максимальную).
+         * Нужно для детекции «сервер всё ещё принимает TLS 1.0/1.1»: рукопожатие договаривается на
+         * TLS 1.3, но legacy при этом может оставаться включённым.
+         * <p>
+         * {@code null} — зондирование не выполнялось (старые снимки / неуспешный handshake): отличать
+         * от пустого/непустого списка обязательно, иначе правило выдаст ложное «современный TLS».
+         */
+        List<String> supportedProtocols
 ) {
     public TlsInfo {
         subjectAltNames = subjectAltNames == null ? List.of() : List.copyOf(subjectAltNames);
+        supportedProtocols = supportedProtocols == null ? null : List.copyOf(supportedProtocols);
     }
 
     /**
@@ -48,7 +60,8 @@ public record TlsInfo(
                 handshakeOk,
                 handshakeOk && hostMatchesAny(host, subjectAltNames),
                 !handshakeOk && !isCertificateLikeError(handshakeError),
-                protocol, cipherSuite, subject, issuer, subjectAltNames, notBefore, notAfter);
+                protocol, cipherSuite, subject, issuer, subjectAltNames, notBefore, notAfter,
+                null);
     }
 
     private static boolean hostMatchesAny(String host, List<String> names) {

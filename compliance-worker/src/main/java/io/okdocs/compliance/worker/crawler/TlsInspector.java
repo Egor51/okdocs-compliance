@@ -64,11 +64,58 @@ public class TlsInspector {
         int readTimeout = properties.getCrawler().getPageTimeoutMs();
         try (SSLSocket socket = openTlsSocket(host, address, connectTimeout, readTimeout)) {
             socket.startHandshake();
-            return fromSession(host, socket.getSession());
+            String negotiated = socket.getSession().getProtocol();
+            List<String> supported = probeSupportedProtocols(host, address, connectTimeout, readTimeout, negotiated);
+            return fromSession(host, socket.getSession(), supported);
         } catch (Exception e) {
             String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             log.debug("TLS inspect failed host={}: {}", host, msg);
             return failed(host, msg);
+        }
+    }
+
+    /** Версии протокола, по которым инспектор пробует отдельные probe-сокеты (легаси-детект). */
+    private static final List<String> LEGACY_PROBE_PROTOCOLS = List.of("TLSv1.1", "TLSv1");
+
+    /**
+     * Какие версии TLS сервер реально принимает. Основной handshake договаривается на максимум
+     * ({@code negotiated}), поэтому legacy (TLS 1.0/1.1) из него не видно — для каждой делаем
+     * отдельный короткий probe-сокет, форсируя только эту версию. Успех handshake → версия принимается.
+     * <p>
+     * Возвращает согласованный протокол + все успешно подтверждённые legacy. Никогда не бросает: сбой
+     * отдельного probe (сервер версию не принимает / закрыл соединение) — это и есть ожидаемый «нет».
+     */
+    private List<String> probeSupportedProtocols(String host, InetAddress address,
+                                                 int connectTimeout, int readTimeout, String negotiated) {
+        List<String> supported = new ArrayList<>();
+        if (negotiated != null && !negotiated.isBlank()) {
+            supported.add(negotiated);
+        }
+        for (String protocol : LEGACY_PROBE_PROTOCOLS) {
+            if (protocol.equalsIgnoreCase(negotiated)) {
+                continue; // уже подтверждён основным handshake — отдельный probe не нужен
+            }
+            if (acceptsProtocol(host, address, connectTimeout, readTimeout, protocol)) {
+                supported.add(protocol);
+            }
+        }
+        return supported;
+    }
+
+    /** Принимает ли сервер ровно эту версию протокола (форсируем её одну на probe-сокете). */
+    private boolean acceptsProtocol(String host, InetAddress address,
+                                    int connectTimeout, int readTimeout, String protocol) {
+        try (SSLSocket socket = openTlsSocket(host, address, connectTimeout, readTimeout)) {
+            socket.setEnabledProtocols(new String[]{protocol});
+            socket.startHandshake();
+            return true;
+        } catch (IllegalArgumentException e) {
+            // JVM не поддерживает эту legacy-версию (отключена в java.security) — проверить нельзя.
+            log.debug("TLS probe {} unsupported by JVM for {}: {}", protocol, host, e.getMessage());
+            return false;
+        } catch (Exception e) {
+            log.debug("TLS probe {} rejected by {}: {}", protocol, host, e.getMessage());
+            return false;
         }
     }
 
@@ -114,7 +161,7 @@ public class TlsInspector {
         return ssl;
     }
 
-    private static TlsInfo fromSession(String host, SSLSession session) {
+    private static TlsInfo fromSession(String host, SSLSession session, List<String> supportedProtocols) {
         String protocol = session.getProtocol();
         String cipher = session.getCipherSuite();
         Certificate[] chain;
@@ -122,11 +169,11 @@ public class TlsInspector {
             chain = session.getPeerCertificates();
         } catch (Exception e) {
             return new TlsInfo(host, true, null, true, false, false,
-                    protocol, cipher, null, null, List.of(), null, null);
+                    protocol, cipher, null, null, List.of(), null, null, supportedProtocols);
         }
         if (chain.length == 0 || !(chain[0] instanceof X509Certificate leaf)) {
             return new TlsInfo(host, true, null, true, false, false,
-                    protocol, cipher, null, null, List.of(), null, null);
+                    protocol, cipher, null, null, List.of(), null, null, supportedProtocols);
         }
         String subject = leaf.getSubjectX500Principal() == null ? null : leaf.getSubjectX500Principal().getName();
         String issuer = leaf.getIssuerX500Principal() == null ? null : leaf.getIssuerX500Principal().getName();
@@ -137,7 +184,8 @@ public class TlsInspector {
                 host, true, null, true, hostMatchesAny(host, hostnameNames), false,
                 protocol, cipher, subject, issuer, san,
                 leaf.getNotBefore() == null ? null : leaf.getNotBefore().toInstant(),
-                leaf.getNotAfter() == null ? null : leaf.getNotAfter().toInstant());
+                leaf.getNotAfter() == null ? null : leaf.getNotAfter().toInstant(),
+                supportedProtocols);
     }
 
     /** DNS-имена из SAN (type 2). Падение разбора → пустой список (host-mismatch правило не сработает). */
@@ -160,8 +208,9 @@ public class TlsInspector {
     }
 
     private static TlsInfo failed(String host, String error) {
+        // Handshake не состоялся — зондирование версий не выполнялось: supportedProtocols = null.
         return new TlsInfo(host, false, error, false, false,
-                !isCertificateLikeError(error), null, null, null, null, List.of(), null, null);
+                !isCertificateLikeError(error), null, null, null, null, List.of(), null, null, null);
     }
 
     private static boolean isDnsName(String host) {
