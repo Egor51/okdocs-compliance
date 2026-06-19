@@ -42,7 +42,8 @@ class ScanPipelineTest {
 
     @Mock SiteCrawler siteCrawler;
     @Mock DynamicCrawler dynamicCrawler;
-    @Mock HostCountryDetector hostCountryDetector;
+    @Mock io.okdocs.compliance.worker.crawler.TlsInspector tlsInspector;
+    @Mock DnsInspector dnsInspector;
     @Mock RknRegistryClient rknRegistryClient;
     @Mock RuleEngine ruleEngine;
     @Mock FindingAssembler findingAssembler;
@@ -53,9 +54,9 @@ class ScanPipelineTest {
 
     @BeforeEach
     void setUp() {
-        pipeline = new ScanPipeline(siteCrawler, dynamicCrawler, hostCountryDetector, rknRegistryClient,
-                ruleEngine, findingAssembler, scoreCalculator, progressService, new ObjectMapper(),
-                new SimpleMeterRegistry(), new ComplianceWorkerProperties());
+        pipeline = new ScanPipeline(siteCrawler, dynamicCrawler, tlsInspector, dnsInspector,
+                rknRegistryClient, ruleEngine, findingAssembler, scoreCalculator, progressService,
+                new ObjectMapper(), new SimpleMeterRegistry(), new ComplianceWorkerProperties());
     }
 
     @Test
@@ -80,7 +81,7 @@ class ScanPipelineTest {
         // static вернул страницу, достойную dynamic (URL с "privacy")
         var page = page("https://example.com/privacy");
         when(siteCrawler.crawl(anyString(), anyInt()))
-                .thenReturn(new SiteCrawler.CrawlResult(List.of(page), new CrawlerDiagnostics(1, 1, 0, false)));
+                .thenReturn(new SiteCrawler.CrawlResult(List.of(page), List.of(), new CrawlerDiagnostics(1, 1, 0, false)));
         // dynamic вернул пусто → деградируем на static → PARTIAL с результатом (не FAILED+refund)
         when(dynamicCrawler.crawlPages(any(), any())).thenReturn(Map.of());
         stubAnalysis();
@@ -97,7 +98,7 @@ class ScanPipelineTest {
         when(dynamicCrawler.isAvailable()).thenReturn(true);
         var page = page("https://example.com/privacy");
         when(siteCrawler.crawl(anyString(), anyInt()))
-                .thenReturn(new SiteCrawler.CrawlResult(List.of(page), new CrawlerDiagnostics(1, 1, 0, false)));
+                .thenReturn(new SiteCrawler.CrawlResult(List.of(page), List.of(), new CrawlerDiagnostics(1, 1, 0, false)));
         when(dynamicCrawler.crawlPages(any(), any())).thenThrow(new RuntimeException("CDP boom"));
         stubAnalysis();
 
@@ -115,7 +116,7 @@ class ScanPipelineTest {
         when(dynamicCrawler.isAvailable()).thenReturn(true);
         var page = page("https://example.com/about"); // не приоритетная dynamic-страница
         when(siteCrawler.crawl(anyString(), anyInt()))
-                .thenReturn(new SiteCrawler.CrawlResult(List.of(page), new CrawlerDiagnostics(1, 1, 0, false)));
+                .thenReturn(new SiteCrawler.CrawlResult(List.of(page), List.of(), new CrawlerDiagnostics(1, 1, 0, false)));
         when(dynamicCrawler.crawlPages(eq(List.of("https://example.com/about")), any()))
                 .thenReturn(Map.of("https://example.com/about", dynamicPage("https://example.com/about")));
         stubAnalysis();
@@ -128,8 +129,14 @@ class ScanPipelineTest {
     }
 
     private void stubAnalysis() {
-        when(hostCountryDetector.detectCountry(anyString())).thenReturn(java.util.Optional.of("RU"));
-        when(hostCountryDetector.resolveIps(anyString())).thenReturn(List.of("203.0.113.1"));
+        lenient().when(tlsInspector.inspect(anyString(), org.mockito.ArgumentMatchers.anyList())).thenReturn(
+                new io.okdocs.compliance.contracts.crawler.TlsInfo(
+                        "example.com", true, null, "TLSv1.3", "TLS_AES_128_GCM_SHA256",
+                        null, null, List.of(), null, null));
+        when(dnsInspector.inspect(anyString())).thenReturn(
+                new io.okdocs.compliance.contracts.crawler.DnsInfo(
+                        "example.com", false, "RU", List.of("203.0.113.1"), List.of("RU"),
+                        List.of(), List.of(), List.of()));
         when(rknRegistryClient.lookup(anyString(), any()))
                 .thenReturn(io.okdocs.compliance.contracts.enums.RegistryStatus.LOOKUP_FAILED);
         when(ruleEngine.evaluate(any())).thenReturn(new RuleEngineResult(List.of(), List.of()));

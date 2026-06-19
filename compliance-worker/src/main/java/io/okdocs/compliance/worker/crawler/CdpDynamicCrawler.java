@@ -438,8 +438,19 @@ public class CdpDynamicCrawler implements DynamicCrawler {
 
     // ── CDP WebSocket page fetch ──────────────────────────────────────────────
 
-    /** Результат одного fetch: финальные url/title/html + сторонние хосты, запрошенные до согласия. */
-    private record PageFetch(String finalUrl, String title, String html, List<String> preConsentHosts) {
+    /**
+     * Результат одного fetch: финальные url/title/html + наблюдения до согласия — сторонние хосты,
+     * cookies и ключи localStorage.
+     */
+    private record PageFetch(String finalUrl, String title, String html, List<String> preConsentHosts,
+                             List<io.okdocs.compliance.contracts.crawler.ObservedCookie> preConsentCookies,
+                             List<String> preConsentStorageKeys,
+                             boolean preConsentCookiesSnapshotAvailable,
+                             boolean preConsentStorageSnapshotAvailable) {
+    }
+
+    private record CookieSnapshot(List<io.okdocs.compliance.contracts.crawler.ObservedCookie> cookies,
+                                  boolean available) {
     }
 
     private record RequestObservation(String host, double epochMs) {
@@ -470,12 +481,15 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                 // best-effort
             }
 
-            // Один round-trip: собираем url+title+html+момент баннера одним JS-вызовом.
+            // Один round-trip: собираем url+title+html+момент баннера+ключи localStorage одним JS-вызовом.
+            // localStorage снимаем здесь (до взаимодействия с баннером) — это состояние «до согласия».
             String json = s.eval(
-                    "(function(){var b=window.__okdocksBannerTs;var r={u:window.location.href,"
+                    "(function(){var b=window.__okdocksBannerTs;var ls=[];"
+                            + "try{for(var i=0;i<localStorage.length;i++){ls.push(localStorage.key(i));}}catch(e){}"
+                            + "var r={u:window.location.href,"
                             + "t:document.title,h:document.documentElement.outerHTML,"
                             + "b:(typeof b==='number'?b:null),"
-                            + "o:(window.__okdocksBannerObs===1)};return JSON.stringify(r);})()");
+                            + "o:(window.__okdocksBannerObs===1),ls:ls};return JSON.stringify(r);})()");
             JsonNode node = objectMapper.readTree(json);
             String finalUrl = node.path("u").asText("");
             if (isBrowserInternalUrl(finalUrl)) {
@@ -489,14 +503,71 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                 preConsentHosts = computePreConsentHosts(
                         s.firstRequestEpochMsByHost(), bannerTs, allowedDomain);
             }
+
+            // Cookies/storage до согласия (Этап 4 Phase 1): текущий проход НЕ кликает по баннеру,
+            // поэтому снимок = состояние до согласия. Атрибуты secure/httpOnly доступны только через
+            // CDP Network.getCookies (не из document.cookie). Ключи localStorage пришли в node.ls.
+            CookieSnapshot cookieSnapshot = collectCookies(s);
+            List<String> preConsentStorageKeys = readStringArray(node.path("ls"));
+
             return new PageFetch(
                     finalUrl,
                     node.path("t").asText(""),
                     node.path("h").asText(""),
-                    preConsentHosts);
+                    preConsentHosts,
+                    cookieSnapshot.cookies(),
+                    preConsentStorageKeys,
+                    cookieSnapshot.available(),
+                    node.has("ls") && node.path("ls").isArray());
         } finally {
             s.clearDomainPolicy();
         }
+    }
+
+    /**
+     * Cookies браузера на момент снимка (до согласия) через CDP {@code Network.getCookies}. Атрибуты
+     * secure/httpOnly/sameSite доступны только так (не из {@code document.cookie}). {@code session} —
+     * cookie без срока истечения (CDP {@code session:true} или {@code expires <= 0}). Любой сбой →
+     * пустой список (cookie-правила тогда не сработают, скан не падает).
+     */
+    private CookieSnapshot collectCookies(CdpSession s) {
+        try {
+            JsonNode resp = s.send("Network.getCookies", null);
+            JsonNode cookies = resp.path("cookies");
+            if (!cookies.isArray() || cookies.isEmpty()) {
+                return new CookieSnapshot(List.of(), true);
+            }
+            List<io.okdocs.compliance.contracts.crawler.ObservedCookie> result = new ArrayList<>(cookies.size());
+            for (JsonNode c : cookies) {
+                boolean session = c.path("session").asBoolean(false) || c.path("expires").asDouble(-1) <= 0;
+                result.add(new io.okdocs.compliance.contracts.crawler.ObservedCookie(
+                        c.path("name").asText(""),
+                        c.path("domain").asText(""),
+                        c.path("secure").asBoolean(false),
+                        c.path("httpOnly").asBoolean(false),
+                        c.path("sameSite").asText(null),
+                        session));
+            }
+            return new CookieSnapshot(result, true);
+        } catch (Exception e) {
+            log.debug("CDP Network.getCookies failed: {}", e.getMessage());
+            return new CookieSnapshot(List.of(), false);
+        }
+    }
+
+    /** Преобразует JSON-массив строк в List (для ключей localStorage). */
+    private static List<String> readStringArray(JsonNode array) {
+        if (array == null || !array.isArray() || array.isEmpty()) {
+            return List.of();
+        }
+        List<String> result = new ArrayList<>(array.size());
+        for (JsonNode n : array) {
+            String v = n.asText(null);
+            if (v != null && !v.isBlank()) {
+                result.add(v);
+            }
+        }
+        return result;
     }
 
     /**
@@ -931,7 +1002,8 @@ public class CdpDynamicCrawler implements DynamicCrawler {
         }
         Document doc = Jsoup.parse(fetch.html(), url);
         return PageExtractor.extract(url, doc, extractDomain(url), RenderMode.DYNAMIC,
-                fetch.preConsentHosts());
+                fetch.preConsentHosts(), fetch.preConsentCookies(), fetch.preConsentStorageKeys(),
+                fetch.preConsentCookiesSnapshotAvailable(), fetch.preConsentStorageSnapshotAvailable());
     }
 
     static boolean isBrowserInternalUrl(String url) {

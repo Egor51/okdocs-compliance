@@ -1,0 +1,15 @@
+# Провайдер дашбордов: Grafana грузит все JSON из /var/lib/grafana/dashboards (смонтировано
+# из observability/grafana/dashboards). Дашборд воркера живёт в репозитории как код.
+apiVersion: 1
+
+providers:
+  - name: compliance
+    orgId: 1
+    folder: Compliance
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

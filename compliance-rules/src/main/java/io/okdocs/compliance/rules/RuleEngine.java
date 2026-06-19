@@ -53,6 +53,15 @@ public final class RuleEngine {
             }
 
             try {
+                // Правило само сообщает, есть ли у него входные данные. Нет данных (напр. cookie-
+                // правило на скане без собранных cookies) → NOT_EVALUATED, а НЕ PASSED: «не проверяли»
+                // ≠ «нарушений нет». Иначе отчёт показал бы ложное «проверка пройдена».
+                if (!rule.appliesTo(ctx)) {
+                    outcomes.add(new RuleOutcome(code, RuleOutcomeStatus.NOT_EVALUATED,
+                            definition.title(), definition.severity(), definition.category(),
+                            "Правило не проверялось: нет входных данных для проверки."));
+                    continue;
+                }
                 List<RuleFact> ruleFacts = rule.evaluate(ctx);
                 if (ruleFacts != null && !ruleFacts.isEmpty()) {
                     facts.addAll(ruleFacts);

@@ -16,8 +16,8 @@ import java.util.Locale;
 
 /**
  * Сервер сайта расположен за пределами РФ (риск нарушения локализации, ч. 5 ст. 18 152-ФЗ).
- * В okdocks страна определялась инъектированным {@code HostCountryDetector}; у нас enrichment уже
- * выложен worker'ом в {@link ScanAnalysisContext#hostCountry()} — правило остаётся чистой функцией.
+ * Страна хостинга уже выложена worker'ом в {@link ScanAnalysisContext#hostCountry()} из DNS/GeoIP
+ * enrichment — правило остаётся чистой функцией.
  * <p>
  * GeoIP мог не разрезолвить IP: {@code hostCountry == null} → UNVERIFIED (не молчим, PLAN.md §1.6).
  * Метаданные перенесены из MVP (okdocks {@code NON_RU_HOSTING}). confidence для подтверждённого

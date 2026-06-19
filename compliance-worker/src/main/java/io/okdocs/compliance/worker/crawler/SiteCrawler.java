@@ -1,6 +1,7 @@
 package io.okdocs.compliance.worker.crawler;
 
 import io.okdocs.compliance.contracts.crawler.CrawlerDiagnostics;
+import io.okdocs.compliance.contracts.crawler.HttpResponseInfo;
 import io.okdocs.compliance.contracts.crawler.PageAnalysisResult;
 import io.okdocs.compliance.worker.config.ComplianceWorkerProperties;
 import lombok.RequiredArgsConstructor;
@@ -11,21 +12,29 @@ import org.jsoup.nodes.Element;
 import org.jsoup.parser.Parser;
 import org.springframework.stereotype.Component;
 
+import org.slf4j.MDC;
+
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -98,14 +107,7 @@ public class SiteCrawler {
             return CrawlResult.failed();
         }
 
-        Set<String> visited = new HashSet<>();
-        Deque<UrlWithDepth> queue = new ArrayDeque<>();
-        List<PageAnalysisResult> results = new ArrayList<>();
-        Set<String> acceptedFingerprints = new HashSet<>();
-        Map<String, Boolean> hostSafetyCache = new HashMap<>();
-
-        int attempted = 0;
-        int failed = 0;
+        Map<String, Boolean> hostSafetyCache = new ConcurrentHashMap<>();
 
         // Worker — отдельный trust boundary: api валидировал URL, но DNS мог перепривязаться
         // (DNS rebinding) между валидацией api и fetch'ем worker'а. Перевалидируем стартовый хост
@@ -122,80 +124,298 @@ public class SiteCrawler {
 
         String baseUrl = extractBaseUrl(startUrl);
         String normalizedStart = normalizeUrl(startUrl);
-        queue.add(new UrlWithDepth(startUrl, 0));
 
-        seedQueue(queue, baseUrl, startDomain, normalizedStart, maxPages, hostSafetyCache);
+        BlockingQueue<UrlWithDepth> queue = new LinkedBlockingQueue<>();
+        CrawlState state = new CrawlState(startDomain, robots, deadline, maxPages, maxDepth, queue,
+                hostSafetyCache);
+        state.enqueue(new UrlWithDepth(startUrl, 0));
+        seedQueue(state, baseUrl, startDomain, normalizedStart, maxPages, hostSafetyCache);
 
-        boolean timedOut = false;
-        while (!queue.isEmpty() && results.size() < maxPages) {
-            if (System.currentTimeMillis() > deadline) {
-                log.warn("SiteCrawler deadline reached, {} pages so far", results.size());
-                timedOut = true;
-                break;
-            }
-            UrlWithDepth current = queue.poll();
-            String normalized = normalizeUrl(current.url());
-            if (normalized == null || visited.contains(normalized) || current.depth() > maxDepth) {
-                continue;
-            }
-            if (!robots.isAllowed(normalized)) {
-                log.debug("Skipping disallowed by robots.txt: {}", normalized);
-                continue;
-            }
-            visited.add(normalized);
+        runWorkers(state);
 
-            // SSRF-гард на КАЖДЫЙ URL перед запросом (не только на redirect-хопы): хост seed/ссылки
-            // мог за-DNS-резолвиться в приватную сеть. Проверяем в том же процессе, что и fetch.
-            if (!isSafeHost(PageExtractor.extractDomain(normalized), hostSafetyCache)) {
-                log.warn("SSRF blocked url={} (private/blocked host)", normalized);
-                attempted++;
-                failed++;
-                continue;
-            }
-            attempted++;
+        // Стартовая страница (depth 0) всегда первая: selectDynamicTargets берёт pages.get(0) как
+        // homepage. Параллельный обход даёт недетерминированный порядок, поэтому ставим её вперёд
+        // явно (хранится отдельно в state.startPage), остальное — в порядке завершения.
+        List<PageAnalysisResult> ordered = new ArrayList<>();
+        PageAnalysisResult start = state.startPage.get();
+        if (start != null) {
+            ordered.add(start);
+        }
+        ordered.addAll(state.results);
 
-            try {
-                Document doc = fetchWithRedirectValidation(normalized, hostSafetyCache);
-                String pageUrl = normalizeUrl(doc.location());
-                if (pageUrl == null) {
-                    pageUrl = normalized;
+        boolean timedOut = state.timedOut.get();
+        int fetched = ordered.size();
+        log.info("SiteCrawler done url={} status={} pages={} attempted={} failed={}",
+                startUrl, timedOut ? "PARTIAL" : "COMPLETE", fetched,
+                state.attempted.get(), state.failed.get());
+
+        return new CrawlResult(
+                List.copyOf(ordered),
+                List.copyOf(state.responses),
+                new CrawlerDiagnostics(state.attempted.get(), fetched, state.failed.get(), timedOut));
+    }
+
+    /** Запускает пул воркеров и ждёт естественного завершения BFS (очередь пуста И никто не в работе). */
+    private void runWorkers(CrawlState state) {
+        int workers = Math.max(1, properties.getCrawler().getConcurrency());
+        // MDC (scanId/scanKind) живёт на потоке Kafka-листенера; fetch-* — отдельные потоки пула.
+        // Снимаем контекст вызывающего потока и ставим в каждом воркере, чтобы static-логи
+        // трассировались по scanId, как и весь остальной пайплайн.
+        Map<String, String> parentMdc = MDC.getCopyOfContextMap();
+        ExecutorService pool = Executors.newFixedThreadPool(workers,
+                r -> new Thread(r, "static-crawler-" + System.nanoTime() % 1000));
+        try {
+            List<Future<?>> futures = new ArrayList<>(workers);
+            for (int i = 0; i < workers; i++) {
+                futures.add(pool.submit(() -> worker(state, parentMdc)));
+            }
+            for (Future<?> f : futures) {
+                try {
+                    f.get();
+                } catch (Exception e) {
+                    log.debug("static-crawler worker failed: {}", e.getMessage());
                 }
-                PageAnalysisResult page = PageExtractor.extract(pageUrl, doc, startDomain);
+            }
+        } finally {
+            pool.shutdownNow();
+            try {
+                if (!pool.awaitTermination(3, TimeUnit.SECONDS)) {
+                    log.debug("static-crawler pool did not terminate cleanly within 3s");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
 
-                if (current.depth() > 0 && !acceptPage(pageUrl, page, acceptedFingerprints)) {
+    /**
+     * Один воркер: тянет URL из общей очереди, фетчит, кладёт найденные ссылки обратно.
+     * <p>
+     * Завершение BFS без преждевременного выхода и без зависания строится на едином счётчике
+     * {@code pendingWork} = (URL в очереди) + (URL в обработке). Он инкрементируется при КАЖДОМ
+     * добавлении в очередь (стартовый URL, seed'ы, найденные ссылки) и декрементируется ровно один
+     * раз после полной обработки URL. {@code pendingWork == 0} означает, что работы нет и появиться
+     * не может (потомки добавляются до декремента родителя, т.е. пока его единица ещё учтена) —
+     * это атомарный признак конца, не зависящий от тайминга poll. Воркеры с пустым poll просто
+     * крутятся с коротким таймаутом до {@code pendingWork==0} или {@code stopped}.
+     */
+    private void worker(CrawlState state, Map<String, String> parentMdc) {
+        if (parentMdc != null) {
+            MDC.setContextMap(parentMdc);
+        }
+        try {
+            while (!state.stopped.get()
+                    && state.accepted.get() < state.maxPages
+                    && state.pendingWork.get() > 0) {
+                UrlWithDepth current = state.queue.poll(50, TimeUnit.MILLISECONDS);
+                if (current == null) {
                     continue;
                 }
-                results.add(page);
-                for (String link : page.internalLinks()) {
-                    String normLink = normalizeUrl(link);
-                    if (normLink != null && !visited.contains(normLink)
-                            && isCrawlableCandidate(normLink, startDomain)) {
-                        queue.add(new UrlWithDepth(normLink, current.depth() + 1));
-                    }
+                try {
+                    processUrl(state, current);
+                } finally {
+                    state.pendingWork.decrementAndGet();
                 }
-                Thread.sleep(properties.getCrawler().getRateLimitMs());
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-                break;
-            } catch (SsrfBlockedException e) {
-                log.warn("SSRF redirect blocked url={}: {}", normalized, e.getMessage());
-                failed++;
-            } catch (Exception e) {
-                log.warn("Failed to fetch url={}: {}", normalized, e.getClass().getSimpleName());
-                failed++;
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /** Обработка одного URL: дедлайн/лимит/visited/robots/SSRF → fetch → accept → results + ссылки. */
+    private void processUrl(CrawlState state, UrlWithDepth current) throws InterruptedException {
+        if (System.currentTimeMillis() > state.deadline) {
+            if (state.timedOut.compareAndSet(false, true)) {
+                log.warn("SiteCrawler deadline reached, {} pages so far", state.accepted.get());
+            }
+            state.stopped.set(true);
+            return;
+        }
+        // Терминальная остановка — ТОЛЬКО когда реально ПРИНЯТО maxPages страниц (homepage включён).
+        // Это монотонное условие: набрали лимит → больше не нужно. НЕ останавливаемся по «слоты заняты
+        // сейчас» — занятые слоты могут вернуться (in-flight упал/soft-404), и тогда оставшиеся URL
+        // из очереди должны добраться до fetch.
+        if (state.accepted.get() >= state.maxPages) {
+            state.stopped.set(true);
+            return;
+        }
+        String normalized = normalizeUrl(current.url());
+        if (normalized == null || current.depth() > state.maxDepth) {
+            return;
+        }
+        if (!state.robots.isAllowed(normalized)) {
+            log.debug("Skipping disallowed by robots.txt: {}", normalized);
+            return;
+        }
+        // Резервируем слот ДО fetch (атомарный потолок). Если слотов нет, но лимит ещё НЕ принят —
+        // часть слотов держат in-flight страницы, которые могут упасть и вернуть слот. Тогда не
+        // теряем URL: возвращаем его в очередь (visited ещё не помечен) и уступаем. Если же лимит
+        // реально принят — выходим: дальше fetch не нужен.
+        if (!state.tryReserveSlot()) {
+            if (state.accepted.get() < state.maxPages) {
+                state.requeue(current);
+                Thread.sleep(10);
+            }
+            return;
+        }
+        // visited помечаем ПОСЛЕ удачного резерва слота: иначе URL, отложенный из-за временно занятых
+        // слотов, оказался бы помечен visited и потерян при возврате в очередь (баг полноты).
+        if (!state.visited.add(normalized)) {
+            state.releaseSlot();
+            return;
+        }
+        // SSRF-гард на КАЖДЫЙ URL перед запросом (не только на redirect-хопы): хост seed/ссылки
+        // мог за-DNS-резолвиться в приватную сеть. Проверяем в том же процессе, что и fetch.
+        if (!isSafeHost(PageExtractor.extractDomain(normalized), state.hostSafetyCache)) {
+            log.warn("SSRF blocked url={} (private/blocked host)", normalized);
+            state.attempted.incrementAndGet();
+            state.failed.incrementAndGet();
+            state.releaseSlot();
+            return;
+        }
+        state.attempted.incrementAndGet();
+
+        boolean accepted = false;
+        boolean isStart = current.depth() == 0;
+        try {
+            FetchedDocument fetched = fetchWithRedirectValidation(normalized, state.hostSafetyCache);
+            Document doc = fetched.document();
+            String pageUrl = normalizeUrl(doc.location());
+            if (pageUrl == null) {
+                pageUrl = normalized;
+            }
+            PageAnalysisResult page = PageExtractor.extract(pageUrl, doc, state.startDomain);
+
+            if (!isStart && !acceptPage(pageUrl, page, state.acceptedFingerprints)) {
+                return;
+            }
+            // Technical-паспорт: responses всей redirect-цепочки. URL финального ответа выравниваем
+            // с page.url() (= doc.location() после редиректов), чтобы security-header правила
+            // адресовали находку к той же странице, что и остальной анализ.
+            state.responses.addAll(alignFinalResponseUrl(fetched.responses(), pageUrl));
+            accepted = true;
+            state.accepted.incrementAndGet(); // монотонный счётчик реально принятых (для лимита/лога)
+            if (isStart) {
+                // Стартовую страницу помечаем по факту depth==0, а НЕ по совпадению URL: после
+                // redirect (http→https/www) её финальный URL ≠ исходный, и сравнение по строке
+                // ломало бы инвариант «homepage первая» для selectDynamicTargets.
+                state.startPage.set(page);
+            } else {
+                state.results.add(page);
+            }
+            for (String link : page.internalLinks()) {
+                String normLink = normalizeUrl(link);
+                if (normLink != null && !state.visited.contains(normLink)
+                        && isCrawlableCandidate(normLink, state.startDomain)) {
+                    state.enqueue(new UrlWithDepth(normLink, current.depth() + 1));
+                }
+            }
+            Thread.sleep(properties.getCrawler().getRateLimitMs());
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw ie;
+        } catch (SsrfBlockedException e) {
+            log.warn("SSRF redirect blocked url={}: {}", normalized, e.getMessage());
+            state.failed.incrementAndGet();
+        } catch (Exception e) {
+            log.warn("Failed to fetch url={}: {}", normalized, e.getClass().getSimpleName());
+            state.failed.incrementAndGet();
+        } finally {
+            // Слот возвращаем, если страница не принята — он достанется другому URL, и суммарно
+            // принятых (homepage + остальные) никогда не превысит maxPages.
+            if (!accepted) {
+                state.releaseSlot();
+            }
+        }
+    }
+
+    /** Разделяемое состояние одного краула между воркерами пула. */
+    private static final class CrawlState {
+        final String startDomain;
+        final RobotsTxt robots;
+        final long deadline;
+        final int maxPages;
+        final int maxDepth;
+        final BlockingQueue<UrlWithDepth> queue;
+        final Map<String, Boolean> hostSafetyCache;
+
+        final Set<String> visited = ConcurrentHashMap.newKeySet();
+        final Set<String> acceptedFingerprints = ConcurrentHashMap.newKeySet();
+        // Стартовая страница (depth==0) хранится отдельно, чтобы гарантированно поставить её первой
+        // в итог независимо от порядка завершения воркеров и redirect'а финального URL.
+        final java.util.concurrent.atomic.AtomicReference<PageAnalysisResult> startPage =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        final ConcurrentLinkedQueue<PageAnalysisResult> results = new ConcurrentLinkedQueue<>();
+        // HTTP-ответы всех успешно дошедших до fetch страниц (вкл. redirect-хопы) — technical-паспорт.
+        // Собираются даже для непринятых страниц (soft-404/дубликат): заголовки ответа от этого валидны.
+        final ConcurrentLinkedQueue<HttpResponseInfo> responses = new ConcurrentLinkedQueue<>();
+        final AtomicInteger attempted = new AtomicInteger();
+        final AtomicInteger failed = new AtomicInteger();
+        // reserved = занятые слоты (in-flight + принятые), ВРЕМЕННЫЙ счётчик: резервируется перед
+        // fetch и откатывается releaseSlot при неудаче. Даёт атомарный потолок ≤ maxPages, но НЕ
+        // годится как признак «лимит достигнут навсегда» (занятый слот может вернуться).
+        final AtomicInteger reserved = new AtomicInteger();
+        // accepted = МОНОТОННОЕ число реально принятых страниц (homepage включён). Инкремент только
+        // после accepted=true. По нему — терминальная остановка и deadline-лог; назад не идёт.
+        final AtomicInteger accepted = new AtomicInteger();
+        // = (URL в очереди) + (URL в обработке). pendingWork==0 → работы нет и не будет (атомарный
+        // признак конца BFS, не зависящий от тайминга poll).
+        final AtomicInteger pendingWork = new AtomicInteger();
+        final AtomicBoolean timedOut = new AtomicBoolean(false);
+        final AtomicBoolean stopped = new AtomicBoolean(false);
+
+        CrawlState(String startDomain, RobotsTxt robots, long deadline, int maxPages, int maxDepth,
+                   BlockingQueue<UrlWithDepth> queue, Map<String, Boolean> hostSafetyCache) {
+            this.startDomain = startDomain;
+            this.robots = robots;
+            this.deadline = deadline;
+            this.maxPages = maxPages;
+            this.maxDepth = maxDepth;
+            this.queue = queue;
+            this.hostSafetyCache = hostSafetyCache;
+        }
+
+        /** Добавляет НОВЫЙ URL в очередь, учитывая его как незавершённую работу (см. pendingWork). */
+        void enqueue(UrlWithDepth item) {
+            pendingWork.incrementAndGet();
+            queue.add(item);
+        }
+
+        /**
+         * Возврат URL в очередь, отложенного из-за временно занятых слотов. Балансирует pendingWork:
+         * worker.finally декрементит его после processUrl, поэтому здесь инкрементим заново (net 0,
+         * элемент снова в очереди), иначе pendingWork «потеряет» отложенный URL и BFS завершится рано.
+         */
+        void requeue(UrlWithDepth item) {
+            pendingWork.incrementAndGet();
+            queue.add(item);
+        }
+
+        /**
+         * Атомарно занимает один слот (reserved ≤ maxPages). false → слоты заняты сейчас (см. accepted
+         * для проверки, достигнут ли лимит окончательно). Возврат через {@link #releaseSlot()}.
+         */
+        boolean tryReserveSlot() {
+            while (true) {
+                int cur = reserved.get();
+                if (cur >= maxPages) {
+                    return false;
+                }
+                if (reserved.compareAndSet(cur, cur + 1)) {
+                    return true;
+                }
             }
         }
 
-        log.info("SiteCrawler done url={} status={} pages={} attempted={} failed={}",
-                startUrl, timedOut ? "PARTIAL" : "COMPLETE", results.size(), attempted, failed);
-
-        return new CrawlResult(
-                List.copyOf(results),
-                new CrawlerDiagnostics(attempted, results.size(), failed, timedOut));
+        void releaseSlot() {
+            reserved.decrementAndGet();
+        }
     }
 
     /** Сидирование очереди: sitemap → priority hints (без CommonCrawl). */
-    private void seedQueue(Deque<UrlWithDepth> queue, String baseUrl, String startDomain,
+    private void seedQueue(CrawlState state, String baseUrl, String startDomain,
                            String normalizedStart, int maxPages, Map<String, Boolean> hostSafetyCache) {
         LinkedHashSet<String> seeds = new LinkedHashSet<>();
         if (baseUrl != null) {
@@ -216,12 +436,26 @@ public class SiteCrawler {
                 }
             }
         }
-        if (!seeds.isEmpty()) {
-            log.info("SiteCrawler seeds={} domain={}", seeds.size(), startDomain);
-            for (String candidate : seeds) {
-                queue.add(new UrlWithDepth(candidate, 1));
-            }
+        if (seeds.isEmpty()) {
+            return;
         }
+        // Не сидируем больше, чем останется слотов после homepage (= maxPages-1): для maxPages=1
+        // (free/static-only) seed'ы вовсе не добавляются — нет лишних запросов к /privacy, /contact
+        // и ложного PARTIAL из-за pagesFailed>0. Жёсткий потолок принятых страниц обеспечивает
+        // reserved-слот в processUrl; здесь — лишь чтобы не плодить заведомо лишний fetch.
+        int seedBudget = Math.max(0, maxPages - 1);
+        if (seedBudget == 0) {
+            return;
+        }
+        int added = 0;
+        for (String candidate : seeds) {
+            if (added >= seedBudget) {
+                break;
+            }
+            state.enqueue(new UrlWithDepth(candidate, 1));
+            added++;
+        }
+        log.info("SiteCrawler seeds={} domain={}", added, startDomain);
     }
 
     /** Отбраковка soft-404 / дубликатов для не-стартовых страниц. */
@@ -239,10 +473,17 @@ public class SiteCrawler {
         return true;
     }
 
-    /** Ручная обработка редиректов с SSRF-валидацией каждого хопа. */
-    private Document fetchWithRedirectValidation(String startUrl, Map<String, Boolean> hostSafetyCache)
+    /**
+     * Ручная обработка редиректов с SSRF-валидацией каждого хопа. Помимо финального документа
+     * собирает {@link HttpResponseInfo} на КАЖДОМ хопе (3xx-хопы + финальный 200): это даёт
+     * security-header правилам заголовки каждого ответа и redirect-цепочку (http→https) без второго
+     * запроса. Промежуточные ответы тоже несут свой URL/Location, чтобы правила могли проверить
+     * принудительный HTTPS и кэширование на конкретном URL.
+     */
+    private FetchedDocument fetchWithRedirectValidation(String startUrl, Map<String, Boolean> hostSafetyCache)
             throws IOException {
         String currentUrl = startUrl;
+        List<HttpResponseInfo> responses = new ArrayList<>();
         for (int hop = 0; hop < MAX_REDIRECT_HOPS; hop++) {
             PinnedHttpFetcher.Response resp = fetchPinned(
                     currentUrl,
@@ -252,6 +493,7 @@ public class SiteCrawler {
             int status = resp.statusCode();
             if (status >= 300 && status < 400) {
                 String location = resp.header("Location");
+                responses.add(new HttpResponseInfo(currentUrl, status, resp.headers(), true, location));
                 if (location == null || location.isBlank()) {
                     throw new IOException("Empty Location header on redirect from " + currentUrl);
                 }
@@ -265,12 +507,18 @@ public class SiteCrawler {
                 }
                 currentUrl = nextUrl;
             } else if (status == 200) {
-                return Jsoup.parse(resp.body(), currentUrl);
+                responses.add(new HttpResponseInfo(currentUrl, status, resp.headers(), false, null));
+                return new FetchedDocument(Jsoup.parse(resp.body(), currentUrl), responses);
             } else {
+                responses.add(new HttpResponseInfo(currentUrl, status, resp.headers(), false, null));
                 throw new IOException("HTTP " + status + " for " + currentUrl);
             }
         }
         throw new IOException("Too many redirects (>" + MAX_REDIRECT_HOPS + ") for " + startUrl);
+    }
+
+    /** Финальный документ + HTTP-ответы всей redirect-цепочки (для technical-паспорта). */
+    private record FetchedDocument(Document document, List<HttpResponseInfo> responses) {
     }
 
     private List<String> loadSitemapUrls(String baseUrl, String domain, int maxUrls,
@@ -477,6 +725,27 @@ public class SiteCrawler {
                 : kept.stream().filter(Objects::nonNull).collect(Collectors.joining("&"));
     }
 
+    /**
+     * Выравнивает URL ФИНАЛЬНОГО (не-redirect) ответа с нормализованным URL страницы. Промежуточные
+     * redirect-хопы сохраняют свой исходный URL — они нужны правилам как доказательство цепочки
+     * (http://… → https://…). Финальный ответ адресуем к {@code page.url()}, чтобы «на /login нет CSP»
+     * указывало на ту же страницу, что и остальной анализ.
+     */
+    private static List<HttpResponseInfo> alignFinalResponseUrl(List<HttpResponseInfo> responses, String pageUrl) {
+        if (responses.isEmpty() || pageUrl == null) {
+            return responses;
+        }
+        List<HttpResponseInfo> aligned = new ArrayList<>(responses.size());
+        for (HttpResponseInfo r : responses) {
+            if (!r.redirect() && !pageUrl.equals(r.url())) {
+                aligned.add(new HttpResponseInfo(pageUrl, r.statusCode(), r.headers(), false, null));
+            } else {
+                aligned.add(r);
+            }
+        }
+        return aligned;
+    }
+
     private static String resolveUrl(String base, String location) {
         try {
             return new URI(base).resolve(new URI(location)).toString();
@@ -559,11 +828,16 @@ public class SiteCrawler {
     private record UrlWithDepth(String url, int depth) {
     }
 
-    /** Результат обхода: страницы для движка правил + метрики (§1.6). */
-    public record CrawlResult(List<PageAnalysisResult> pages, CrawlerDiagnostics diagnostics) {
+    /** Результат обхода: страницы для движка правил + HTTP-ответы (technical) + метрики (§1.6). */
+    public record CrawlResult(List<PageAnalysisResult> pages, List<HttpResponseInfo> responses,
+                              CrawlerDiagnostics diagnostics) {
+
+        public CrawlResult {
+            responses = responses == null ? List.of() : List.copyOf(responses);
+        }
 
         public static CrawlResult failed() {
-            return new CrawlResult(List.of(), new CrawlerDiagnostics(0, 0, 0, false));
+            return new CrawlResult(List.of(), List.of(), new CrawlerDiagnostics(0, 0, 0, false));
         }
     }
 }

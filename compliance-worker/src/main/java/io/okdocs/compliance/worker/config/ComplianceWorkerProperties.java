@@ -1,5 +1,6 @@
 package io.okdocs.compliance.worker.config;
 
+import io.okdocs.compliance.contracts.enums.FindingCategory;
 import io.okdocs.compliance.contracts.enums.FindingSeverity;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.AssertTrue;
@@ -59,9 +60,19 @@ public class ComplianceWorkerProperties {
         private int connectTimeoutMs = 4000;
         @Positive
         private int crawlerTimeoutSeconds = 90;
-        /** Задержка между запросами к сайту (вежливый краул). 250мс — баланс скорости/анти-бан. */
+        /**
+         * Задержка между запросами к сайту НА ОДИН ПОТОК (вежливый краул). При concurrency потоков
+         * фактический rps на домен ≈ concurrency / (rateLimitMs/1000). 500мс × 5 потоков ≈ 10 rps.
+         */
         @Min(0)
-        private long rateLimitMs = 250;
+        private long rateLimitMs = 500;
+        /**
+         * Число параллельных fetch-потоков static-краула (один домен, N страниц одновременно). Сам
+         * пул служит throttle'ом нагрузки на сайт (см. rateLimitMs). 1 = старое последовательное
+         * поведение.
+         */
+        @Min(1)
+        private int concurrency = 5;
         // perDomainConcurrency убран: SiteCrawler по дизайну последовательный (один скан = один поток,
         // один домен), параллелизма per-domain нет — конфиг был бы no-op'ом. Вернуть, если краул
         // станет параллельным.
@@ -114,9 +125,13 @@ public class ComplianceWorkerProperties {
         /** Параллельных CDP-таргетов (вкладок) внутри одного BrowserContext. */
         @Min(1)
         private int concurrency = 3;
-        /** Сколько страниц premium-скана рендерить через CDP поверх static-карта сайта. */
+        /**
+         * Сколько страниц premium-скана рендерить через CDP поверх static-карта сайта. Java-дефолт
+         * синхронизирован с application-compliance-core.yml (10): dynamic-проход — главный потребитель
+         * времени отчёта, приоритетные страницы рендерятся первыми, хвост урезается.
+         */
         @Min(1)
-        private int maxPages = 20;
+        private int maxPages = 10;
         /** Жёсткий deadline на весь CDP-batch (секунды). */
         @Positive
         private int batchTimeoutSeconds = 180;
@@ -256,6 +271,13 @@ public class ComplianceWorkerProperties {
          * ключ DEFAULT, которого нет в enum'е.
          */
         private Map<String, Double> verificationWeight = defaultVerificationWeight();
+        /**
+         * Потолок суммарного вычета очков по категории. Технические категории (SECURITY, COOKIES)
+         * дают пачку findings (9 security-заголовков, набор cookie-флагов), которые иначе просадили
+         * бы score сильнее core 152-ФЗ нарушений (DOCUMENTS/HOSTING/CONSENT). Cap ограничивает их
+         * совокупный вклад. Категории без записи здесь не ограничиваются. Тюнится из yml.
+         */
+        private Map<FindingCategory, Integer> categoryCap = defaultCategoryCap();
 
         private static Map<FindingSeverity, Integer> defaultBasePoints() {
             Map<FindingSeverity, Integer> m = new EnumMap<>(FindingSeverity.class);
@@ -272,6 +294,20 @@ public class ComplianceWorkerProperties {
             m.put("DETECTED", 0.65);
             m.put("DEFAULT", 0.80);
             return m;
+        }
+
+        private static Map<FindingCategory, Integer> defaultCategoryCap() {
+            Map<FindingCategory, Integer> m = new EnumMap<>(FindingCategory.class);
+            // Технические категории: совокупный вклад ограничен, чтобы пачка security-заголовков/
+            // cookie-флагов не перевешивала core 152-ФЗ нарушения.
+            m.put(FindingCategory.SECURITY, 20);
+            m.put(FindingCategory.COOKIES, 15);
+            return m;
+        }
+
+        /** Потолок вычета по категории или {@code null}, если категория не ограничена. */
+        public Integer capFor(FindingCategory category) {
+            return category == null ? null : categoryCap.get(category);
         }
 
         public int basePointsFor(FindingSeverity severity) {

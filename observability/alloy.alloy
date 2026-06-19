@@ -1,0 +1,64 @@
+// Grafana Alloy — push-сайдкар метрик воркера (observability, этап D).
+//
+// Поток: scrape локального worker:8080/actuator/prometheus  ->  relabel (add deploy_env)  ->
+// remote_write в центральный Prometheus на отдельном сервере. Воркеры за NAT/autoscale,
+// поэтому соединение инициирует Alloy (push), а не центр (pull). WAL переживает обрыв связи —
+// метрики не теряются.
+//
+// Конфигурируется через env (см. docker-compose.worker.yml, сервис alloy):
+//   PROM_REMOTE_WRITE_URL        — endpoint /api/v1/write центрального Prometheus (обязателен)
+//   PROM_REMOTE_WRITE_USERNAME   — basic-auth user (опц.; пусто = без auth)
+//   PROM_REMOTE_WRITE_PASSWORD   — basic-auth pass (опц.)
+//   DEPLOY_ENV                   — метка окружения на всех сериях (prod/staging)
+
+// ── Скрейп локального воркера ─────────────────────────────────────────────────
+// Цель — сам worker внутри приватной docker-сети (имя сервиса из compose). Порт 8080 —
+// дефолтный actuator-порт (worker не переопределяет server.port). instance/application
+// уже выставлены воркером через management.metrics.tags — здесь их не дублируем.
+prometheus.scrape "worker" {
+  targets = [
+    { __address__ = "worker:8080" },
+  ]
+  metrics_path    = "/actuator/prometheus"
+  scrape_interval = "15s"
+  scrape_timeout  = "10s"
+
+  forward_to = [prometheus.relabel.add_env.receiver]
+}
+
+// Добавляем метку окружения (deploy_env) на всё, что прошло скрейп.
+prometheus.relabel "add_env" {
+  forward_to = [prometheus.remote_write.central.receiver]
+
+  rule {
+    target_label = "deploy_env"
+    replacement  = sys.env("DEPLOY_ENV")
+  }
+}
+
+// ── Push в центральный Prometheus ─────────────────────────────────────────────
+prometheus.remote_write "central" {
+  endpoint {
+    url = sys.env("PROM_REMOTE_WRITE_URL")
+
+    // Basic-auth включается, только если задан username (иначе пустые значения = без auth).
+    basic_auth {
+      username = sys.env("PROM_REMOTE_WRITE_USERNAME")
+      password = sys.env("PROM_REMOTE_WRITE_PASSWORD")
+    }
+
+    // Очередь доставки: переживает кратковременную недоступность центра.
+    queue_config {
+      capacity          = 10000
+      max_shards        = 10
+      min_backoff       = "30ms"
+      max_backoff       = "5s"
+      retry_on_http_429 = true
+    }
+  }
+
+  // WAL на диске (volume alloy-data) — буфер переживает рестарт сайдкара.
+  wal {
+    truncate_frequency = "2h"
+  }
+}

@@ -73,6 +73,31 @@ final class PageExtractor {
      */
     static PageAnalysisResult extract(String url, Document doc, String startDomain, RenderMode renderMode,
                                       List<String> preConsentTrackerHosts) {
+        return extract(url, doc, startDomain, renderMode, preConsentTrackerHosts, List.of(), List.of());
+    }
+
+    /**
+     * Извлечение с полным pre-consent снимком DYNAMIC-рендера: сетевые хосты + cookies + ключи
+     * localStorage, наблюдённые до согласия (Этап 4 Phase 1). На STATIC все pre-consent поля пусты.
+     */
+    static PageAnalysisResult extract(String url, Document doc, String startDomain, RenderMode renderMode,
+                                      List<String> preConsentTrackerHosts,
+                                      List<io.okdocs.compliance.contracts.crawler.ObservedCookie> preConsentCookies,
+                                      List<String> preConsentStorageKeys) {
+        return extract(url, doc, startDomain, renderMode, preConsentTrackerHosts, preConsentCookies,
+                preConsentStorageKeys, false, false);
+    }
+
+    /**
+     * Извлечение с явными флагами доступности snapshots. Это отличает «DYNAMIC проверил, список пуст»
+     * от «DYNAMIC не смог снять cookies/storage».
+     */
+    static PageAnalysisResult extract(String url, Document doc, String startDomain, RenderMode renderMode,
+                                      List<String> preConsentTrackerHosts,
+                                      List<io.okdocs.compliance.contracts.crawler.ObservedCookie> preConsentCookies,
+                                      List<String> preConsentStorageKeys,
+                                      boolean preConsentCookiesSnapshotAvailable,
+                                      boolean preConsentStorageSnapshotAvailable) {
         String html = doc.html();
         String text = doc.text();
 
@@ -136,7 +161,11 @@ final class PageExtractor {
                 cookiePresent,
                 List.copyOf(forms),
                 renderMode,
-                preConsentTrackerHosts == null ? List.of() : List.copyOf(preConsentTrackerHosts));
+                preConsentTrackerHosts == null ? List.of() : List.copyOf(preConsentTrackerHosts),
+                preConsentCookies == null ? List.of() : List.copyOf(preConsentCookies),
+                preConsentStorageKeys == null ? List.of() : List.copyOf(preConsentStorageKeys),
+                preConsentCookiesSnapshotAvailable,
+                preConsentStorageSnapshotAvailable);
     }
 
     private static FormInfo extractForm(Element form) {

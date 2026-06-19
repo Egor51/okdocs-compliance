@@ -1,0 +1,96 @@
+# Алерты на технические метрики воркера (этап D). Имена — Micrometer→Prometheus конвенция:
+# точки→подчёркивания, counter получает суффикс _total, gauge остаётся как есть, timer даёт
+# _seconds_count / _seconds_sum / _seconds_max. Метки application/instance ставит сам воркер
+# (management.metrics.tags), deploy_env добавляет Alloy.
+#
+# Метрики приходят push'ем от РАЗНЫХ воркеров — почти все правила агрегируют by (instance),
+# чтобы алерт указывал на конкретный процесс, а не на «где-то у кого-то».
+
+groups:
+  - name: compliance-worker-outbox
+    rules:
+      # КРИТИЧНО (в коде OutboxMetrics помечено critical): событие исчерпало ретраи и НЕ
+      # опубликовано в Kafka — результат скана не доехал до потребителей. Требует ручного разбора.
+      - alert: ComplianceOutboxDead
+        expr: max by (instance, application) (compliance_outbox_dead) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Outbox DEAD events на {{ $labels.instance }}"
+          description: "{{ $value }} событий в DEAD — исчерпали ретраи, не опубликованы. См. RUNBOOK."
+
+      # Затык relay/Kafka: PENDING устойчиво растёт — события копятся, не публикуются.
+      - alert: ComplianceOutboxPendingBacklog
+        expr: max by (instance, application) (compliance_outbox_pending) > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Растёт backlog outbox на {{ $labels.instance }}"
+          description: "{{ $value }} PENDING-событий >10мин — relay/Kafka не справляется."
+
+  - name: compliance-worker-pipeline
+    rules:
+      # Листенер падает: пайплайн кидает исключение до финализации (БД/Kafka/баг).
+      - alert: ComplianceListenerFailures
+        expr: sum by (instance) (rate(compliance_scan_listener_failures_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Ошибки листенера сканов на {{ $labels.instance }}"
+          description: "Пайплайн падает с исключением (>0/s за 5м)."
+
+      # Dynamic (CDP) деградирует: рост failure/degraded — браузерный проход premium-сканов
+      # не отрабатывает (browserless лёг, таймауты). Premium-результаты уходят в PARTIAL.
+      - alert: ComplianceDynamicCrawlDegraded
+        expr: |
+          sum by (instance) (rate(compliance_dynamic_total{result=~"failure|degraded"}[10m]))
+            / clamp_min(sum by (instance) (rate(compliance_dynamic_total[10m])), 1) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Динамический краул деградирует на {{ $labels.instance }}"
+          description: ">20% dynamic-проходов падают/деградируют за 10м — проверить CDP/browserless."
+
+      # Reaper добивает зависшие сканы — фоновый признак, что воркеры роняют сканы на полпути.
+      - alert: ComplianceReaperKillingStuckScans
+        expr: sum (rate(compliance_reaper_failed_total[15m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Reaper добивает зависшие сканы"
+          description: "Сканы виснут и подбираются reaper'ом — искать причину зависаний."
+
+      # p95 dynamic-фазы превышает порог: premium-сканы тормозят на браузерном проходе
+      # (главный потребитель времени premium-скана). Порог ниже total-дедлайна скана.
+      - alert: ComplianceDynamicPhaseSlow
+        expr: |
+          histogram_quantile(0.95,
+            sum by (instance, le) (rate(compliance_phase_seconds_bucket{phase="dynamic-recrawl"}[10m]))
+          ) > 60
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Медленный dynamic-проход на {{ $labels.instance }}"
+          description: "p95 dynamic-recrawl > 60с за 10м — деградация CDP/сети."
+
+  - name: compliance-worker-liveness
+    rules:
+      # Воркер перестал пушить метрики: его серии исчезли из remote_write (упал процесс / Alloy /
+      # связь). absent_over_time по самой базовой серии воркера. Не сработает, пока ни один воркер
+      # ещё ни разу не пушил (нет серии для absent) — это ок, актуально после первого появления.
+      - alert: ComplianceWorkerNoMetrics
+        expr: |
+          count(compliance_outbox_pending) == 0
+          or absent(compliance_outbox_pending)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Нет метрик ни от одного воркера"
+          description: "Воркеры не пушат метрики >5м — упали процессы/Alloy или потеряна связь с центром."
