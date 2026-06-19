@@ -1,0 +1,120 @@
+# Standalone worker + Browserless on one private Docker network.
+#
+# DB and Kafka are expected to be external to this file. Local defaults target the
+# host machine; override DB_URL/KAFKA_BOOTSTRAP_SERVERS for staging/prod.
+#
+# Run:
+#   CDP_AUTH_TOKEN=change-me docker compose -f docker-compose.worker.yml up -d --build
+
+services:
+  worker:
+    build:
+      context: .
+      dockerfile: compliance-worker/Dockerfile
+    image: okdocs/compliance-worker:${WORKER_IMAGE_TAG:-local}
+    restart: unless-stopped
+    depends_on:
+      browserless:
+        condition: service_healthy
+    environment:
+      DB_URL: ${DB_URL:-jdbc:postgresql://host.docker.internal:5432/compliance}
+      DB_USERNAME: ${DB_USERNAME:-compliance}
+      DB_PASSWORD: ${DB_PASSWORD:-compliance}
+
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-host.docker.internal:9092}
+      KAFKA_SECURITY_PROTOCOL: ${KAFKA_SECURITY_PROTOCOL:-PLAINTEXT}
+      KAFKA_SASL_MECHANISM: ${KAFKA_SASL_MECHANISM:-SCRAM-SHA-512}
+      KAFKA_SASL_JAAS_CONFIG: ${KAFKA_SASL_JAAS_CONFIG:-}
+      KAFKA_SSL_TRUSTSTORE_LOCATION: ${KAFKA_SSL_TRUSTSTORE_LOCATION:-}
+      KAFKA_SSL_TRUSTSTORE_PASSWORD: ${KAFKA_SSL_TRUSTSTORE_PASSWORD:-}
+
+      CDP_ENABLED: ${CDP_ENABLED:-true}
+      CDP_BASE_URL: http://browserless:3000
+      CDP_AUTH_TOKEN: ${CDP_AUTH_TOKEN:?set CDP_AUTH_TOKEN}
+      CDP_PREMIUM_ENABLED: ${CDP_PREMIUM_ENABLED:-true}
+
+      GEOIP_DB_PATH: ${GEOIP_DB_PATH:-classpath:ip-db/dbip-country-lite-2026-06.mmdb}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./secrets/compliance-kafka.truststore.jks:/etc/compliance/kafka.truststore.jks:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - worker-browser
+
+  browserless:
+    image: ghcr.io/browserless/chromium:v2.38.1
+    restart: unless-stopped
+    environment:
+      TOKEN: ${CDP_AUTH_TOKEN:?set CDP_AUTH_TOKEN}
+      HOST: 0.0.0.0
+      PORT: 3000
+      CONCURRENT: ${BROWSERLESS_CONCURRENT:-3}
+      QUEUED: ${BROWSERLESS_QUEUED:-10}
+      TIMEOUT: ${BROWSERLESS_TIMEOUT_MS:-30000}
+      MAX_RECONNECT_TIME: ${BROWSERLESS_MAX_RECONNECT_TIME_MS:-300000}
+      MAX_CPU_PERCENT: ${BROWSERLESS_MAX_CPU_PERCENT:-90}
+      MAX_MEMORY_PERCENT: ${BROWSERLESS_MAX_MEMORY_PERCENT:-90}
+      ALLOW_GET: ${BROWSERLESS_ALLOW_GET:-false}
+      CORS: ${BROWSERLESS_CORS:-false}
+      ALLOW_FILE_PROTOCOL: ${BROWSERLESS_ALLOW_FILE_PROTOCOL:-false}
+      DISABLE_BLOCKLIST: ${BROWSERLESS_DISABLE_BLOCKLIST:-true}
+      HEALTH: ${BROWSERLESS_HEALTH:-true}
+      LOG_LEVEL: ${BROWSERLESS_LOG_LEVEL:-info}
+      LOG_FORMAT: ${BROWSERLESS_LOG_FORMAT:-json}
+      DEBUG: ${BROWSERLESS_DEBUG:-}
+      TZ: ${TZ:-UTC}
+    shm_size: "${BROWSERLESS_SHM_SIZE:-1gb}"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >
+          node -e "const t=process.env.TOKEN||'';
+          fetch('http://127.0.0.1:3000/json/version?token='+encodeURIComponent(t),
+          {headers:{Authorization:'Bearer '+t}})
+          .then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: ${BROWSERLESS_HEALTH_INTERVAL:-10s}
+      timeout: ${BROWSERLESS_HEALTH_TIMEOUT:-5s}
+      retries: ${BROWSERLESS_HEALTH_RETRIES:-10}
+      start_period: ${BROWSERLESS_HEALTH_START_PERIOD:-20s}
+    networks:
+      worker-browser:
+        aliases:
+          - browserless
+
+  # Push-сайдкар метрик (observability, этап D). Скрейпит ЛОКАЛЬНЫЙ worker:8080/actuator/prometheus
+  # внутри приватной сети и пушит через remote_write в центральный Prometheus на отдельном сервере.
+  # Воркеры за NAT/autoscale — pull снаружи невозможен, поэтому push: соединение инициирует Alloy.
+  # WAL-буфер Alloy переживает обрыв связи с центром (метрики не теряются). Наружу порт воркера
+  # открывать НЕ нужно. Включается только при заданном PROM_REMOTE_WRITE_URL (профиль observability).
+  alloy:
+    image: grafana/alloy:v1.10.0
+    restart: unless-stopped
+    profiles: ["observability"]
+    depends_on:
+      - worker
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      - --storage.path=/var/lib/alloy/data
+    environment:
+      # URL приёмника remote_write центрального Prometheus (напр. https://prom.example.com/api/v1/write).
+      # Без него Alloy стартовать смысла нет — поэтому сервис под профилем observability.
+      PROM_REMOTE_WRITE_URL: ${PROM_REMOTE_WRITE_URL:?set PROM_REMOTE_WRITE_URL}
+      # Basic-auth к приёмнику (опционально; пусто = без auth, напр. в приватной сети).
+      PROM_REMOTE_WRITE_USERNAME: ${PROM_REMOTE_WRITE_USERNAME:-}
+      PROM_REMOTE_WRITE_PASSWORD: ${PROM_REMOTE_WRITE_PASSWORD:-}
+      # Доп. метка деплоя/окружения на всех сериях этого воркера (prod/staging, регион).
+      DEPLOY_ENV: ${DEPLOY_ENV:-prod}
+    volumes:
+      - ./observability/alloy.alloy:/etc/alloy/config.alloy:ro
+      - alloy-data:/var/lib/alloy/data
+    networks:
+      - worker-browser
+
+networks:
+  worker-browser:
+    driver: bridge
+
+volumes:
+  alloy-data:
