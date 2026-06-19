@@ -1,0 +1,14 @@
+# Datasource Grafana → центральный Prometheus (этап D). Provisioning: подхватывается при
+# старте Grafana, ручная настройка не нужна. Prometheus в той же compose-сети observability.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 15s

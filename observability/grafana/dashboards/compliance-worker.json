@@ -1,0 +1,230 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "title": "Compliance Worker — Observability",
+  "uid": "compliance-worker",
+  "tags": ["compliance", "worker"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "label": "Worker",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(compliance_outbox_pending, instance)",
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" },
+        "refresh": 2,
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Throughput & Outcomes",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Исходы сканов (rate, by kind/status)",
+      "description": "compliance.scan.outcome — главный SLO-срез: доля COMPLETED/PARTIAL/FAILED по free vs premium. Появляется после этапа A (фасад WorkerMetrics).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "targets": [
+        {
+          "expr": "sum by (kind, status) (rate(compliance_scan_outcome_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "{{kind}} / {{status}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Длительность скана p95 (by kind)",
+      "description": "compliance.scan.duration — уже есть в коде (ScanLifecycleService), теги status/kind.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (kind, le) (rate(compliance_scan_duration_seconds_bucket{instance=~\"$instance\"}[5m])))",
+          "legendFormat": "p95 {{kind}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "type": "row",
+      "title": "Phases & Enrichment",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Фазы пайплайна p95 (by phase)",
+      "description": "compliance.phase — static-crawl / dynamic-recrawl. На premium главный потребитель времени — dynamic.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (phase, le) (rate(compliance_phase_seconds_bucket{instance=~\"$instance\"}[5m])))",
+          "legendFormat": "p95 {{phase}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Enrichment p95 (by step: dns/rkn/tls)",
+      "description": "compliance.enrichment — серийные сетевые шаги обогащения.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (step, le) (rate(compliance_enrichment_seconds_bucket{instance=~\"$instance\"}[5m])))",
+          "legendFormat": "p95 {{step}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "type": "row",
+      "title": "Crawl & Dynamic",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Страницы краула (fetched / failed)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 19 },
+      "targets": [
+        {
+          "expr": "sum (rate(compliance_crawl_pages_fetched_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "fetched/s"
+        },
+        {
+          "expr": "sum (rate(compliance_crawl_pages_failed_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "failed/s"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Dynamic (CDP) исходы",
+      "description": "После этапа A — compliance.dynamic{result}. До него — отдельные compliance_dynamic_success/failure/degraded_total.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 19 },
+      "targets": [
+        {
+          "expr": "sum by (result) (rate(compliance_dynamic_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "{{result}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "type": "row",
+      "title": "Outbox & Errors",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Outbox PENDING / DEAD (by instance)",
+      "description": "DEAD > 0 — критичный алерт (см. alerts.yml). PENDING-рост = затык relay/Kafka.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "targets": [
+        {
+          "expr": "max by (instance) (compliance_outbox_pending{instance=~\"$instance\"})",
+          "legendFormat": "pending {{instance}}"
+        },
+        {
+          "expr": "max by (instance) (compliance_outbox_dead{instance=~\"$instance\"})",
+          "legendFormat": "dead {{instance}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Ошибки (rule errors / listener failures / reaper)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "targets": [
+        {
+          "expr": "sum (rate(compliance_rule_errors_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "rule errors/s"
+        },
+        {
+          "expr": "sum (rate(compliance_scan_listener_failures_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "listener failures/s"
+        },
+        {
+          "expr": "sum (rate(compliance_reaper_failed_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "reaper killed/s"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "type": "row",
+      "title": "Runtime (CPU / Memory / GC)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 }
+    },
+    {
+      "type": "timeseries",
+      "title": "CPU usage (by instance)",
+      "description": "process_cpu_usage — доля CPU самого процесса воркера (0..1, ×100 = %). system_cpu_usage — нагрузка всей машины. Метрики JVM/системы идут из Actuator/Micrometer из коробки.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 37 },
+      "targets": [
+        {
+          "expr": "process_cpu_usage{application=\"compliance-worker\", instance=~\"$instance\"}",
+          "legendFormat": "process {{instance}}"
+        },
+        {
+          "expr": "system_cpu_usage{application=\"compliance-worker\", instance=~\"$instance\"}",
+          "legendFormat": "system {{instance}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } }
+    },
+    {
+      "type": "timeseries",
+      "title": "JVM память (heap used, by instance)",
+      "description": "jvm_memory_used_bytes area=heap — потребление кучи воркером.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 37 },
+      "targets": [
+        {
+          "expr": "sum by (instance) (jvm_memory_used_bytes{application=\"compliance-worker\", area=\"heap\", instance=~\"$instance\"})",
+          "legendFormat": "heap {{instance}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Потоки / GC pause",
+      "description": "jvm_threads_live — живые треды (виден рост при затыке Kafka-листенера). jvm_gc_pause p95 — паузы сборки мусора.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 45 },
+      "targets": [
+        {
+          "expr": "jvm_threads_live_threads{application=\"compliance-worker\", instance=~\"$instance\"}",
+          "legendFormat": "threads {{instance}}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (instance, le) (rate(jvm_gc_pause_seconds_bucket{application=\"compliance-worker\", instance=~\"$instance\"}[5m])))",
+          "legendFormat": "gc p95 {{instance}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    }
+  ]
+}
