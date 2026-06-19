@@ -66,10 +66,23 @@
         </dependency>
 
         <!--
-          Jackson + JacksonAutoConfiguration (авто-ObjectMapper с JavaTimeModule), БЕЗ веб-сервера.
-          Standalone-воркер не тянет starter-web, поэтому ObjectMapper-бин иначе не создаётся, и
-          CdpDynamicCrawler/ScanPipeline/MessagingConfig (все инъектят ObjectMapper) роняют контекст.
-          В combined-app мапер приходит от web api — здесь даём тот же авто-бин напрямую.
+          Web-сервер (Tomcat) нужен, чтобы actuator отдавал /actuator/prometheus по HTTP —
+          observability-сайдкар (Grafana Alloy) скрейпит этот эндпоинт и пушит метрики в
+          центральный Prometheus (этап D). Порт слушается только внутри docker-сети, наружу НЕ
+          публикуется (см. docker-compose.worker.yml — у worker нет ports:). Транзитивно тянет
+          starter-json, поэтому ObjectMapper-бин (ниже) теперь приходит и отсюда — оставлен явным
+          для документированности и на случай удаления web.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!--
+          Jackson + JacksonAutoConfiguration (авто-ObjectMapper с JavaTimeModule). Раньше был
+          единственным источником ObjectMapper (воркер не тянул starter-web): CdpDynamicCrawler/
+          ScanPipeline/MessagingConfig инъектят его. С добавлением starter-web приходит транзитивно,
+          но оставлен явным — задокументированная зависимость воркера от мапера.
         -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
