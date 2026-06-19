@@ -125,9 +125,13 @@ public class ComplianceWorkerProperties {
         /** Параллельных CDP-таргетов (вкладок) внутри одного BrowserContext. */
         @Min(1)
         private int concurrency = 3;
-        /** Сколько страниц premium-скана рендерить через CDP поверх static-карта сайта. */
+        /**
+         * Сколько страниц premium-скана рендерить через CDP поверх static-карта сайта. Java-дефолт
+         * синхронизирован с application-compliance-core.yml (10): dynamic-проход — главный потребитель
+         * времени отчёта, приоритетные страницы рендерятся первыми, хвост урезается.
+         */
         @Min(1)
-        private int maxPages = 20;
+        private int maxPages = 10;
         /** Жёсткий deadline на весь CDP-batch (секунды). */
         @Positive
         private int batchTimeoutSeconds = 180;

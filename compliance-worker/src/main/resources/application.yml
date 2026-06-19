@@ -61,6 +61,21 @@ management:
     web:
       exposure:
         include: health,info,metrics,prometheus
+  metrics:
+    tags:
+      # Common-теги на КАЖДОЙ метрике — нужны, когда несколько воркеров пушат в один
+      # центральный Prometheus (иначе counter'ы инстансов сливаются). application — кто,
+      # instance — какой именно процесс. INSTANCE_ID задаётся деплоем (k8s pod / compose
+      # hostname); fallback на random UUID, чтобы при autoscale метки не схлопывались.
+      application: ${spring.application.name}
+      instance: ${INSTANCE_ID:${HOSTNAME:${random.uuid}}}
+    distribution:
+      # Публиковать histogram-бакеты (_bucket-серии) для compliance.*-таймеров. Без этого
+      # Micrometer отдаёт только _count/_sum/_max, и histogram_quantile() в Grafana/алертах
+      # (p95 фаз, enrichment, длительность скана) возвращает пусто. Бакеты считаются на стороне
+      # воркера и агрегируются по инстансам в центральном Prometheus.
+      percentiles-histogram:
+        compliance: true
 
 # compliance.* (краулер/scan/score/dynamic/outbox) импортируется из
 # application-compliance-core.yml (см. spring.config.import выше). Здесь — только

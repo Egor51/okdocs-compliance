@@ -217,11 +217,12 @@ class TransportSecurityRulesTest {
     @Nested
     class TlsLegacyProtocol {
         private final TlsLegacyProtocolRule rule = new TlsLegacyProtocolRule();
+        private final Instant later = Instant.now().plus(100, ChronoUnit.DAYS);
 
         @Test
         void flagsTls10() {
             var ctx = TestFixtures.ctxWithTls(TestFixtures.tlsOk("site.ru", "TLSv1",
-                    List.of("site.ru"), Instant.now().plus(100, ChronoUnit.DAYS)));
+                    List.of("site.ru"), later));
             assertThat(rule.evaluate(ctx)).singleElement()
                     .satisfies(f -> assertThat(f.code()).isEqualTo("TLS_LEGACY_PROTOCOL"));
         }
@@ -229,8 +230,44 @@ class TransportSecurityRulesTest {
         @Test
         void silentOnTls13() {
             var ctx = TestFixtures.ctxWithTls(TestFixtures.tlsOk("site.ru", "TLSv1.3",
-                    List.of("site.ru"), Instant.now().plus(100, ChronoUnit.DAYS)));
+                    List.of("site.ru"), later));
             assertThat(rule.evaluate(ctx)).isEmpty();
+        }
+
+        @Test
+        void flagsLegacyEvenWhenNegotiatedIsModern() {
+            // Корень бага: рукопожатие на TLS 1.3, но сервер всё ещё принимает TLS 1.0/1.1.
+            // По protocol() это было бы PASSED — теперь смотрим supportedProtocols.
+            var ctx = TestFixtures.ctxWithTls(TestFixtures.tlsOkSupporting("site.ru", "TLSv1.3",
+                    List.of("site.ru"), later, List.of("TLSv1.3", "TLSv1.1", "TLSv1")));
+            assertThat(rule.evaluate(ctx)).singleElement().satisfies(f -> {
+                assertThat(f.code()).isEqualTo("TLS_LEGACY_PROTOCOL");
+                assertThat(f.matchedSignals()).contains("TLSv1.1");
+                assertThat(f.matchedSignals()).contains("TLSv1");
+            });
+        }
+
+        @Test
+        void notApplicableWhenProtocolsNotProbed() {
+            // Старый снимок без probe (supportedProtocols == null): NOT_EVALUATED, а не ложный PASSED.
+            // Компат-конструктор TlsInfo оставляет supportedProtocols = null — это и есть «не зондировали».
+            var ctx = TestFixtures.ctxWithTls(TestFixtures.tlsFailed("site.ru", "irrelevant")
+                    /* handshakeOk=false тоже не применимо; ниже — успешный без probe */);
+            // Успешный handshake, но без probe-данных: applies должно быть false.
+            var probedNull = new io.okdocs.compliance.contracts.crawler.TlsInfo(
+                    "site.ru", true, null, "TLSv1.3", "TLS_AES_128_GCM_SHA256",
+                    "CN=site.ru", "CN=CA", List.of("site.ru"),
+                    Instant.now().minusSeconds(86400), later);
+            var ctx2 = TestFixtures.ctxWithTls(probedNull);
+            assertThat(rule.appliesTo(ctx2)).isFalse();
+            assertThat(rule.appliesTo(ctx)).isFalse();
+        }
+
+        @Test
+        void applicableWhenProbed() {
+            var ctx = TestFixtures.ctxWithTls(TestFixtures.tlsOk("site.ru", "TLSv1.3",
+                    List.of("site.ru"), later));
+            assertThat(rule.appliesTo(ctx)).isTrue();
         }
     }
 }

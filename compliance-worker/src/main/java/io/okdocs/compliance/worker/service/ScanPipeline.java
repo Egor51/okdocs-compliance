@@ -81,7 +81,11 @@ public class ScanPipeline {
         }
 
         progressService.updateProgress(scanId, 10, "Краулинг сайта");
+        long staticStart = System.currentTimeMillis();
         SiteCrawler.CrawlResult crawl = siteCrawler.crawl(siteUrl, scan.getMaxPages());
+        long staticCrawlMs = System.currentTimeMillis() - staticStart;
+        meterRegistry.timer("compliance.phase", "phase", "static-crawl")
+                .record(staticCrawlMs, java.util.concurrent.TimeUnit.MILLISECONDS);
         CrawlerDiagnostics diag = crawl.diagnostics();
 
         // pagesFetched == 0 → анализировать нечего → FAILED (событие ScanFailedEvent сформирует lifecycle).
@@ -97,6 +101,7 @@ public class ScanPipeline {
         boolean dynamicEnabled = scan.getKind() == ScanKind.CABINET_PREMIUM && scan.isDynamicRequired();
         List<PageAnalysisResult> pages;
         boolean dynamicDegraded = false;
+        long dynamicStart = System.currentTimeMillis();
         try {
             pages = maybeDynamicRecrawl(crawl.pages(), domain, scanId, dynamicEnabled);
         } catch (DynamicRequiredFailedException e) {
@@ -109,23 +114,41 @@ public class ScanPipeline {
             pages = crawl.pages();
             dynamicDegraded = true;
         }
+        long dynamicMs = System.currentTimeMillis() - dynamicStart;
+        meterRegistry.timer("compliance.phase", "phase", "dynamic-recrawl")
+                .record(dynamicMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+        // Разбивка тяжёлых фаз: static-краул vs dynamic CDP-проход. Enrichment (dns/rkn/tls) логируется
+        // отдельно ниже. Главный потребитель времени на premium-скане — обычно dynamic recrawl.
+        log.info("Scan {} phase timing (ms): staticCrawl={} dynamicRecrawl={} (pagesFetched={})",
+                scanId, staticCrawlMs, dynamicMs, diag.pagesFetched());
 
         progressService.updateProgress(scanId, 60, "Анализ соответствия");
 
         // Enrichment ДО RuleEngine (правила остаются чистыми функциями ctx → facts).
         // DNS — ОДИН lookup в enrichment-фазе (§ Этап 3): A/AAAA+GeoIP+MX+CNAME за вызов. hostCountry/
         // resolvedIps берём из того же DnsInfo — больше не два независимых getAllByName.
+        // Тайминг каждого сетевого шага в метрики/лог: enrichment стал тяжелее (MX/CNAME JNDI + TLS-
+        // сокет), нужно видеть реального виновника времени отчёта перед оптимизацией.
+        long dnsStart = System.currentTimeMillis();
         io.okdocs.compliance.contracts.crawler.DnsInfo dns = dnsInspector.inspect(domain);
+        long dnsMs = recordEnrichment("dns", dnsStart);
         String hostCountry = dns.hostCountry();
         List<String> resolvedIps = dns.resolvedIps();
+
+        long rknStart = System.currentTimeMillis();
         RegistryStatus registryStatus = rknRegistryClient.lookup(domain, null);
+        long rknMs = recordEnrichment("rkn", rknStart);
 
         // Technical-паспорт (§ technical-rules): Этап 1 — HTTP-ответы static-краула (headers +
         // redirect-цепочка); Этап 2 — TLS-осмотр; Этап 3 — DNS. responses собраны без второго запроса.
         // TLS снимается отдельным сокетом (битый сертификат → находка, а не pagesFailed) по уже
         // разрешённым DNS-адресам, чтобы cert-finding относился к тому же IP, что и DNS-анализ.
+        long tlsStart = System.currentTimeMillis();
         List<io.okdocs.compliance.contracts.crawler.TlsInfo> tls =
                 List.of(tlsInspector.inspect(domain, resolvedIps));
+        long tlsMs = recordEnrichment("tls", tlsStart);
+        log.info("Scan {} enrichment timing (ms): dns={} rkn={} tls={} total={}",
+                scanId, dnsMs, rknMs, tlsMs, dnsMs + rknMs + tlsMs);
         TechnicalAnalysisResult technical = new TechnicalAnalysisResult(crawl.responses(), tls, dns);
 
         // jurisdiction («по какому закону проверяем») — из строки скана, не из hostCountry:
@@ -286,6 +309,18 @@ public class ScanPipeline {
         String url = page.url() == null ? "" : page.url().toLowerCase(java.util.Locale.ROOT);
         return url.contains("privac") || url.contains("polic") || url.contains("политик")
                 || url.contains("consent") || url.contains("personal") || url.contains("contact");
+    }
+
+    /**
+     * Записывает длительность одного enrichment-шага в Timer {@code compliance.enrichment.<step>} и
+     * возвращает её в мс (для итогового лога). Шаги (dns/rkn/tls) серийны и сетевые — метрика нужна,
+     * чтобы видеть распределение времени отчёта по тегам без гадания.
+     */
+    private long recordEnrichment(String step, long startMs) {
+        long elapsed = System.currentTimeMillis() - startMs;
+        meterRegistry.timer("compliance.enrichment", "step", step)
+                .record(elapsed, java.util.concurrent.TimeUnit.MILLISECONDS);
+        return elapsed;
     }
 
     /** Слияние метрик краулера и ошибок правил в один JSON для {@code diagnostics_json} (§2.2). */

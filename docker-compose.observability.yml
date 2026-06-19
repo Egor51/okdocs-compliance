@@ -1,0 +1,63 @@
+# Центральный observability-стек (этап D) — для ОТДЕЛЬНОГО сервера, не там, где воркеры.
+#
+# Prometheus принимает remote_write от Alloy-сайдкаров всех воркеров (push-модель: воркеры
+# за NAT/autoscale, центр их pull'ом не достаёт). Grafana — дашборд и алерты поверх.
+#
+# Run (на observability-сервере):
+#   docker compose -f docker-compose.observability.yml up -d
+#
+# Воркеры пушат сюда: на стороне воркера выставить
+#   PROM_REMOTE_WRITE_URL=https://<этот-хост>/api/v1/write   (или http://<хост>:9090/api/v1/write)
+# и поднять профиль observability:
+#   docker compose -f docker-compose.worker.yml --profile observability up -d
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.6.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      # remote-write receiver: разрешает Alloy-сайдкарам пушить метрики на /api/v1/write.
+      - --web.enable-remote-write-receiver
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROM_RETENTION:-30d}
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      # Принимает remote_write от воркеров. В проде закрыть reverse-proxy с TLS+auth, не
+      # светить голым в интернет (см. PROM_REMOTE_WRITE_URL на стороне воркера).
+      - "${PROM_PORT:-9090}:9090"
+    networks:
+      - observability
+
+  grafana:
+    image: grafana/grafana:12.2.0
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      # :- = значение по умолчанию (admin1234@), если GRAFANA_ADMIN_PASSWORD не задан.
+      # НЕ :? — тот трактует текст после ? как сообщение об ошибке, а не дефолт, и роняет старт.
+      # В проде переопредели env-переменной: GRAFANA_ADMIN_PASSWORD=... docker-compose up -d
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin1234@}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      # Provisioning: datasource (Prometheus) + дашборд воркера — всё из файлов, без ручной настройки.
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    networks:
+      - observability
+
+networks:
+  observability:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+  grafana-data:
