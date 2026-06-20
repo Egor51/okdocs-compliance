@@ -55,7 +55,8 @@ spring:
     listener:
       concurrency: 3
       ack-mode: manual
-
+#server:
+#  port: 8081
 management:
   endpoints:
     web:
@@ -76,6 +77,16 @@ management:
       # воркера и агрегируются по инстансам в центральном Prometheus.
       percentiles-histogram:
         compliance: true
+      # Верхняя граница бакетов. БЕЗ неё дефолтный верхний КОНЕЧНЫЙ бакет Timer'а = 30s, и
+      # histogram_quantile() не может вернуть p95/p99 выше 30s — всё, что дольше (а скан идёт
+      # до total-deadline 3m), схлопывается в +Inf и p95 «прилипает» к 30s, скрывая реальный
+      # хвост. 200s > total-deadline(3m) → бакеты покрывают весь диапазон длительности скана.
+      maximum-expected-value:
+        compliance: 200s
+      # Нижняя граница: enrichment-шаги (dns/rkn/tls) — десятки мс; 50ms убирает лишние
+      # суб-миллисекундные бакеты, не теряя точность на реальном диапазоне.
+      minimum-expected-value:
+        compliance: 50ms
 
 # compliance.* (краулер/scan/score/dynamic/outbox) импортируется из
 # application-compliance-core.yml (см. spring.config.import выше). Здесь — только
