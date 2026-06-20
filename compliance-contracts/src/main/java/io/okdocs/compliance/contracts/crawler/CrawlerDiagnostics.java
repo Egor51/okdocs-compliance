@@ -9,6 +9,11 @@ public record CrawlerDiagnostics(
         int pagesAttempted,
         int pagesFetched,
         int pagesFailed,
-        boolean crawlerTimedOut
+        boolean crawlerTimedOut,
+        int priorityHintsAttempted,
+        int priorityHintsMissed
 ) {
+    public CrawlerDiagnostics(int pagesAttempted, int pagesFetched, int pagesFailed, boolean crawlerTimedOut) {
+        this(pagesAttempted, pagesFetched, pagesFailed, crawlerTimedOut, 0, 0);
+    }
 }

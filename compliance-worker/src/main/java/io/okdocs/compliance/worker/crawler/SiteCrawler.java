@@ -19,7 +19,7 @@ import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -128,7 +128,7 @@ public class SiteCrawler {
         BlockingQueue<UrlWithDepth> queue = new LinkedBlockingQueue<>();
         CrawlState state = new CrawlState(startDomain, robots, deadline, maxPages, maxDepth, queue,
                 hostSafetyCache);
-        state.enqueue(new UrlWithDepth(startUrl, 0));
+        state.enqueue(new UrlWithDepth(startUrl, 0, UrlSource.START));
         seedQueue(state, baseUrl, startDomain, normalizedStart, maxPages, hostSafetyCache);
 
         runWorkers(state);
@@ -152,7 +152,9 @@ public class SiteCrawler {
         return new CrawlResult(
                 List.copyOf(ordered),
                 List.copyOf(state.responses),
-                new CrawlerDiagnostics(state.attempted.get(), fetched, state.failed.get(), timedOut));
+                new CrawlerDiagnostics(
+                        state.attempted.get(), fetched, state.failed.get(), timedOut,
+                        state.priorityHintsAttempted.get(), state.priorityHintsMissed.get()));
     }
 
     /** Запускает пул воркеров и ждёт естественного завершения BFS (очередь пуста И никто не в работе). */
@@ -269,13 +271,19 @@ public class SiteCrawler {
         // SSRF-гард на КАЖДЫЙ URL перед запросом (не только на redirect-хопы): хост seed/ссылки
         // мог за-DNS-резолвиться в приватную сеть. Проверяем в том же процессе, что и fetch.
         if (!isSafeHost(PageExtractor.extractDomain(normalized), state.hostSafetyCache)) {
-            log.warn("SSRF blocked url={} (private/blocked host)", normalized);
+            log.warn("SSRF blocked url={} source={} (private/blocked host)", normalized, current.source());
             state.attempted.incrementAndGet();
-            state.failed.incrementAndGet();
+            if (current.source() == UrlSource.PRIORITY_HINT) {
+                state.priorityHintsAttempted.incrementAndGet();
+            }
+            recordFetchFailure(state, current);
             state.releaseSlot();
             return;
         }
         state.attempted.incrementAndGet();
+        if (current.source() == UrlSource.PRIORITY_HINT) {
+            state.priorityHintsAttempted.incrementAndGet();
+        }
 
         boolean accepted = false;
         boolean isStart = current.depth() == 0;
@@ -289,6 +297,9 @@ public class SiteCrawler {
             PageAnalysisResult page = PageExtractor.extract(pageUrl, doc, state.startDomain);
 
             if (!isStart && !acceptPage(pageUrl, page, state.acceptedFingerprints)) {
+                if (current.source() == UrlSource.PRIORITY_HINT) {
+                    state.priorityHintsMissed.incrementAndGet();
+                }
                 return;
             }
             // Technical-паспорт: responses всей redirect-цепочки. URL финального ответа выравниваем
@@ -309,7 +320,7 @@ public class SiteCrawler {
                 String normLink = normalizeUrl(link);
                 if (normLink != null && !state.visited.contains(normLink)
                         && isCrawlableCandidate(normLink, state.startDomain)) {
-                    state.enqueue(new UrlWithDepth(normLink, current.depth() + 1));
+                    state.enqueue(new UrlWithDepth(normLink, current.depth() + 1, UrlSource.DISCOVERED));
                 }
             }
             Thread.sleep(properties.getCrawler().getRateLimitMs());
@@ -317,11 +328,12 @@ public class SiteCrawler {
             Thread.currentThread().interrupt();
             throw ie;
         } catch (SsrfBlockedException e) {
-            log.warn("SSRF redirect blocked url={}: {}", normalized, e.getMessage());
-            state.failed.incrementAndGet();
+            log.warn("SSRF redirect blocked url={} source={}: {}", normalized, current.source(), e.getMessage());
+            recordFetchFailure(state, current);
         } catch (Exception e) {
-            log.warn("Failed to fetch url={}: {}", normalized, e.getClass().getSimpleName());
-            state.failed.incrementAndGet();
+            log.warn("Failed to fetch url={} source={}: {}: {}", normalized, current.source(),
+                    e.getClass().getSimpleName(), e.getMessage());
+            recordFetchFailure(state, current);
         } finally {
             // Слот возвращаем, если страница не принята — он достанется другому URL, и суммарно
             // принятых (homepage + остальные) никогда не превысит maxPages.
@@ -353,6 +365,8 @@ public class SiteCrawler {
         final ConcurrentLinkedQueue<HttpResponseInfo> responses = new ConcurrentLinkedQueue<>();
         final AtomicInteger attempted = new AtomicInteger();
         final AtomicInteger failed = new AtomicInteger();
+        final AtomicInteger priorityHintsAttempted = new AtomicInteger();
+        final AtomicInteger priorityHintsMissed = new AtomicInteger();
         // reserved = занятые слоты (in-flight + принятые), ВРЕМЕННЫЙ счётчик: резервируется перед
         // fetch и откатывается releaseSlot при неудаче. Даёт атомарный потолок ≤ maxPages, но НЕ
         // годится как признак «лимит достигнут навсегда» (занятый слот может вернуться).
@@ -417,13 +431,13 @@ public class SiteCrawler {
     /** Сидирование очереди: sitemap → priority hints (без CommonCrawl). */
     private void seedQueue(CrawlState state, String baseUrl, String startDomain,
                            String normalizedStart, int maxPages, Map<String, Boolean> hostSafetyCache) {
-        LinkedHashSet<String> seeds = new LinkedHashSet<>();
+        LinkedHashMap<String, UrlSource> seeds = new LinkedHashMap<>();
         if (baseUrl != null) {
             for (String u : loadSitemapUrls(baseUrl, startDomain, maxPages, hostSafetyCache)) {
                 String candidate = normalizeUrl(u);
                 if (candidate != null && !candidate.equals(normalizedStart)
                         && isCrawlableCandidate(candidate, startDomain)) {
-                    seeds.add(candidate);
+                    seeds.putIfAbsent(candidate, UrlSource.SITEMAP);
                 }
             }
         }
@@ -432,7 +446,7 @@ public class SiteCrawler {
                 String candidate = normalizeUrl(baseUrl + hint);
                 if (candidate != null && !candidate.equals(normalizedStart)
                         && isCrawlableCandidate(candidate, startDomain)) {
-                    seeds.add(candidate);
+                    seeds.putIfAbsent(candidate, UrlSource.PRIORITY_HINT);
                 }
             }
         }
@@ -448,14 +462,22 @@ public class SiteCrawler {
             return;
         }
         int added = 0;
-        for (String candidate : seeds) {
+        for (Map.Entry<String, UrlSource> seed : seeds.entrySet()) {
             if (added >= seedBudget) {
                 break;
             }
-            state.enqueue(new UrlWithDepth(candidate, 1));
+            state.enqueue(new UrlWithDepth(seed.getKey(), 1, seed.getValue()));
             added++;
         }
         log.info("SiteCrawler seeds={} domain={}", added, startDomain);
+    }
+
+    private static void recordFetchFailure(CrawlState state, UrlWithDepth current) {
+        if (current.source() == UrlSource.PRIORITY_HINT) {
+            state.priorityHintsMissed.incrementAndGet();
+            return;
+        }
+        state.failed.incrementAndGet();
     }
 
     /** Отбраковка soft-404 / дубликатов для не-стартовых страниц. */
@@ -825,7 +847,14 @@ public class SiteCrawler {
         }
     }
 
-    private record UrlWithDepth(String url, int depth) {
+    private enum UrlSource {
+        START,
+        SITEMAP,
+        DISCOVERED,
+        PRIORITY_HINT
+    }
+
+    private record UrlWithDepth(String url, int depth, UrlSource source) {
     }
 
     /** Результат обхода: страницы для движка правил + HTTP-ответы (technical) + метрики (§1.6). */

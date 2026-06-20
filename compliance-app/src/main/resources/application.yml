@@ -79,6 +79,18 @@ management:
   endpoint:
     health:
       show-details: when-authorized
+  metrics:
+    distribution:
+      # Combined-app тоже регистрирует compliance.*-таймеры (через WorkerMetrics). Без этого
+      # блока их histogram-бакеты не публикуются и p95 в Grafana/алертах пуст. Держим границы
+      # СИНХРОННО с standalone-worker (application.yml воркера): иначе p95 разъедется между
+      # деплоями. maximum 200s > total-deadline(3m) — чтобы p95 не упирался в дефолтные 30s.
+      percentiles-histogram:
+        compliance: true
+      maximum-expected-value:
+        compliance: 200s
+      minimum-expected-value:
+        compliance: 50ms
 
 # Единый блок compliance.* для combined-процесса: ключи и api (ComplianceApiProperties), и worker
 # (ComplianceWorkerProperties), и messaging (OutboxProperties). Оба биндят prefix=compliance по

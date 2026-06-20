@@ -65,6 +65,26 @@ class SiteCrawlerTest {
     }
 
     @Test
+    void missingPriorityHintsDoNotCountAsFailedPages() {
+        // Для premium/maxPages>1 priority hints остаются полезным fallback без sitemap, но 404 на
+        // угаданный /privacy|/contact|... не означает, что реальная страница сайта сорвалась.
+        SiteCrawler crawler = crawler(noRobotsMax(100),
+                uri -> "https://example.com/".equals(uri.toString())
+                        ? htmlResponse("home", List.of())
+                        : notFound(),
+                DOMAIN);
+
+        SiteCrawler.CrawlResult result = crawler.crawl(BASE, 100);
+
+        assertThat(result.pages()).hasSize(1);
+        assertThat(result.diagnostics().pagesAttempted()).isEqualTo(32);
+        assertThat(result.diagnostics().pagesFetched()).isEqualTo(1);
+        assertThat(result.diagnostics().pagesFailed()).isZero();
+        assertThat(result.diagnostics().priorityHintsAttempted()).isEqualTo(31);
+        assertThat(result.diagnostics().priorityHintsMissed()).isEqualTo(31);
+    }
+
+    @Test
     void startPageFirstEvenAfterRedirectAndSlowerHomepage() {
         // Замечание 3: homepage редиректит и отвечает медленнее детей; всё равно должна быть первой.
         SiteCrawler crawler = crawler(noRobotsMax(100), uri -> {

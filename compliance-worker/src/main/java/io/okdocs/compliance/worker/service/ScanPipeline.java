@@ -329,6 +329,8 @@ public class ScanPipeline {
                 "pagesFetched", diag.pagesFetched(),
                 "pagesFailed", diag.pagesFailed(),
                 "crawlerTimedOut", diag.crawlerTimedOut(),
+                "priorityHintsAttempted", diag.priorityHintsAttempted(),
+                "priorityHintsMissed", diag.priorityHintsMissed(),
                 "ruleErrors", engineResult.errors(),
                 "ruleOutcomes", engineResult.outcomes());
         try {
