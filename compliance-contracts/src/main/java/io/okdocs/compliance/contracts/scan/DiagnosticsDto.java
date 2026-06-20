@@ -14,6 +14,8 @@ public record DiagnosticsDto(
         int pagesFetched,
         int pagesFailed,
         boolean crawlerTimedOut,
+        int priorityHintsAttempted,
+        int priorityHintsMissed,
         List<String> ruleErrors,
         List<RuleOutcomeDto> ruleOutcomes
 ) {
@@ -24,7 +26,13 @@ public record DiagnosticsDto(
 
     public DiagnosticsDto(int pagesAttempted, int pagesFetched, int pagesFailed,
                           boolean crawlerTimedOut, List<String> ruleErrors) {
-        this(pagesAttempted, pagesFetched, pagesFailed, crawlerTimedOut, ruleErrors, List.of());
+        this(pagesAttempted, pagesFetched, pagesFailed, crawlerTimedOut, 0, 0, ruleErrors, List.of());
+    }
+
+    public DiagnosticsDto(int pagesAttempted, int pagesFetched, int pagesFailed,
+                          boolean crawlerTimedOut, List<String> ruleErrors,
+                          List<RuleOutcomeDto> ruleOutcomes) {
+        this(pagesAttempted, pagesFetched, pagesFailed, crawlerTimedOut, 0, 0, ruleErrors, ruleOutcomes);
     }
 
     @Override
