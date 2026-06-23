@@ -65,6 +65,6 @@ class JwtServiceTest {
     private static ComplianceApiProperties props(String secret) {
         var auth = new ComplianceApiProperties.Auth(secret, Duration.ofMinutes(30),
                 Duration.ofDays(30), Duration.ofDays(7));
-        return new ComplianceApiProperties(null, null, null, null, null, auth, null);
+        return new ComplianceApiProperties(null, null, null, null, null, auth, null, null, null);
     }
 }

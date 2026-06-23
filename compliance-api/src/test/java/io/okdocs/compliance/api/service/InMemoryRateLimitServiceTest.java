@@ -44,7 +44,7 @@ class InMemoryRateLimitServiceTest {
         var props = new ComplianceApiProperties(
                 null,
                 new ComplianceApiProperties.RateLimit(guestPerIp, userPerHour),
-                null, null, null, null, null);
+                null, null, null, null, null, null, null);
         return new InMemoryRateLimitService(props);
     }
 }
