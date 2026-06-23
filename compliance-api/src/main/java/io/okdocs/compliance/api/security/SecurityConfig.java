@@ -1,8 +1,11 @@
 package io.okdocs.compliance.api.security;
 
+import io.okdocs.compliance.api.security.oauth.OAuthLoginSuccessHandler;
 import lombok.RequiredArgsConstructor;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -10,17 +13,22 @@ import org.springframework.security.config.annotation.web.configurers.AbstractHt
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 /**
- * Stateless JWT-безопасность (§4.3).
+ * Безопасность (§4.3, F.8).
+ * <p>
+ * Две цепочки. <b>OAuth2-цепочка</b> ({@link #oauthSecurityFilterChain}, {@code @Order(1)}) узко
+ * матчит {@code /oauth2/**} + {@code /login/oauth2/**} и разрешает сессию на время handshake'а
+ * (state/PKCE между уходом к провайдеру и возвратом). <b>Основная API-цепочка</b> ({@code @Order(2)})
+ * остаётся чисто stateless JWT для всего остального.
  * <ul>
- *   <li>Открытые: {@code /api/auth/guest|login|register|refresh|logout|me}, actuator health.</li>
- *   <li>{@code /api/cabinet/**} — роль {@code USER} (admin тоже имеет ROLE_USER).</li>
- *   <li>{@code /api/admin/**} — роль {@code ADMIN}.</li>
- *   <li>scan-эндпоинты — любой валидный токен (guest или user); owner-check в сервисе.</li>
+ *   <li>Открытые: {@code /api/auth/guest|login|register|refresh|logout|me|oauth/exchange}, webhook, actuator.</li>
+ *   <li>{@code /api/cabinet/**} — роль {@code USER}; {@code /api/admin/**} — {@code ADMIN}.</li>
+ *   <li>scan-эндпоинты — любой валидный токен; owner-check в сервисе.</li>
  * </ul>
  */
 @Configuration
@@ -29,7 +37,26 @@ public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
 
+    /**
+     * OAuth2-login цепочка. Создаётся ТОЛЬКО если сконфигурирован хотя бы один провайдер (есть
+     * {@link ClientRegistrationRepository}) — иначе без client-id/secret приложение всё равно
+     * стартует (соц-логин просто выключен). Сессия разрешена: OAuth2 хранит state между редиректами.
+     */
     @Bean
+    @Order(1)
+    @ConditionalOnBean(ClientRegistrationRepository.class)
+    public SecurityFilterChain oauthSecurityFilterChain(HttpSecurity http,
+                                                        OAuthLoginSuccessHandler successHandler) throws Exception {
+        http
+                .securityMatcher("/oauth2/**", "/login/oauth2/**")
+                .csrf(AbstractHttpConfigurer::disable)
+                .authorizeHttpRequests(auth -> auth.anyRequest().permitAll())
+                .oauth2Login(oauth -> oauth.successHandler(successHandler));
+        return http.build();
+    }
+
+    @Bean
+    @Order(2)
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable)
@@ -42,8 +69,12 @@ public class SecurityConfig {
                                 "/api/auth/login",
                                 "/api/auth/register",
                                 "/api/auth/refresh",
-                                "/api/auth/logout").permitAll()
+                                "/api/auth/logout",
+                                "/api/auth/oauth/exchange").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/auth/me").permitAll()
+                        // webhook оплаты — у провайдера нет JWT; подлинность через проверку подписи
+                        // в обработчике (F.16), не через Spring Security.
+                        .requestMatchers(HttpMethod.POST, "/api/payments/webhook").permitAll()
                         // actuator
                         .requestMatchers("/actuator/health/**", "/actuator/info").permitAll()
                         // ролевые зоны

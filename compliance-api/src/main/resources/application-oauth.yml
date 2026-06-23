@@ -1,0 +1,51 @@
+# Соц-логин (F.8) — активируется профилем `oauth` ПЛЮС реальными client-id/secret через env.
+# Без этого профиля приложение стартует со ВЫКЛЮЧЕННЫМ соц-логином (OAuth-цепочка SecurityConfig
+# создаётся только при наличии ClientRegistrationRepository).
+#
+# Регистрации провайдеров по locale: ru → Яндекс/VK, en → Google/GitHub.
+# Redirect URI у провайдера прописывать как: {baseUrl}/login/oauth2/code/{registrationId}
+#   например http://localhost:8080/login/oauth2/code/google
+#
+# Google и GitHub — преднастроены Spring (CommonOAuth2Provider): хватает client-id/secret.
+# Яндекс и VK — кастомные provider-блоки (URI и user-name-attribute заданы вручную).
+spring:
+  security:
+    oauth2:
+      client:
+        registration:
+          # Каждый провайдер включается НЕЗАВИСИМО: Spring Boot пропускает регистрацию с пустым
+          # client-id. Пустой дефолт (${VAR:}) → можно поднять, например, только Google для
+          # dev/prod-smoke, не задавая остальные три.
+          google:
+            client-id: ${OAUTH_GOOGLE_CLIENT_ID:}
+            client-secret: ${OAUTH_GOOGLE_CLIENT_SECRET:}
+            scope: openid,email,profile
+          github:
+            client-id: ${OAUTH_GITHUB_CLIENT_ID:}
+            client-secret: ${OAUTH_GITHUB_CLIENT_SECRET:}
+            scope: read:user,user:email
+          yandex:
+            client-id: ${OAUTH_YANDEX_CLIENT_ID:}
+            client-secret: ${OAUTH_YANDEX_CLIENT_SECRET:}
+            client-authentication-method: client_secret_post
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+            scope: login:email,login:info
+          vk:
+            client-id: ${OAUTH_VK_CLIENT_ID:}
+            client-secret: ${OAUTH_VK_CLIENT_SECRET:}
+            client-authentication-method: client_secret_post
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+            scope: email
+        provider:
+          yandex:
+            authorization-uri: https://oauth.yandex.ru/authorize
+            token-uri: https://oauth.yandex.ru/token
+            user-info-uri: https://login.yandex.ru/info?format=json
+            user-name-attribute: id
+          vk:
+            authorization-uri: https://oauth.vk.com/authorize
+            token-uri: https://oauth.vk.com/access_token
+            user-info-uri: https://api.vk.com/method/users.get?v=5.131
+            user-name-attribute: id

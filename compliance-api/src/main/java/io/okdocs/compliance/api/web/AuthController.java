@@ -7,6 +7,7 @@ import io.okdocs.compliance.contracts.auth.AuthMeResponse;
 import io.okdocs.compliance.contracts.auth.AuthResponse;
 import io.okdocs.compliance.contracts.auth.GuestAuthResponse;
 import io.okdocs.compliance.contracts.auth.LoginRequest;
+import io.okdocs.compliance.contracts.auth.OAuthExchangeRequest;
 import io.okdocs.compliance.contracts.auth.RefreshTokenRequest;
 import io.okdocs.compliance.contracts.auth.RegisterRequest;
 import io.okdocs.compliance.contracts.auth.UserProfileDto;
@@ -47,6 +48,17 @@ public class AuthController {
     @PostMapping("/login")
     public AuthResponse login(@Valid @RequestBody LoginRequest request, HttpServletRequest http) {
         return authService.login(request, http.getHeader(HttpHeaders.USER_AGENT), clientIpResolver.resolve(http));
+    }
+
+    /**
+     * Обмен one-time кода из OAuth-redirect (F.8) на JWT+refresh. Публичный: код сам — доказательство
+     * прошедшего OAuth-флоу. Одноразовый и короткоживущий.
+     */
+    @PostMapping("/oauth/exchange")
+    public AuthResponse exchangeOAuthCode(@Valid @RequestBody OAuthExchangeRequest request,
+                                          HttpServletRequest http) {
+        return authService.exchangeOAuthCode(request.code(),
+                http.getHeader(HttpHeaders.USER_AGENT), clientIpResolver.resolve(http));
     }
 
     @PostMapping("/refresh")

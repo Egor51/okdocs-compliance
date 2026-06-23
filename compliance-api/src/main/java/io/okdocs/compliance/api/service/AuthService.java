@@ -45,6 +45,7 @@ public class AuthService {
     private final JwtService jwtService;
     private final PasswordEncoder passwordEncoder;
     private final ComplianceApiProperties properties;
+    private final OAuthLoginCodeService oauthLoginCodeService;
 
     private final SecureRandom secureRandom = new SecureRandom();
 
@@ -86,15 +87,34 @@ public class AuthService {
     public AuthResponse login(LoginRequest request, String userAgent, String ipAddress) {
         AppUser user = userRepository.findByEmailIgnoreCase(request.email())
                 .orElseThrow(() -> new ComplianceValidationException("Неверный email или пароль"));
+        // OAuth-only аккаунт (F.2): пароля нет → password-login невозможен. Осмысленный ответ,
+        // а не падение на matches(null). Не сливаем «email существует»: тот же текст и для
+        // несуществующего email выше дал бы «Неверный email или пароль» — здесь подсказываем путь,
+        // т.к. владелец сам зарегался через соц-сеть и должен знать, как войти.
+        if (user.getPasswordHash() == null) {
+            throw new ComplianceValidationException(
+                    "Для этого аккаунта пароль не задан — войдите через соц-сеть или задайте пароль");
+        }
         if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
             throw new ComplianceValidationException("Неверный email или пароль");
         }
-        if (user.getStatus() == UserStatus.BLOCKED || user.getStatus() == UserStatus.DELETED) {
-            throw new ComplianceValidationException("Учётная запись недоступна");
-        }
+        ensureActive(user);
         user.setLastLoginAt(Instant.now());
         userRepository.save(user);
         return issueTokensFor(user, userAgent, ipAddress);
+    }
+
+    /**
+     * Обмен one-time кода из OAuth-redirect (F.8) на пару токенов. Код одноразовый — повторный обмен
+     * отвергается {@link OAuthLoginCodeService}. Невалидный/просроченный/использованный код → ошибка
+     * (фронт показывает «войдите для активации»).
+     */
+    @Transactional
+    public AuthResponse exchangeOAuthCode(String code, String userAgent, String ipAddress) {
+        Long userId = oauthLoginCodeService.redeem(code);
+        AppUser user = userRepository.findById(userId)
+                .orElseThrow(() -> new ComplianceValidationException("Пользователь не найден"));
+        return issueTokensForUser(user, userAgent, ipAddress);
     }
 
     /** Обновить access-токен по refresh-токену (с ротацией: старый отзывается). */
@@ -109,6 +129,7 @@ public class AuthService {
         revoke(stored);
         AppUser user = userRepository.findById(stored.getUserId())
                 .orElseThrow(() -> new ComplianceValidationException("Пользователь не найден"));
+        ensureActive(user);
         return issueTokensFor(user, userAgent, ipAddress);
     }
 
@@ -124,12 +145,39 @@ public class AuthService {
     public void changePassword(Long userId, ChangePasswordRequest request) {
         AppUser user = userRepository.findById(userId)
                 .orElseThrow(() -> new ComplianceValidationException("Пользователь не найден"));
+        // OAuth-only аккаунт без пароля: change (old→new) неприменим. Set-пароля — отдельный
+        // флоу (F.4 D18); здесь не падаем на matches(null), а сообщаем осмысленно.
+        if (user.getPasswordHash() == null) {
+            throw new ComplianceValidationException(
+                    "Пароль ещё не задан — используйте установку пароля, а не смену");
+        }
         if (!passwordEncoder.matches(request.oldPassword(), user.getPasswordHash())) {
             throw new ComplianceValidationException("Старый пароль неверен");
         }
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
         userRepository.save(user);
         refreshTokenRepository.findByUserIdAndRevokedFalse(userId).forEach(this::revoke);
+    }
+
+    /**
+     * Выпустить пару токенов для уже резолвленного юзера (OAuth-флоу, F.8) — аккаунт найден/создан
+     * в {@code OAuthAccountService}, пароль не проверяется (доказательство владения — сам OAuth).
+     * Статус сверяется здесь (а не у вызывающего): если аккаунт заблокировали/удалили после issue
+     * one-time кода, токены не выдаём.
+     */
+    @Transactional
+    public AuthResponse issueTokensForUser(AppUser user, String userAgent, String ipAddress) {
+        ensureActive(user);
+        user.setLastLoginAt(Instant.now());
+        userRepository.save(user);
+        return issueTokensFor(user, userAgent, ipAddress);
+    }
+
+    /** Единая проверка доступности аккаунта перед выдачей токенов (login/refresh/OAuth-exchange). */
+    private static void ensureActive(AppUser user) {
+        if (user.getStatus() == UserStatus.BLOCKED || user.getStatus() == UserStatus.DELETED) {
+            throw new ComplianceValidationException("Учётная запись недоступна");
+        }
     }
 
     private AuthResponse issueTokensFor(AppUser user, String userAgent, String ipAddress) {
