@@ -105,6 +105,33 @@ public class ScanCommandService {
         return toStatusResponse(scan);
     }
 
+    /**
+     * Внутренний запуск premium-скана (F.4 §F13) — для webhook'а оплаты, у которого НЕТ
+     * {@link CompliancePrincipal}/IP/rate-limit (публичный {@link #startCabinetScan} для этого не
+     * годится). Списывает 1 кредит (его перед этим пополнил {@code purchase}) и ставит CABINET_PREMIUM
+     * в очередь. Должен вызываться ВНУТРИ транзакции webhook'а: если упадёт (нет баланса/ошибка
+     * outbox) — откатится вместе с {@code purchase}, и платёж уйдёт в retry (F.14).
+     * <p>
+     * {@code siteUrl}/{@code jurisdiction} — уже валидированный prefill (валидируются при создании
+     * checkout-сессии, F.3). Возвращает id запущенного скана для записи в {@code premium_scan_id}.
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public UUID startInternalPremiumScan(Long userId, String siteUrl, ScanJurisdiction jurisdiction) {
+        UrlValidatorService.ValidatedUrl validated = urlValidator.validate(siteUrl);
+        // Синтетический principal: у внутреннего вызова нет HTTP-контекста, но newScan/outbox
+        // ожидают userId. Роль USER — скан принадлежит юзеру кабинета.
+        CompliancePrincipal principal = CompliancePrincipal.user(userId, io.okdocs.compliance.contracts.enums.UserRole.USER);
+        ComplianceScan scan = newScan(validated, null, principal, null,
+                ScanKind.CABINET_PREMIUM, properties.scan().userMaxPages(), true, jurisdiction);
+
+        // Списание только что купленного кредита — в той же транзакции webhook'а.
+        balanceService.debit(userId, scan.getId());
+
+        scanRepository.save(scan);
+        publishScanRequested(scan, principal);
+        return scan.getId();
+    }
+
     /** Сборка строки скана в QUEUED. Режим выполнения (kind/maxPages/dynamicRequired) — здесь. */
     private ComplianceScan newScan(UrlValidatorService.ValidatedUrl validated, String ipAddress,
                                    CompliancePrincipal principal, UUID parentScanId,
@@ -236,7 +263,7 @@ public class ScanCommandService {
      * Невалидное/пустое значение → 400 ({@link ComplianceValidationException}), без неявного дефолта —
      * выбор юрисдикции явно делает фронт (от неё зависят набор правил и тариф).
      */
-    private static ScanJurisdiction parseJurisdiction(String raw) {
+    static ScanJurisdiction parseJurisdiction(String raw) {
         if (raw == null || raw.isBlank()) {
             throw new ComplianceValidationException("Не указана юрисдикция скана");
         }
