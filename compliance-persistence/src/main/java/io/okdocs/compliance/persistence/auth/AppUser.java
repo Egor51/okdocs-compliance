@@ -30,10 +30,14 @@ public class AppUser {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false, unique = true)
+    /**
+     * Nullable: OAuth-провайдер может не отдать email (F.2). Уникальность — на уровне БД через
+     * case-insensitive partial index {@code uq_app_users_email_ci} (V021), не column-constraint.
+     */
     private String email;
 
-    @Column(name = "password_hash", nullable = false)
+    /** Nullable: OAuth-only аккаунты (F.2) пароля не имеют, пока юзер его не задаст. */
+    @Column(name = "password_hash")
     private String passwordHash;
 
     private String name;
