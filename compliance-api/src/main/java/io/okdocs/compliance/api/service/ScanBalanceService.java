@@ -1,6 +1,7 @@
 package io.okdocs.compliance.api.service;
 
 import io.okdocs.compliance.contracts.cabinet.ScanBalanceDto;
+import io.okdocs.compliance.contracts.enums.BalanceTxnSource;
 import io.okdocs.compliance.contracts.enums.BalanceTxnType;
 import io.okdocs.compliance.contracts.exception.InsufficientScanBalanceException;
 import io.okdocs.compliance.persistence.billing.ScanBalance;
@@ -22,8 +23,8 @@ import java.util.UUID;
  * <p>
  * Все мутации работают внутри транзакции вызывающего (например {@code startScan}); каждое
  * движение пишет {@link ScanBalanceTransaction}. {@code @Version} на {@link ScanBalance} ловит
- * конкурентное списание (oversell). В MVP {@code purchasedRemaining} всегда 0 (§2.7), поэтому
- * {@code purchase} и {@code EXPIRE} не задействованы.
+ * конкурентное списание (oversell). {@code purchase} пополняет {@code purchasedRemaining} из
+ * webhook'а оплаты (F.4); {@code EXPIRE} пока не задействован.
  */
 @Slf4j
 @Service
@@ -54,8 +55,33 @@ public class ScanBalanceService {
         balance.setPurchasedRemaining(0);
         balance.setPeriodResetAt(Instant.now().plus(PERIOD_DAYS, ChronoUnit.DAYS));
         balanceRepository.save(balance);
-        writeTxn(userId, BalanceTxnType.PLAN_GRANT, monthlyQuota, balance.available(), null,
+        writeTxn(userId, BalanceTxnType.PLAN_GRANT, monthlyQuota, balance.available(), null, null,
                 "Начальная месячная квота");
+    }
+
+    /**
+     * Пополнение докупленными сканами (вызывается webhook'ом после оплаты, F.4).
+     * <p>
+     * Кладёт в {@code purchasedRemaining} (не сгорает) и пишет {@link BalanceTxnType#PURCHASE}
+     * без source (покупка — не списание из кармана). Должна выполняться внутри транзакции webhook'а,
+     * чтобы при неудаче premium-start откатилась вместе с ней (F.14).
+     * <p>
+     * <b>НЕ идемпотентен сам по себе:</b> повторный вызов прибавит amount ещё раз. Дедупликация —
+     * ответственность вызывающего (F.4/F.15): webhook обязан вызывать {@code purchase} ровно один
+     * раз на платёж, под блокировкой {@code checkout_session} и с проверкой idempotency-key
+     * провайдера (повторная доставка webhook'а → {@code return OK} до {@code purchase}). Прямой
+     * вызов без этой защиты приведёт к двойному пополнению.
+     */
+    @Transactional
+    public void purchase(Long userId, int amount) {
+        if (amount <= 0) {
+            throw new IllegalArgumentException("Сумма покупки должна быть > 0, передано: " + amount);
+        }
+        ScanBalance balance = load(userId);
+        balance.setPurchasedRemaining(balance.getPurchasedRemaining() + amount);
+        balanceRepository.save(balance);
+        writeTxn(userId, BalanceTxnType.PURCHASE, amount, balance.available(), null, null,
+                "Покупка " + amount + " скан(ов)");
     }
 
     /** Списание 1 скана. Сначала месячная квота, затем докупленное (в MVP — только квота). */
@@ -65,13 +91,16 @@ public class ScanBalanceService {
         if (balance.available() <= 0) {
             throw new InsufficientScanBalanceException(userId);
         }
+        BalanceTxnSource source;
         if (balance.getMonthlyQuota() - balance.getUsedThisPeriod() > 0) {
             balance.setUsedThisPeriod(balance.getUsedThisPeriod() + 1);
+            source = BalanceTxnSource.MONTHLY;
         } else {
             balance.setPurchasedRemaining(balance.getPurchasedRemaining() - 1);
+            source = BalanceTxnSource.PURCHASED;
         }
         balanceRepository.save(balance);
-        writeTxn(userId, BalanceTxnType.DEBIT, -1, balance.available(), scanId, null);
+        writeTxn(userId, BalanceTxnType.DEBIT, -1, balance.available(), scanId, source, null);
     }
 
     /**
@@ -110,8 +139,13 @@ public class ScanBalanceService {
     @Transactional
     public void doRefund(Long userId, UUID scanId) {
         ScanBalance balance = load(userId);
-        // В MVP всё списание идёт из месячной квоты, туда же и возвращаем.
-        if (balance.getUsedThisPeriod() > 0) {
+        // Возвращаем в тот же карман, из которого списали: source исходного DEBIT — источник правды,
+        // а не эвристика «usedThisPeriod>0» (она вернула бы в monthly даже PURCHASED-списание).
+        BalanceTxnSource source = txnRepository.findFirstByScanIdAndType(scanId, BalanceTxnType.DEBIT)
+                .map(ScanBalanceTransaction::getSource)
+                // Старые DEBIT-строки до V017 могли не иметь source — fallback на monthly.
+                .orElse(BalanceTxnSource.MONTHLY);
+        if (source == BalanceTxnSource.MONTHLY) {
             balance.setUsedThisPeriod(balance.getUsedThisPeriod() - 1);
         } else {
             balance.setPurchasedRemaining(balance.getPurchasedRemaining() + 1);
@@ -121,7 +155,7 @@ public class ScanBalanceService {
         // (uq_balance_txns_refund_per_scan) бросает DataIntegrityViolationException здесь,
         // откатывая всю транзакцию вместе с изменением баланса выше.
         ScanBalanceTransaction txn = buildTxn(userId, BalanceTxnType.REFUND, 1, balance.available(),
-                scanId, "Возврат за неуспешный скан");
+                scanId, source, "Возврат за неуспешный скан");
         txnRepository.saveAndFlush(txn);
     }
 
@@ -133,7 +167,7 @@ public class ScanBalanceService {
         balance.setUsedThisPeriod(0);
         balance.setPeriodResetAt(Instant.now().plus(PERIOD_DAYS, ChronoUnit.DAYS));
         balanceRepository.save(balance);
-        writeTxn(userId, BalanceTxnType.PLAN_GRANT, quota, balance.available(), null, "Месячная квота тарифа");
+        writeTxn(userId, BalanceTxnType.PLAN_GRANT, quota, balance.available(), null, null, "Месячная квота тарифа");
     }
 
     /** Ручная корректировка админом (± сканов). Идёт в покупленный «карман» (не сгорает). */
@@ -142,7 +176,7 @@ public class ScanBalanceService {
         ScanBalance balance = load(userId);
         balance.setPurchasedRemaining(balance.getPurchasedRemaining() + amount);
         balanceRepository.save(balance);
-        writeTxn(userId, BalanceTxnType.ADMIN_ADJUST, amount, balance.available(), null, reason);
+        writeTxn(userId, BalanceTxnType.ADMIN_ADJUST, amount, balance.available(), null, null, reason);
     }
 
     @Transactional(readOnly = true)
@@ -156,18 +190,20 @@ public class ScanBalanceService {
     }
 
     private void writeTxn(Long userId, BalanceTxnType type, int amount, int balanceAfter,
-                          UUID scanId, String note) {
-        txnRepository.save(buildTxn(userId, type, amount, balanceAfter, scanId, note));
+                          UUID scanId, BalanceTxnSource source, String note) {
+        txnRepository.save(buildTxn(userId, type, amount, balanceAfter, scanId, source, note));
     }
 
     private ScanBalanceTransaction buildTxn(Long userId, BalanceTxnType type, int amount,
-                                            int balanceAfter, UUID scanId, String note) {
+                                            int balanceAfter, UUID scanId, BalanceTxnSource source,
+                                            String note) {
         ScanBalanceTransaction txn = new ScanBalanceTransaction();
         txn.setUserId(userId);
         txn.setType(type);
         txn.setAmount(amount);
         txn.setBalanceAfter(balanceAfter);
         txn.setScanId(scanId);
+        txn.setSource(source);
         txn.setNote(note);
         return txn;
     }

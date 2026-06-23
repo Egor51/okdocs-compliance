@@ -36,7 +36,7 @@ public class ScanBalance {
     @Column(name = "used_this_period", nullable = false)
     private int usedThisPeriod;
 
-    /** Докупленные сканы (не сгорают). В MVP всегда 0 — докупки нет. */
+    /** Докупленные сканы (не сгорают). Пополняется через {@code purchase} из webhook'а оплаты (F.4). */
     @Column(name = "purchased_remaining", nullable = false)
     private int purchasedRemaining;
 
