@@ -1,4 +1,4 @@
-package io.okdocs.compliance.rules.ru;
+package io.okdocs.compliance.rules.common;
 
 import io.okdocs.compliance.contracts.crawler.PageAnalysisResult;
 import io.okdocs.compliance.contracts.crawler.ScanAnalysisContext;
@@ -10,7 +10,7 @@ import java.util.List;
  * для {@code Rule.appliesTo(ctx)} — если данных нет (DYNAMIC не запускался или деградировал),
  * cookie-правило НЕ должно давать PASSED («нарушений нет»), а помечается NOT_EVALUATED («не проверяли»).
  */
-final class CookieSupport {
+public final class CookieSupport {
 
     private CookieSupport() {
     }

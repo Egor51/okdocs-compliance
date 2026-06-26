@@ -140,7 +140,7 @@ class ScanPipelineTest {
         when(rknRegistryClient.lookup(anyString(), any()))
                 .thenReturn(io.okdocs.compliance.contracts.enums.RegistryStatus.LOOKUP_FAILED);
         when(ruleEngine.evaluate(any())).thenReturn(new RuleEngineResult(List.of(), List.of()));
-        when(findingAssembler.assemble(any(), any())).thenReturn(List.of());
+        when(findingAssembler.assemble(any(), any(), any())).thenReturn(List.of());
         lenient().when(scoreCalculator.calculate(any())).thenReturn(100);
     }
 

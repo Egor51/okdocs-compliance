@@ -157,7 +157,8 @@ public class ScanPipeline {
                 scan.getJurisdiction(), pages, hostCountry, resolvedIps, registryStatus, diag, technical);
 
         RuleEngineResult engineResult = ruleEngine.evaluate(ctx);
-        List<ComplianceFinding> findings = findingAssembler.assemble(scanId, engineResult.facts());
+        List<ComplianceFinding> findings =
+                findingAssembler.assemble(scanId, scan.getJurisdiction(), engineResult.facts());
         int score = scoreCalculator.calculate(findings);
 
         // Observability: метрики краула, findings и ошибок правил (§5.7).

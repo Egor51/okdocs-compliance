@@ -1,5 +1,10 @@
 package io.okdocs.compliance.rules.ru;
 
+import io.okdocs.compliance.rules.common.MissingCspRule;
+import io.okdocs.compliance.rules.common.MissingHstsRule;
+import io.okdocs.compliance.rules.common.WeakCspRule;
+import io.okdocs.compliance.rules.common.WildcardCorsRule;
+
 import io.okdocs.compliance.contracts.enums.FindingCategory;
 import io.okdocs.compliance.contracts.enums.SourceType;
 import io.okdocs.compliance.contracts.enums.VerificationStatus;

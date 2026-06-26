@@ -1,8 +1,10 @@
 package io.okdocs.compliance.rules;
 
 import io.okdocs.compliance.contracts.crawler.ScanAnalysisContext;
+import io.okdocs.compliance.contracts.enums.JurisdictionLayer;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * Правило проверки соответствия. Чистая функция {@code ctx → facts}: получает наполненный
@@ -12,6 +14,20 @@ import java.util.List;
 public interface Rule {
 
     RuleDefinition definition();
+
+    /**
+     * Слои правовых требований, к которым применимо правило. {@link RuleEngine} запускает правило,
+     * если этот набор пересекается со слоями скана
+     * ({@link io.okdocs.compliance.contracts.enums.JurisdictionProfiles#layers}). Так common
+     * EU-правило ({@code {EU}}) работает на сканах EU/DE/FR/ES.
+     * <p>
+     * Дефолт совместим с одно-юрисдикционной моделью: один слой, выведённый из
+     * {@link RuleDefinition#jurisdiction()}. RU-правила его не переопределяют. EU/common/overlay-
+     * правила, поддерживающие несколько слоёв, переопределяют метод явным набором.
+     */
+    default Set<JurisdictionLayer> supportedLayers() {
+        return Set.of(JurisdictionLayer.valueOf(definition().jurisdiction().name()));
+    }
 
     List<RuleFact> evaluate(ScanAnalysisContext ctx);
 

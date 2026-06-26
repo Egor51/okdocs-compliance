@@ -1,5 +1,10 @@
 package io.okdocs.compliance.rules.ru;
 
+import io.okdocs.compliance.rules.common.CookieWithoutSecureFlagRule;
+import io.okdocs.compliance.rules.common.LocalStorageTrackingBeforeConsentRule;
+import io.okdocs.compliance.rules.common.SessionCookieWithoutHttpOnlyRule;
+import io.okdocs.compliance.rules.common.TrackingCookiesBeforeConsentRule;
+
 import io.okdocs.compliance.contracts.enums.FindingCategory;
 import io.okdocs.compliance.contracts.enums.VerificationStatus;
 import io.okdocs.compliance.rules.Rule;

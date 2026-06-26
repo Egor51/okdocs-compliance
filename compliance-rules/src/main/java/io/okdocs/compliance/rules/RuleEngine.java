@@ -1,18 +1,22 @@
 package io.okdocs.compliance.rules;
 
 import io.okdocs.compliance.contracts.crawler.ScanAnalysisContext;
-import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
+import io.okdocs.compliance.contracts.enums.JurisdictionLayer;
+import io.okdocs.compliance.contracts.enums.JurisdictionProfiles;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /**
- * Запускает правила над одним {@link ScanAnalysisContext}, отбирая только те, чья
- * {@link RuleDefinition#jurisdiction()} совпадает с {@link ScanAnalysisContext#jurisdiction()}
- * скана: RU-скан не прогоняется по GDPR-правилам и наоборот. Изоляция отказов: исключение
- * отдельного правила собирается в {@link RuleEngineResult#errors}, а не валит весь анализ — один
- * битый rule не лишает отчёта остальных находок. Без Spring.
+ * Запускает правила над одним {@link ScanAnalysisContext}, отбирая только те, чьи
+ * {@link Rule#supportedLayers()} пересекаются со слоями скана
+ * ({@link JurisdictionProfiles#layers}): RU-скан не прогоняется по GDPR-правилам, а common
+ * EU-правило работает на сканах EU/DE/FR/ES. Изоляция отказов: исключение отдельного правила
+ * собирается в {@link RuleEngineResult#errors}, а не валит весь анализ — один битый rule не лишает
+ * отчёта остальных находок. Без Spring.
  */
 public final class RuleEngine {
 
@@ -28,27 +32,29 @@ public final class RuleEngine {
         List<RuleEvaluationError> errors = new ArrayList<>();
         List<RuleOutcome> outcomes = new ArrayList<>();
         boolean hasPages = ctx.pages() != null && !ctx.pages().isEmpty();
+        Set<JurisdictionLayer> scanLayers = JurisdictionProfiles.layers(ctx.jurisdiction());
 
         for (Rule rule : rules) {
             // Резолвим code ДО evaluate: если падает не evaluate, а definition(), мы всё равно
             // должны зарегистрировать ошибку, а не уронить движок. Fallback — имя класса правила.
             String code = resolveCode(rule);
 
-            // Юрисдикционный гейт: правило другой юрисдикции пропускаем молча (это не ошибка).
-            // Если definition() сломан и юрисдикцию не прочитать — правило неклассифицируемо,
-            // запускать его на чужом скане небезопасно: фиксируем ошибку и пропускаем.
-            ScanJurisdiction ruleJurisdiction;
+            // Юрисдикционный гейт: правило другого набора слоёв пропускаем молча (это не ошибка).
+            // Если definition()/supportedLayers() сломаны и слои не прочитать — правило
+            // неклассифицируемо, запускать его на чужом скане небезопасно: фиксируем ошибку и пропускаем.
+            Set<JurisdictionLayer> ruleLayers;
             RuleDefinition definition;
             try {
                 definition = rule.definition();
-                ruleJurisdiction = definition.jurisdiction();
+                ruleLayers = rule.supportedLayers();
             } catch (RuntimeException e) {
                 errors.add(new RuleEvaluationError(code, e.getClass().getSimpleName(), e.getMessage()));
                 outcomes.add(new RuleOutcome(code, RuleOutcomeStatus.NOT_EVALUATED,
                         code, null, null, "Правило не удалось подготовить к проверке."));
                 continue;
             }
-            if (ruleJurisdiction != ctx.jurisdiction()) {
+            // Common EU-правило ({EU}) пересекается со слоями DE-скана ({EU, DE}) → запускается.
+            if (Collections.disjoint(ruleLayers, scanLayers)) {
                 continue;
             }
 

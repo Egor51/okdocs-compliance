@@ -1,5 +1,7 @@
 package io.okdocs.compliance.rules.ru;
 
+import io.okdocs.compliance.rules.common.HttpHeaderSupport;
+
 import io.okdocs.compliance.contracts.crawler.HttpResponseInfo;
 import io.okdocs.compliance.contracts.crawler.ScanAnalysisContext;
 import io.okdocs.compliance.contracts.enums.EvidenceType;

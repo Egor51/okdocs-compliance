@@ -8,10 +8,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 class RulesConfigurationTest {
 
     @Test
-    void activeRuRulesHavePositiveOutcomeMetadata() {
+    void activeRulesHavePositiveOutcomeMetadata() {
         var config = new RulesConfiguration();
 
-        for (Rule rule : config.ruRules()) {
+        for (Rule rule : config.rules()) {
             var definition = rule.definition();
             assertThat(definition.positiveTitle())
                     .as("%s positiveTitle", definition.code())

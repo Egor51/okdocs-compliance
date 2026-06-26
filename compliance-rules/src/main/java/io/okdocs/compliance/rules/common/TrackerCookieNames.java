@@ -1,4 +1,4 @@
-package io.okdocs.compliance.rules.ru;
+package io.okdocs.compliance.rules.common;
 
 import java.util.List;
 import java.util.Locale;
@@ -9,7 +9,7 @@ import java.util.Locale;
  * Используется cookie-правилами Этапа 4 для классификации «трекинговая ли cookie/ключ» — по аналогии
  * с {@link RuTrackerDomains}, но по именам, а не доменам. Список эвристический и неполный.
  */
-final class TrackerCookieNames {
+public final class TrackerCookieNames {
 
     /** Подстроки имён трекинговых cookie/storage-ключей (lowercase). */
     static final List<String> MARKERS = List.of(

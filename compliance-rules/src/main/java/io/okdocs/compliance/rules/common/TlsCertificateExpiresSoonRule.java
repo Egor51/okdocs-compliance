@@ -1,9 +1,10 @@
-package io.okdocs.compliance.rules.ru;
+package io.okdocs.compliance.rules.common;
 
 import io.okdocs.compliance.contracts.crawler.ScanAnalysisContext;
 import io.okdocs.compliance.contracts.crawler.TlsInfo;
 import io.okdocs.compliance.contracts.enums.EvidenceType;
 import io.okdocs.compliance.contracts.enums.FindingCategory;
+import io.okdocs.compliance.contracts.enums.JurisdictionLayer;
 import io.okdocs.compliance.contracts.enums.FindingSeverity;
 import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.contracts.enums.SourceType;
@@ -16,6 +17,7 @@ import io.okdocs.compliance.rules.RuleSupport;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Set;
 import java.util.List;
 
 /**
@@ -42,6 +44,16 @@ public final class TlsCertificateExpiresSoonRule implements Rule {
                     + "действия с запасом не менее 30 дней.",
             "Срок действия TLS-сертификата достаточный",
             "У проверенного сертификата до истечения остаётся более " + TlsSupport.EXPIRES_SOON_DAYS + " дней.");
+
+    /**
+     * Reusable technical-правило: детектор jurisdiction-neutral, поэтому работает в слоях RU/EU/UK.
+     * Per-layer legal-метаданные (RU: 152-ФЗ; EU: GDPR; UK: UK GDPR/PECR) резолвятся отдельно по
+     * (code, layer); {@code definition()} даёт RU-метаданные own-слоя.
+     */
+    @Override
+    public Set<JurisdictionLayer> supportedLayers() {
+        return Set.of(JurisdictionLayer.RU, JurisdictionLayer.EU, JurisdictionLayer.UK);
+    }
 
     @Override
     public RuleDefinition definition() {

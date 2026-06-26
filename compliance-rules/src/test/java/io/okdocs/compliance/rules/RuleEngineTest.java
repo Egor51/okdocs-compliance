@@ -77,6 +77,58 @@ class RuleEngineTest {
     }
 
     @Test
+    void commonEuRuleRunsOnDeScanViaLayerInheritance() {
+        // DE-скан активирует слои {EU, DE}; common EU-правило ({EU}) пересекается → запускается.
+        RuleEngine engine = new RuleEngine(List.of(new CommonEuRule()));
+
+        RuleEngineResult result = engine.evaluate(TestFixtures.ctxFor(ScanJurisdiction.DE));
+
+        assertThat(result.facts()).extracting(RuleFact::code).containsExactly("EU_COMMON");
+        assertThat(result.errors()).isEmpty();
+    }
+
+    @Test
+    void commonEuRuleDoesNotRunOnUkScan() {
+        // UK не наследует EU baseline (слои {UK}); EU-правило молча пропускается.
+        RuleEngine engine = new RuleEngine(List.of(new CommonEuRule()));
+
+        RuleEngineResult result = engine.evaluate(TestFixtures.ctxFor(ScanJurisdiction.UK));
+
+        assertThat(result.facts()).isEmpty();
+        assertThat(result.errors()).isEmpty();
+        assertThat(result.outcomes()).extracting(RuleOutcome::code).doesNotContain("EU_COMMON");
+    }
+
+    @Test
+    void ruRuleDoesNotRunOnEuScan() {
+        // RU-правило (дефолтный слой {RU}) не пересекается со слоями EU-скана.
+        RuleEngine engine = new RuleEngine(List.of(new OkRule()));
+
+        RuleEngineResult result = engine.evaluate(TestFixtures.ctxFor(ScanJurisdiction.EU));
+
+        assertThat(result.facts()).isEmpty();
+        assertThat(result.outcomes()).extracting(RuleOutcome::code).doesNotContain("OK");
+    }
+
+    @Test
+    void commonTechnicalRuleRunsAcrossRuEuDeUkScans() {
+        // MISSING_HSTS — common-детектор (supportedLayers={RU,EU,UK}). Запускается на RU/EU/UK и на
+        // DE (наследует слой EU): отсутствие HSTS на HTTPS-ответе даёт факт во всех четырёх.
+        io.okdocs.compliance.rules.common.MissingHstsRule rule =
+                new io.okdocs.compliance.rules.common.MissingHstsRule();
+        for (ScanJurisdiction j : List.of(ScanJurisdiction.RU, ScanJurisdiction.EU,
+                ScanJurisdiction.DE, ScanJurisdiction.UK)) {
+            RuleEngineResult result = new RuleEngine(List.of(rule)).evaluate(
+                    TestFixtures.ctxForWithResponses(j,
+                            TestFixtures.response("https://site.ru/", java.util.Map.of())));
+            assertThat(result.facts())
+                    .as("MISSING_HSTS on %s scan", j)
+                    .extracting(RuleFact::code)
+                    .containsExactly("MISSING_HSTS");
+        }
+    }
+
+    @Test
     void emptyRuleSetYieldsEmptyResult() {
         RuleEngineResult result = new RuleEngine(List.of()).evaluate(TestFixtures.ctx());
         assertThat(result.facts()).isEmpty();
@@ -169,6 +221,25 @@ class RuleEngineTest {
         @Override
         public List<RuleFact> evaluate(ScanAnalysisContext ctx) {
             return List.of(new RuleFact("EU_ONLY", null, null, null, null, null, null, null));
+        }
+    }
+
+    /** Common EU-правило: поддерживает слой EU, поэтому работает на сканах EU/DE/FR/ES. */
+    private static final class CommonEuRule implements Rule {
+        @Override
+        public RuleDefinition definition() {
+            return new RuleDefinition("EU_COMMON", ScanJurisdiction.EU, FindingSeverity.LOW,
+                    FindingCategory.OTHER, "eu common", null, null, null, null);
+        }
+
+        @Override
+        public java.util.Set<io.okdocs.compliance.contracts.enums.JurisdictionLayer> supportedLayers() {
+            return java.util.Set.of(io.okdocs.compliance.contracts.enums.JurisdictionLayer.EU);
+        }
+
+        @Override
+        public List<RuleFact> evaluate(ScanAnalysisContext ctx) {
+            return List.of(new RuleFact("EU_COMMON", null, null, null, null, null, null, null));
         }
     }
 

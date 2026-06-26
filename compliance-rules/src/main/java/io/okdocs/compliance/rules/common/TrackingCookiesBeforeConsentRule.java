@@ -1,10 +1,11 @@
-package io.okdocs.compliance.rules.ru;
+package io.okdocs.compliance.rules.common;
 
 import io.okdocs.compliance.contracts.crawler.ObservedCookie;
 import io.okdocs.compliance.contracts.crawler.PageAnalysisResult;
 import io.okdocs.compliance.contracts.crawler.ScanAnalysisContext;
 import io.okdocs.compliance.contracts.enums.EvidenceType;
 import io.okdocs.compliance.contracts.enums.FindingCategory;
+import io.okdocs.compliance.contracts.enums.JurisdictionLayer;
 import io.okdocs.compliance.contracts.enums.FindingSeverity;
 import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.contracts.enums.SourceType;
@@ -43,6 +44,16 @@ public final class TrackingCookiesBeforeConsentRule implements Rule {
                     + "cookie на обязательные и необязательные. 4. Обеспечьте отзыв согласия.",
             "Трекинговые cookie до согласия не обнаружены",
             "Среди наблюдённых до согласия cookie трекинговых не зафиксировано.");
+
+    /**
+     * Reusable technical-правило: детектор jurisdiction-neutral, поэтому работает в слоях RU/EU/UK.
+     * Per-layer legal-метаданные (RU: 152-ФЗ; EU: GDPR; UK: UK GDPR/PECR) резолвятся отдельно по
+     * (code, layer); {@code definition()} даёт RU-метаданные own-слоя.
+     */
+    @Override
+    public Set<JurisdictionLayer> supportedLayers() {
+        return Set.of(JurisdictionLayer.RU, JurisdictionLayer.EU, JurisdictionLayer.UK);
+    }
 
     @Override
     public RuleDefinition definition() {

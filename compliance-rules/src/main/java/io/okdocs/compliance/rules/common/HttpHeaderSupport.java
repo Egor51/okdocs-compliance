@@ -1,4 +1,4 @@
-package io.okdocs.compliance.rules.ru;
+package io.okdocs.compliance.rules.common;
 
 import io.okdocs.compliance.contracts.crawler.HttpResponseInfo;
 
@@ -11,7 +11,7 @@ import java.util.regex.Pattern;
  * (не-redirect) 2xx-ответов с HTML, признак «чувствительной» страницы (формы входа/ЛК/оплаты —
  * где кэширование/отсутствие защит особенно критично). Сами проверки заголовков — в правилах.
  */
-final class HttpHeaderSupport {
+public final class HttpHeaderSupport {
 
     /** Страницы, на которых отсутствие защит/кэширование ответа особенно опасно для ПДн. */
     private static final Pattern SENSITIVE_URL = Pattern.compile(
@@ -28,7 +28,7 @@ final class HttpHeaderSupport {
      * исключаем — у 3xx нет тела/смысла security-заголовков; их анализирует HTTPS-enforcement правило
      * (Этап 2). 4xx/5xx тоже отбрасываем: заголовки страницы ошибки не репрезентативны.
      */
-    static List<HttpResponseInfo> analyzableResponses(List<HttpResponseInfo> responses) {
+    public static List<HttpResponseInfo> analyzableResponses(List<HttpResponseInfo> responses) {
         return responses.stream()
                 .filter(r -> !r.redirect())
                 .filter(r -> r.statusCode() >= 200 && r.statusCode() < 300)
@@ -36,12 +36,12 @@ final class HttpHeaderSupport {
     }
 
     /** Чувствительная ли это страница по URL (вход/ЛК/оплата/регистрация). */
-    static boolean isSensitive(String url) {
+    public static boolean isSensitive(String url) {
         return url != null && SENSITIVE_URL.matcher(url).find();
     }
 
     /** Короткий хвост URL для evidence: путь без query (или сам URL, если не парсится). */
-    static String shortUrl(String url) {
+    public static String shortUrl(String url) {
         if (url == null) {
             return "";
         }
@@ -50,7 +50,7 @@ final class HttpHeaderSupport {
     }
 
     /** Значение заголовка в нижнем регистре или пустая строка (для подстрочного поиска). */
-    static String lower(String headerValue) {
+    public static String lower(String headerValue) {
         return headerValue == null ? "" : headerValue.toLowerCase(Locale.ROOT);
     }
 }

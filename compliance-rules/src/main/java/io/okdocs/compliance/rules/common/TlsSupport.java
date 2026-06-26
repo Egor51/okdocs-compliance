@@ -1,4 +1,4 @@
-package io.okdocs.compliance.rules.ru;
+package io.okdocs.compliance.rules.common;
 
 import java.util.List;
 import java.util.Locale;
@@ -8,7 +8,7 @@ import java.util.Locale;
  * протоколов. Чистые функции над данными {@code TlsInfo}, без I/O — TLS-сокет снимает TlsInspector
  * в worker, правила лишь интерпретируют снимок.
  */
-final class TlsSupport {
+public final class TlsSupport {
 
     /** Порог «сертификат скоро истекает» (дней до notAfter). */
     static final long EXPIRES_SOON_DAYS = 30;
@@ -63,7 +63,7 @@ final class TlsSupport {
     }
 
     /** Устаревший протокол: всё ниже TLS 1.2 (SSLv3, TLS 1.0, TLS 1.1). */
-    static boolean isLegacyProtocol(String protocol) {
+    public static boolean isLegacyProtocol(String protocol) {
         if (protocol == null) {
             return false;
         }

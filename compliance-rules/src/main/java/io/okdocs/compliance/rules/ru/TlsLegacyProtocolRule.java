@@ -1,5 +1,7 @@
 package io.okdocs.compliance.rules.ru;
 
+import io.okdocs.compliance.rules.common.TlsSupport;
+
 import io.okdocs.compliance.contracts.crawler.ScanAnalysisContext;
 import io.okdocs.compliance.contracts.crawler.TlsInfo;
 import io.okdocs.compliance.contracts.enums.EvidenceType;
