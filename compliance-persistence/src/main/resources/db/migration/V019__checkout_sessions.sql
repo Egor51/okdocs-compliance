@@ -10,7 +10,7 @@ CREATE TABLE checkout_sessions (
     jurisdiction        VARCHAR(16)  NOT NULL,
     promo_code          VARCHAR(64),
     status              VARCHAR(30)  NOT NULL,
-    -- какой платёжный провайдер (ЮKassa/Stripe/крипта); в MVP-каркасе — строка-заглушка.
+    -- платёжный провайдер (PaymentProvider: YOOKASSA/STRIPE/CRYPTO); CHECK добавляется в V023.
     provider            VARCHAR(30),
     -- idempotency-ключ платежа от провайдера: повторный webhook с тем же id не обрабатывается дважды.
     provider_payment_id VARCHAR(255),

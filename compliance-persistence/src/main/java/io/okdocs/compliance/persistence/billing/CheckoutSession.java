@@ -1,6 +1,7 @@
 package io.okdocs.compliance.persistence.billing;
 
 import io.okdocs.compliance.contracts.enums.CheckoutStatus;
+import io.okdocs.compliance.contracts.enums.PaymentProvider;
 import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -52,8 +53,9 @@ public class CheckoutSession {
     @Column(nullable = false, length = 30)
     private CheckoutStatus status;
 
+    @Enumerated(EnumType.STRING)
     @Column(length = 30)
-    private String provider;
+    private PaymentProvider provider;
 
     @Column(name = "provider_payment_id")
     private String providerPaymentId;

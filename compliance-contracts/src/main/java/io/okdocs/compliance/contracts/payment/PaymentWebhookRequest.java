@@ -1,5 +1,6 @@
 package io.okdocs.compliance.contracts.payment;
 
+import io.okdocs.compliance.contracts.enums.PaymentProvider;
 import jakarta.validation.constraints.NotNull;
 
 import java.util.UUID;
@@ -10,14 +11,13 @@ import java.util.UUID;
  * в эту форму перед {@code handleWebhook}.
  *
  * @param checkoutId        id checkout-сессии (провайдер возвращает из metadata платежа)
- * @param provider          платёжный провайдер. Свободная строка ОСОЗНАННО до F.16: фиксированный
- *                          набор (YOOKASSA/STRIPE/CRYPTO) + enum + DB-CHECK вводятся вместе с
- *                          реальной интеграцией, когда состав провайдеров финализирован
+ * @param provider          платёжный провайдер из фиксированного набора {@link PaymentProvider}
+ *                          (неизвестное значение → 400 на десериализации enum)
  * @param providerPaymentId idempotency-ключ платежа от провайдера
  */
 public record PaymentWebhookRequest(
         @NotNull UUID checkoutId,
-        @NotNull String provider,
+        @NotNull PaymentProvider provider,
         @NotNull String providerPaymentId
 ) {
 }

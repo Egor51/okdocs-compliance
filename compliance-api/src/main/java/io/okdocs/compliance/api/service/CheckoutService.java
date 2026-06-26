@@ -1,6 +1,7 @@
 package io.okdocs.compliance.api.service;
 
 import io.okdocs.compliance.contracts.enums.CheckoutStatus;
+import io.okdocs.compliance.contracts.enums.PaymentProvider;
 import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.contracts.exception.ComplianceValidationException;
 import io.okdocs.compliance.contracts.payment.CheckoutRequest;
@@ -81,7 +82,7 @@ public class CheckoutService {
      * @param provider          платёжный провайдер
      * @param providerPaymentId idempotency-ключ платежа от провайдера
      */
-    public void handleWebhook(UUID checkoutId, String provider, String providerPaymentId) {
+    public void handleWebhook(UUID checkoutId, PaymentProvider provider, String providerPaymentId) {
         // Идемпотентность по ключу провайдера ДО блокировки: отсекаем дёшево ТОЛЬКО терминально
         // обработанный платёж (PAID_CONSUMED). Сессию PAID_FAILED_TO_START (оплата прошла, но скан
         // не стартовал) НЕ пропускаем — повторный webhook должен дать шанс retry внутри consume (P2).
@@ -106,7 +107,7 @@ public class CheckoutService {
      * → mark consumed. Всё в одной транзакции: сбой старта откатывает и purchase.
      */
     @Transactional
-    public void consume(UUID checkoutId, String provider, String providerPaymentId) {
+    public void consume(UUID checkoutId, PaymentProvider provider, String providerPaymentId) {
         CheckoutSession session = sessionRepository.findWithLockById(checkoutId)
                 .orElseThrow(() -> new ComplianceValidationException("Checkout-сессия не найдена: " + checkoutId));
 
@@ -141,7 +142,7 @@ public class CheckoutService {
 
     /** Отдельная транзакция: зафиксировать оплаченный, но не стартовавший платёж для retry-job. */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void markFailedToStart(UUID checkoutId, String provider, String providerPaymentId) {
+    public void markFailedToStart(UUID checkoutId, PaymentProvider provider, String providerPaymentId) {
         sessionRepository.findById(checkoutId).ifPresent(session -> {
             if (session.getStatus() != CheckoutStatus.PAID_CONSUMED) {
                 session.setProvider(provider);

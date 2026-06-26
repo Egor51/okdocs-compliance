@@ -2,6 +2,7 @@ package io.okdocs.compliance.api.web;
 
 import io.okdocs.compliance.api.config.ComplianceApiProperties;
 import io.okdocs.compliance.api.service.CheckoutService;
+import io.okdocs.compliance.contracts.enums.PaymentProvider;
 import io.okdocs.compliance.contracts.payment.PaymentWebhookRequest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -28,7 +29,7 @@ class PaymentWebhookControllerTest {
     private CheckoutService checkoutService;
 
     private final PaymentWebhookRequest request =
-            new PaymentWebhookRequest(UUID.randomUUID(), "STRIPE", "pi_123");
+            new PaymentWebhookRequest(UUID.randomUUID(), PaymentProvider.STRIPE, "pi_123");
 
     private PaymentWebhookController controllerWithSecret(String configured) {
         var props = new ComplianceApiProperties(
@@ -44,7 +45,7 @@ class PaymentWebhookControllerTest {
         ResponseEntity<Void> resp = controller.webhook("s3cret", request);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
-        verify(checkoutService).handleWebhook(request.checkoutId(), "STRIPE", "pi_123");
+        verify(checkoutService).handleWebhook(request.checkoutId(), PaymentProvider.STRIPE, "pi_123");
     }
 
     @Test

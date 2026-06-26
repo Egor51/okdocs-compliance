@@ -1,6 +1,7 @@
 package io.okdocs.compliance.api.service;
 
 import io.okdocs.compliance.contracts.enums.CheckoutStatus;
+import io.okdocs.compliance.contracts.enums.PaymentProvider;
 import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.contracts.exception.ComplianceValidationException;
 import io.okdocs.compliance.contracts.payment.CheckoutRequest;
@@ -36,7 +37,7 @@ class CheckoutServiceTest {
     private CheckoutService service;
 
     private static final UUID CHECKOUT_ID = UUID.randomUUID();
-    private static final String PROVIDER = "STRIPE";
+    private static final PaymentProvider PROVIDER = PaymentProvider.STRIPE;
     private static final String PAYMENT_ID = "pi_123";
 
     @BeforeEach

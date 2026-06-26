@@ -17,5 +17,6 @@ public interface CheckoutSessionRepository extends JpaRepository<CheckoutSession
     Optional<CheckoutSession> findWithLockById(UUID id);
 
     /** Идемпотентность по ключу провайдера: уже обработанный платёж находит свою сессию. */
-    Optional<CheckoutSession> findByProviderAndProviderPaymentId(String provider, String providerPaymentId);
+    Optional<CheckoutSession> findByProviderAndProviderPaymentId(
+            io.okdocs.compliance.contracts.enums.PaymentProvider provider, String providerPaymentId);
 }
