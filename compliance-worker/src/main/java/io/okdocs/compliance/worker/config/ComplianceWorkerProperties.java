@@ -166,6 +166,22 @@ public class ComplianceWorkerProperties {
             private boolean enabled = true;
         }
 
+        private ConsentScenarios consentScenarios = new ConsentScenarios();
+
+        /**
+         * Прогон consent-сценариев (Фаза 4): после снимка «до согласия» краулер кликает Reject, затем
+         * Accept, фиксируя cookies/трекеры после каждого действия (вход для EU/UK consent-правил).
+         * Best-effort и дороже по времени (доп. сетевые ожидания), поэтому по умолчанию {@code false} —
+         * включается на сканах EU/UK-юрисдикций. {@code waitAfterClickMs} — пауза на догрузку после
+         * клика перед снимком.
+         */
+        @Data
+        public static class ConsentScenarios {
+            private boolean enabled = false;
+            @Positive
+            private int waitAfterClickMs = 1500;
+        }
+
         /**
          * Premium-поток обещан, но CDP не сконфигурирован → невалидно: контекст не стартует. Premium
          * требует {@code enabled=true} + непустой {@code base-url}. Сообщение — операторам, как чинить.

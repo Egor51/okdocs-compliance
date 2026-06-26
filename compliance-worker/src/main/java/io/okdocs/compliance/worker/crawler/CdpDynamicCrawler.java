@@ -68,11 +68,81 @@ public class CdpDynamicCrawler implements DynamicCrawler {
     private final int networkIdleQuietMs;
     private final int networkIdleTimeoutMs;
     private final boolean preConsentTrackingEnabled;
+    private final boolean consentScenariosEnabled;
+    private final int consentWaitAfterClickMs;
     private final HttpClient http;
     private final ObjectMapper objectMapper;
     private final UrlValidator urlValidator;
     private final AtomicBoolean available = new AtomicBoolean(false);
     private final AtomicLong lastAvailabilityCheckMs = new AtomicLong(0);
+
+    /**
+     * Инжектируемый помощник consent-сценариев (Фаза 4). Экспонирует {@code __okdocksConsent.inspect()}
+     * (структура баннера → JSON) и {@code __okdocksConsent.click(action)} (клик accept|reject|manage).
+     * <p>
+     * ВАЖНО: {@link CdpSession#eval(String)} экранирует {@code \\} и {@code "}, поэтому здесь — только
+     * одинарные кавычки и БЕЗ обратных слешей (никаких regex со спецсимволами). Сопоставление кнопок —
+     * по подстрокам в нижнем регистре на нескольких языках ЕС (en/de/fr/es/it). Баннер опознаётся по
+     * id/class/role контейнера или CMP-сигнатуре; кнопки — по тексту/aria-label.
+     */
+    private static final String CONSENT_JS =
+            "window.__okdocksConsent=(function(){"
+            + "var ACCEPT=['accept all','accept cookies','accept','agree','allow all','allow cookies',"
+            + "'i agree','got it','ok','alle akzeptieren','akzeptieren','zustimmen','einverstanden',"
+            + "'tout accepter','accepter','jaccepte','aceptar todo','aceptar','acconsenti','accetta'];"
+            + "var REJECT=['reject all','reject','decline','deny','refuse','disagree','only necessary',"
+            + "'necessary only','essential only','do not accept','alle ablehnen','ablehnen','nur notwendige',"
+            + "'tout refuser','refuser','continuer sans accepter','rechazar todo','rechazar','solo necesarias',"
+            + "'rifiuta tutto','rifiuta'];"
+            + "var MANAGE=['manage','preferences','settings','customize','customise','options','more options',"
+            + "'einstellungen','verwalten','anpassen','personnaliser','parametres','gerer','configurar',"
+            + "'preferencias','personalizar','gestisci','impostazioni','personalizza'];"
+            + "var SAVE=['save preferences','save settings','save','confirm choices','confirm my choices',"
+            + "'auswahl speichern','speichern','enregistrer','guardar','salva'];"
+            + "var CMP={'#onetrust-banner-sdk':'OneTrust','#CybotCookiebotDialog':'Cookiebot',"
+            + "'#usercentrics-root':'Usercentrics','#cookiescript_injected':'CookieScript',"
+            + "'.cc-window':'CookieConsent','#cookie-law-info-bar':'CookieLawInfo',"
+            + "'#didomi-host':'Didomi','#truste-consent-track':'TrustArc','#sp_message_container_':'Sourcepoint',"
+            + "'#axeptio_overlay':'Axeptio','#tarteaucitronRoot':'tarteaucitron'};"
+            + "function low(s){return (s||'').toLowerCase();}"
+            + "function txt(el){return low((el.textContent||'')+' '+(el.getAttribute&&el.getAttribute('aria-label')||''));}"
+            + "function visible(el){if(!el)return false;var r=el.getBoundingClientRect();"
+            + "if(r.width<1||r.height<1)return false;var st=getComputedStyle(el);"
+            + "return st.display!=='none'&&st.visibility!=='hidden'&&st.opacity!=='0';}"
+            + "function clickable(){return Array.prototype.slice.call("
+            + "document.querySelectorAll('button,a[role=button],a,input[type=button],input[type=submit],[role=button]'));}"
+            + "function findCmp(){for(var sel in CMP){try{var el=document.querySelector(sel);"
+            + "if(el&&visible(el))return {el:el,name:CMP[sel]};}catch(e){}}"
+            + "for(var sel2 in CMP){try{if(sel2.charAt(sel2.length-1)==='_'){"
+            + "var all=document.querySelectorAll('[id^='+JSON.stringify(sel2.slice(1))+']');"
+            + "for(var i=0;i<all.length;i++){if(visible(all[i]))return {el:all[i],name:CMP[sel2]};}}}catch(e){}}"
+            + "return null;}"
+            + "function findBanner(){var c=findCmp();if(c)return c;"
+            + "var cand=document.querySelectorAll('[id*=cookie],[class*=cookie],[id*=consent],[class*=consent],"
+            + "[aria-label*=cookie],[aria-label*=consent],[role=dialog],[role=alertdialog]');"
+            + "for(var i=0;i<cand.length;i++){var el=cand[i];if(!visible(el))continue;"
+            + "var t=txt(el);if(t.indexOf('cookie')>=0||t.indexOf('consent')>=0||t.indexOf('privacy')>=0||"
+            + "t.indexOf('datenschutz')>=0||t.indexOf('confidentialit')>=0)return {el:el,name:null};}return null;}"
+            + "function matchBtn(scope,words){var btns=clickable();for(var i=0;i<btns.length;i++){"
+            + "var b=btns[i];if(!visible(b))continue;if(scope&&!scope.contains(b))continue;"
+            + "var t=txt(b).trim();for(var j=0;j<words.length;j++){if(t.indexOf(words[j])>=0)return b;}}return null;}"
+            + "function prechecked(scope){var root=scope||document;"
+            + "var boxes=root.querySelectorAll('input[type=checkbox],[role=switch],[aria-checked]');"
+            + "for(var i=0;i<boxes.length;i++){var b=boxes[i];if(!visible(b))continue;"
+            + "var lbl=txt(b)+' '+low((b.name||'')+' '+(b.id||''));"
+            + "if(lbl.indexOf('necess')>=0||lbl.indexOf('essential')>=0||lbl.indexOf('required')>=0)continue;"
+            + "if(b.checked===true||b.getAttribute('aria-checked')==='true')return true;}return false;}"
+            + "function inspect(){var bn=findBanner();if(!bn)return JSON.stringify({bannerFound:false});"
+            + "var scope=bn.el;var acc=matchBtn(scope,ACCEPT);var rej=matchBtn(scope,REJECT);"
+            + "var man=matchBtn(scope,MANAGE);var sav=matchBtn(scope,SAVE);"
+            + "var same=!!(acc&&rej&&acc.parentNode===rej.parentNode);"
+            + "return JSON.stringify({bannerFound:true,acceptButtonFound:!!acc,rejectButtonFound:!!rej,"
+            + "manageButtonFound:!!man,savePreferencesFound:!!sav,rejectSameLevelAsAccept:same,"
+            + "precheckedToggles:prechecked(scope),cmpProvider:bn.name});}"
+            + "function click(action){var bn=findBanner();if(!bn)return false;var scope=bn.el;"
+            + "var words=action==='reject'?REJECT:(action==='manage'?MANAGE:ACCEPT);"
+            + "var b=matchBtn(scope,words);if(!b)return false;try{b.click();return true;}catch(e){return false;}}"
+            + "return {inspect:inspect,click:click};})()";
 
     public CdpDynamicCrawler(ComplianceWorkerProperties properties, ObjectMapper objectMapper,
                              UrlValidator urlValidator) {
@@ -87,6 +157,8 @@ public class CdpDynamicCrawler implements DynamicCrawler {
         this.networkIdleQuietMs = dyn.getNetworkIdle().getQuietMs();
         this.networkIdleTimeoutMs = dyn.getNetworkIdle().getTimeoutMs();
         this.preConsentTrackingEnabled = dyn.getPreConsentTracking().isEnabled();
+        this.consentScenariosEnabled = dyn.getConsentScenarios().isEnabled();
+        this.consentWaitAfterClickMs = dyn.getConsentScenarios().getWaitAfterClickMs();
         this.objectMapper = objectMapper;
         this.urlValidator = urlValidator;
         this.http = HttpClient.newBuilder()
@@ -446,7 +518,8 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                              List<io.okdocs.compliance.contracts.crawler.ObservedCookie> preConsentCookies,
                              List<String> preConsentStorageKeys,
                              boolean preConsentCookiesSnapshotAvailable,
-                             boolean preConsentStorageSnapshotAvailable) {
+                             boolean preConsentStorageSnapshotAvailable,
+                             io.okdocs.compliance.contracts.crawler.ConsentScenarioResult consentScenario) {
     }
 
     private record CookieSnapshot(List<io.okdocs.compliance.contracts.crawler.ObservedCookie> cookies,
@@ -510,6 +583,16 @@ public class CdpDynamicCrawler implements DynamicCrawler {
             CookieSnapshot cookieSnapshot = collectCookies(s);
             List<String> preConsentStorageKeys = readStringArray(node.path("ls"));
 
+            // Consent-сценарии (Фаза 4): после снимка «до согласия» кликаем Reject, затем Accept,
+            // фиксируя cookies/трекеры после каждого действия. Best-effort: любой сбой → notEvaluated,
+            // скан не падает. Снимок «до» — это hosts/cookies выше; «после Reject» — ключевой вход
+            // для EU/UK consent-правил («трекеры пережили отказ»).
+            io.okdocs.compliance.contracts.crawler.ConsentScenarioResult consentScenario =
+                    io.okdocs.compliance.contracts.crawler.ConsentScenarioResult.notEvaluated();
+            if (consentScenariosEnabled) {
+                consentScenario = driveConsentScenarios(s, allowedDomain);
+            }
+
             return new PageFetch(
                     finalUrl,
                     node.path("t").asText(""),
@@ -518,7 +601,8 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                     cookieSnapshot.cookies(),
                     preConsentStorageKeys,
                     cookieSnapshot.available(),
-                    node.has("ls") && node.path("ls").isArray());
+                    node.has("ls") && node.path("ls").isArray(),
+                    consentScenario);
         } finally {
             s.clearDomainPolicy();
         }
@@ -553,6 +637,107 @@ public class CdpDynamicCrawler implements DynamicCrawler {
             log.debug("CDP Network.getCookies failed: {}", e.getMessage());
             return new CookieSnapshot(List.of(), false);
         }
+    }
+
+    /**
+     * Прогон consent-сценариев на текущей странице (Фаза 4): инспектирует баннер, кликает Reject,
+     * снимает cookies/трекеры, затем кликает Accept и снова снимает cookies. Best-effort: любой сбой
+     * или отсутствие баннера → {@link ConsentScenarioResult#notEvaluated()} (правило тогда «не
+     * проверяли», а не «нарушений нет»). Снимки трекер-хостов берутся из текущей карты запросов
+     * сессии минус то, что уже было до клика.
+     */
+    private io.okdocs.compliance.contracts.crawler.ConsentScenarioResult driveConsentScenarios(
+            CdpSession s, String allowedDomain) {
+        try {
+            io.okdocs.compliance.contracts.crawler.ConsentBannerInfo banner = inspectBanner(s);
+            if (!banner.bannerFound()) {
+                return io.okdocs.compliance.contracts.crawler.ConsentScenarioResult.notEvaluated();
+            }
+
+            // Reject-сценарий: хосты, запрошенные ДО клика, исключаем из «после Reject».
+            Set<String> hostsBeforeReject = new java.util.HashSet<>(s.firstRequestEpochMsByHost().keySet());
+            List<io.okdocs.compliance.contracts.crawler.ObservedCookie> afterRejectCookies = List.of();
+            List<String> afterRejectHosts = List.of();
+            if (banner.rejectButtonFound() && clickConsent(s, "reject")) {
+                waitAfterConsentClick(s);
+                afterRejectCookies = collectCookies(s).cookies();
+                afterRejectHosts = hostsSince(s, hostsBeforeReject, allowedDomain);
+            }
+
+            // Accept-сценарий (опционально): фиксируем cookies после принятия для сравнения.
+            List<io.okdocs.compliance.contracts.crawler.ObservedCookie> afterAcceptCookies = List.of();
+            if (banner.acceptButtonFound() && clickConsent(s, "accept")) {
+                waitAfterConsentClick(s);
+                afterAcceptCookies = collectCookies(s).cookies();
+            }
+
+            return new io.okdocs.compliance.contracts.crawler.ConsentScenarioResult(
+                    banner, afterRejectCookies, afterRejectHosts, afterAcceptCookies, true);
+        } catch (Exception e) {
+            log.debug("Consent scenario run failed: {}", e.getMessage());
+            return io.okdocs.compliance.contracts.crawler.ConsentScenarioResult.notEvaluated();
+        }
+    }
+
+    /** Инспектирует структуру cookie-баннера/CMP через JS, парсит в {@link ConsentBannerInfo}. */
+    private io.okdocs.compliance.contracts.crawler.ConsentBannerInfo inspectBanner(CdpSession s)
+            throws Exception {
+        String json = s.eval(CONSENT_JS + ";__okdocksConsent.inspect()");
+        if (json == null || json.isBlank()) {
+            return io.okdocs.compliance.contracts.crawler.ConsentBannerInfo.notFound();
+        }
+        return parseBannerInfo(objectMapper.readTree(json));
+    }
+
+    /**
+     * Парсит JSON структуры баннера от {@code __okdocksConsent.inspect()} в {@link ConsentBannerInfo}.
+     * Package-private и статический — чтобы тестировать маппинг без живого CDP.
+     */
+    static io.okdocs.compliance.contracts.crawler.ConsentBannerInfo parseBannerInfo(JsonNode n) {
+        if (n == null || !n.path("bannerFound").asBoolean(false)) {
+            return io.okdocs.compliance.contracts.crawler.ConsentBannerInfo.notFound();
+        }
+        String cmp = n.path("cmpProvider").isNull() ? null : n.path("cmpProvider").asText(null);
+        return new io.okdocs.compliance.contracts.crawler.ConsentBannerInfo(
+                true,
+                n.path("acceptButtonFound").asBoolean(false),
+                n.path("rejectButtonFound").asBoolean(false),
+                n.path("manageButtonFound").asBoolean(false),
+                n.path("savePreferencesFound").asBoolean(false),
+                n.path("rejectSameLevelAsAccept").asBoolean(false),
+                n.path("precheckedToggles").asBoolean(false),
+                (cmp == null || cmp.isBlank()) ? null : cmp);
+    }
+
+    /** Кликает кнопку баннера (action: accept|reject|manage); true, если кнопка найдена и нажата. */
+    private boolean clickConsent(CdpSession s, String action) {
+        try {
+            String r = s.eval(CONSENT_JS + ";__okdocksConsent.click('" + action + "')");
+            return "true".equals(r);
+        } catch (Exception e) {
+            log.debug("Consent click '{}' failed: {}", action, e.getMessage());
+            return false;
+        }
+    }
+
+    /** Пауза на догрузку после клика по баннеру: сетевая тишина в пределах настроенного окна. */
+    private void waitAfterConsentClick(CdpSession s) {
+        s.waitForNetworkIdle(networkIdleQuietMs, consentWaitAfterClickMs);
+    }
+
+    /** Сторонние хосты, впервые запрошенные ПОСЛЕ клика (которых не было в {@code before}). */
+    private static List<String> hostsSince(CdpSession s, Set<String> before, String allowedDomain) {
+        List<String> result = new ArrayList<>();
+        for (String host : s.firstRequestEpochMsByHost().keySet()) {
+            if (host == null || before.contains(host)) {
+                continue;
+            }
+            if (allowedDomain != null && (host.equals(allowedDomain) || host.endsWith("." + allowedDomain))) {
+                continue; // first-party хост — не сторонний трекер
+            }
+            result.add(host);
+        }
+        return result;
     }
 
     /** Преобразует JSON-массив строк в List (для ключей localStorage). */
@@ -1003,7 +1188,8 @@ public class CdpDynamicCrawler implements DynamicCrawler {
         Document doc = Jsoup.parse(fetch.html(), url);
         return PageExtractor.extract(url, doc, extractDomain(url), RenderMode.DYNAMIC,
                 fetch.preConsentHosts(), fetch.preConsentCookies(), fetch.preConsentStorageKeys(),
-                fetch.preConsentCookiesSnapshotAvailable(), fetch.preConsentStorageSnapshotAvailable());
+                fetch.preConsentCookiesSnapshotAvailable(), fetch.preConsentStorageSnapshotAvailable(),
+                fetch.consentScenario());
     }
 
     static boolean isBrowserInternalUrl(String url) {
