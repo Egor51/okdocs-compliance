@@ -82,6 +82,10 @@ public class SecurityConfig {
                                 "/api/auth/logout",
                                 "/api/auth/oauth/exchange").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/auth/me").permitAll()
+                        // публичный продуктовый каталог для маркетинга и формы запуска scan
+                        .requestMatchers(HttpMethod.GET,
+                                "/api/jurisdictions",
+                                "/api/jurisdictions/**").permitAll()
                         // webhook оплаты — у провайдера нет JWT; подлинность через проверку подписи
                         // в обработчике (F.16), не через Spring Security.
                         .requestMatchers(HttpMethod.POST, "/api/payments/webhook").permitAll()
