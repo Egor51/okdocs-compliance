@@ -56,7 +56,7 @@ public class CheckoutService {
     @Transactional
     public CheckoutResponse createCheckout(Long userId, CheckoutRequest request) {
         UrlValidatorService.ValidatedUrl validated = urlValidator.validate(request.siteUrl());
-        ScanJurisdiction jurisdiction = ScanCommandService.parseJurisdiction(request.jurisdiction());
+        ScanJurisdiction jurisdiction = scanCommandService.resolveEnabledJurisdiction(request.jurisdiction());
 
         CheckoutSession session = new CheckoutSession();
         session.setUserId(userId);

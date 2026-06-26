@@ -53,6 +53,7 @@ class CheckoutServiceTest {
     void createCheckoutValidatesPrefillAndPersistsCreatedSession() {
         when(urlValidator.validate("example.ru"))
                 .thenReturn(new UrlValidatorService.ValidatedUrl("https://example.ru", "example.ru"));
+        when(scanCommandService.resolveEnabledJurisdiction("ru")).thenReturn(ScanJurisdiction.RU);
         when(sessionRepository.save(any(CheckoutSession.class))).thenAnswer(inv -> {
             CheckoutSession s = inv.getArgument(0);
             s.setId(CHECKOUT_ID);
@@ -72,6 +73,8 @@ class CheckoutServiceTest {
     void createCheckoutRejectsInvalidJurisdiction() {
         when(urlValidator.validate(any()))
                 .thenReturn(new UrlValidatorService.ValidatedUrl("https://example.ru", "example.ru"));
+        when(scanCommandService.resolveEnabledJurisdiction("ATLANTIS"))
+                .thenThrow(new ComplianceValidationException("Неизвестная юрисдикция скана: ATLANTIS"));
 
         assertThatThrownBy(() -> service.createCheckout(5L, new CheckoutRequest("example.ru", "ATLANTIS", null)))
                 .isInstanceOf(ComplianceValidationException.class);

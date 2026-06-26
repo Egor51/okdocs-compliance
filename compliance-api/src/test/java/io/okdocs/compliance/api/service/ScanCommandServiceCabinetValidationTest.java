@@ -92,7 +92,7 @@ class ScanCommandServiceCabinetValidationTest {
         when(urlValidator.validate("https://example.ru"))
                 .thenReturn(new UrlValidatorService.ValidatedUrl("https://example.ru", "example.ru"));
         when(properties.scan()).thenReturn(
-                new ComplianceApiProperties.Scan(null, null, 30, null, null));
+                new ComplianceApiProperties.Scan(null, null, 30, null, null, null));
         // publishScanRequested дёргает kafka-топик и фабрику outbox.
         when(properties.kafka()).thenReturn(new ComplianceApiProperties.KafkaTopics(
                 new ComplianceApiProperties.KafkaTopics.Topic("scan.requested", "scan.completed", "scan.failed")));

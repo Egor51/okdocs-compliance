@@ -67,7 +67,7 @@ public class ScanCommandService {
         rateLimitService.checkScanAllowed(principal, ipAddress);
         UrlValidatorService.ValidatedUrl validated = urlValidator.validate(request.siteUrl());
 
-        ScanJurisdiction jurisdiction = parseJurisdiction(request.jurisdiction());
+        ScanJurisdiction jurisdiction = resolveEnabledJurisdiction(request.jurisdiction());
 
         ComplianceScan scan = newScan(validated, ipAddress, principal, null,
                 ScanKind.FREE_MARKETING, properties.scan().freeMarketingMaxPages(), false, jurisdiction);
@@ -92,7 +92,7 @@ public class ScanCommandService {
         UrlValidatorService.ValidatedUrl validated = urlValidator.validate(request.siteUrl());
         UUID parentScanId = resolveParent(request.parentScanId(), validated.domain(), principal);
 
-        ScanJurisdiction jurisdiction = parseJurisdiction(request.jurisdiction());
+        ScanJurisdiction jurisdiction = resolveEnabledJurisdiction(request.jurisdiction());
 
         ComplianceScan scan = newScan(validated, ipAddress, principal, parentScanId,
                 ScanKind.CABINET_PREMIUM, properties.scan().userMaxPages(), true, jurisdiction);
@@ -272,6 +272,39 @@ public class ScanCommandService {
         } catch (IllegalArgumentException e) {
             throw new ComplianceValidationException("Неизвестная юрисдикция скана: " + raw);
         }
+    }
+
+    /**
+     * Бизнес-проверка доступности юрисдикции (§ Этап 13): юрисдикция синтаксически валидна, но набор
+     * правил для неё может быть ещё не готов ({@code enabled-jurisdictions}). Защита от «пустого
+     * идеального отчёта»: скан по неподдерживаемой юрисдикции → 400, а не пустой PASS-отчёт. Отделено
+     * от {@link #parseJurisdiction} (синтаксис) — единая точка для scan и checkout.
+     */
+    static void assertJurisdictionEnabled(ScanJurisdiction jurisdiction,
+                                          java.util.Set<ScanJurisdiction> enabled) {
+        if (!enabled.contains(jurisdiction)) {
+            throw new ComplianceValidationException(
+                    "Юрисдикция пока не поддерживается: " + jurisdiction);
+        }
+    }
+
+    /** Разбор + проверка доступности одним вызовом — для scan и checkout. */
+    static ScanJurisdiction parseAndAssertEnabled(String raw, java.util.Set<ScanJurisdiction> enabled) {
+        ScanJurisdiction jurisdiction = parseJurisdiction(raw);
+        assertJurisdictionEnabled(jurisdiction, enabled);
+        return jurisdiction;
+    }
+
+    /**
+     * Instance-обёртка над {@link #parseAndAssertEnabled} с {@code enabled-jurisdictions} из
+     * properties — единая точка для checkout (у которого нет своих properties).
+     */
+    public ScanJurisdiction resolveEnabledJurisdiction(String raw) {
+        // Парсим (синтаксис) ДО чтения properties: неизвестная юрисдикция → 400 без обращения к
+        // enabled-jurisdictions (важно и для тестов с замоканными properties).
+        ScanJurisdiction jurisdiction = parseJurisdiction(raw);
+        assertJurisdictionEnabled(jurisdiction, properties.scan().enabledJurisdictions());
+        return jurisdiction;
     }
 
     private UUID resolveParent(UUID parentScanId, String domain, CompliancePrincipal principal) {

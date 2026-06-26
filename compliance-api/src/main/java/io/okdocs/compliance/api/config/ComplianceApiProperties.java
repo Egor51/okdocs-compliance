@@ -1,11 +1,14 @@
 package io.okdocs.compliance.api.config;
 
+import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.contracts.enums.UserPlan;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
 import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Конфигурация compliance-api (prefix {@code compliance}, §4.4).
@@ -101,7 +104,8 @@ public record ComplianceApiProperties(
 
     /** Параметры скана: лимиты страниц по flow/принципалу и TTL короткоживущих сканов. */
     public record Scan(Integer freeMarketingMaxPages, Integer guestMaxPages, Integer userMaxPages,
-                       Integer guestRetentionDays, Integer freeMarketingRetentionDays) {
+                       Integer guestRetentionDays, Integer freeMarketingRetentionDays,
+                       Set<ScanJurisdiction> enabledJurisdictions) {
         public Scan {
             if (freeMarketingMaxPages == null) {
                 freeMarketingMaxPages = 1; // FREE_MARKETING — лид-магнит: главная страница
@@ -117,6 +121,15 @@ public record ComplianceApiProperties(
             }
             if (freeMarketingRetentionDays == null) {
                 freeMarketingRetentionDays = 7; // короткоживущий лид-магнит
+            }
+            // Юрисдикции с готовым набором правил (§ Этап 13: защита от «пустого идеального отчёта»).
+            // GM — устаревшая, не включается. UK включён (Фаза 6: UK GDPR/PECR-правила + overlay).
+            if (enabledJurisdictions == null || enabledJurisdictions.isEmpty()) {
+                enabledJurisdictions = EnumSet.of(ScanJurisdiction.RU, ScanJurisdiction.EU,
+                        ScanJurisdiction.UK, ScanJurisdiction.DE, ScanJurisdiction.FR,
+                        ScanJurisdiction.ES);
+            } else {
+                enabledJurisdictions = EnumSet.copyOf(enabledJurisdictions);
             }
         }
     }

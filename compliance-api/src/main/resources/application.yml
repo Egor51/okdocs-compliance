@@ -82,6 +82,15 @@ compliance:
     user-max-pages: 100
     guest-retention-days: 7
     free-marketing-retention-days: 7
+    # Юрисдикции с готовым набором правил (Этап 13). Скан/чекаут по другой юрисдикции → 400
+    # (защита от «пустого идеального отчёта»).
+    enabled-jurisdictions:
+      - RU
+      - EU
+      - UK
+      - DE
+      - FR
+      - ES
   plan:
     quota:
       FREE: 0
