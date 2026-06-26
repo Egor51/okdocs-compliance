@@ -167,6 +167,66 @@ class ScanReportBuilderTest {
                         "POSSIBLE_TRACKERS_BEFORE_CONSENT");
     }
 
+    @Test
+    void suppressesWeakCspPositiveWhenCspMissing() throws Exception {
+        // WEAK_CSP PASSED («CSP robust») бессмысленно, если MISSING_CSP FAILED (CSP нет вообще):
+        // подавляется — не в positiveChecks и не в passed; учитывается как notEvaluated.
+        ComplianceScan scan = scan();
+        scan.setDiagnosticsJson("""
+                {
+                  "pagesAttempted": 1, "pagesFetched": 1, "pagesFailed": 0, "crawlerTimedOut": false,
+                  "ruleErrors": [],
+                  "ruleOutcomes": [
+                    {"code": "MISSING_CSP", "status": "FAILED", "title": "no csp", "severity": "MEDIUM", "category": "SECURITY"},
+                    {"code": "WEAK_CSP", "status": "PASSED", "title": "weak", "severity": "LOW", "category": "SECURITY",
+                     "positiveTitle": "Content-Security-Policy is robust", "positiveMessage": "No weak directives."},
+                    {"code": "MISSING_HSTS", "status": "PASSED", "title": "hsts", "severity": "MEDIUM", "category": "SECURITY",
+                     "positiveTitle": "HSTS configured", "positiveMessage": "HSTS present."}
+                  ]
+                }
+                """);
+
+        ScanReportSnapshots snapshots = builder.build(scan, List.of(
+                finding("MISSING_CSP", FindingSeverity.MEDIUM, 0.95,
+                        "https://site.ru/", "no-csp", VerificationStatus.DETECTED)));
+        ScanReportResponse premium = objectMapper.readValue(snapshots.premiumJson(), ScanReportResponse.class);
+
+        // WEAK_CSP подавлено: только MISSING_HSTS зелёный; WEAK_CSP ушёл в notEvaluated.
+        assertThat(premium.quality().passed()).isEqualTo(1);
+        assertThat(premium.quality().failed()).isEqualTo(1);
+        assertThat(premium.quality().notEvaluated()).isEqualTo(1);
+        assertThat(premium.quality().positiveChecks())
+                .extracting(p -> p.code())
+                .containsExactly("MISSING_HSTS")
+                .doesNotContain("WEAK_CSP");
+    }
+
+    @Test
+    void keepsWeakCspPositiveWhenCspPresent() throws Exception {
+        // MISSING_CSP PASSED → предпосылка не провалена → WEAK_CSP positive остаётся.
+        ComplianceScan scan = scan();
+        scan.setDiagnosticsJson("""
+                {
+                  "pagesAttempted": 1, "pagesFetched": 1, "pagesFailed": 0, "crawlerTimedOut": false,
+                  "ruleErrors": [],
+                  "ruleOutcomes": [
+                    {"code": "MISSING_CSP", "status": "PASSED", "title": "csp", "severity": "MEDIUM", "category": "SECURITY",
+                     "positiveTitle": "CSP present", "positiveMessage": "CSP header present."},
+                    {"code": "WEAK_CSP", "status": "PASSED", "title": "weak", "severity": "LOW", "category": "SECURITY",
+                     "positiveTitle": "Content-Security-Policy is robust", "positiveMessage": "No weak directives."}
+                  ]
+                }
+                """);
+
+        ScanReportSnapshots snapshots = builder.build(scan, List.of());
+        ScanReportResponse premium = objectMapper.readValue(snapshots.premiumJson(), ScanReportResponse.class);
+
+        assertThat(premium.quality().passed()).isEqualTo(2);
+        assertThat(premium.quality().positiveChecks())
+                .extracting(p -> p.code())
+                .containsExactlyInAnyOrder("MISSING_CSP", "WEAK_CSP");
+    }
+
     private ComplianceScan scan() {
         ComplianceScan scan = new ComplianceScan();
         scan.setId(UUID.randomUUID());
