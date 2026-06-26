@@ -11,7 +11,10 @@ import io.okdocs.compliance.contracts.enums.ScanKind;
 import io.okdocs.compliance.persistence.scan.ComplianceFinding;
 import io.okdocs.compliance.persistence.scan.ComplianceScan;
 import io.okdocs.compliance.rules.RuleEngine;
+import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
+import io.okdocs.compliance.rules.RuleDefinition;
 import io.okdocs.compliance.rules.RuleEngineResult;
+import io.okdocs.compliance.rules.RuleOutcome;
 import io.okdocs.compliance.worker.crawler.DynamicCrawler;
 import io.okdocs.compliance.worker.crawler.SiteCrawler;
 import lombok.RequiredArgsConstructor;
@@ -43,6 +46,7 @@ public class ScanPipeline {
     private final RknRegistryClient rknRegistryClient;
     private final RuleEngine ruleEngine;
     private final FindingAssembler findingAssembler;
+    private final RuleMetadataResolver metadataResolver;
     private final ScoreCalculator scoreCalculator;
     private final ScanProgressService progressService;
     private final ObjectMapper objectMapper;
@@ -168,7 +172,12 @@ public class ScanPipeline {
             metrics.recordRuleErrors(engineResult.errors().size());
         }
 
-        String diagnosticsJson = serializeDiagnostics(diag, engineResult);
+        // Outcomes движок строит из own-слоя правила (definition()); для diagnostics/positiveChecks
+        // пере-резолвим metadata под юрисдикцию скана (как findings через assembler), иначе на
+        // не-RU сканах positiveChecks common-правил остались бы на RU-текстах. Findings берём из
+        // оригинального engineResult — их слой уже накладывает assembler.
+        RuleEngineResult diagnosticsResult = enrichOutcomes(engineResult, scan.getJurisdiction());
+        String diagnosticsJson = serializeDiagnostics(diag, diagnosticsResult);
 
         progressService.updateProgress(scanId, 90, "Формирование отчёта");
 
@@ -321,6 +330,45 @@ public class ScanPipeline {
         long elapsed = System.currentTimeMillis() - startMs;
         metrics.recordEnrichment(step, elapsed);
         return elapsed;
+    }
+
+    /**
+     * Пере-резолвит metadata каждого {@link RuleOutcome} под юрисдикцию скана: title/severity/
+     * category/positive* берутся из per-layer {@link RuleDefinition} (как у findings через assembler),
+     * а runtime-поля {@code status}/{@code message} сохраняются как есть. Это убирает смешение языков
+     * в {@code positiveChecks}/{@code notEvaluated} на не-RU сканах (common-правила имеют own-слой RU).
+     * <p>
+     * Fallback: если резолв пуст (нет per-layer metadata) или {@code jurisdiction == null} (legacy/
+     * тест) — outcome остаётся без изменений. Facts/errors не трогаем (для них слой накладывает
+     * assembler / они без юрисдикции).
+     */
+    private RuleEngineResult enrichOutcomes(RuleEngineResult result, ScanJurisdiction jurisdiction) {
+        if (jurisdiction == null || result.outcomes() == null || result.outcomes().isEmpty()) {
+            return result;
+        }
+        List<RuleOutcome> enriched = new ArrayList<>(result.outcomes().size());
+        for (RuleOutcome outcome : result.outcomes()) {
+            enriched.add(enrichOutcome(outcome, jurisdiction));
+        }
+        return new RuleEngineResult(result.facts(), result.errors(), List.copyOf(enriched));
+    }
+
+    /** Один outcome: metadata из per-layer definition, runtime status/message — из outcome. */
+    private RuleOutcome enrichOutcome(RuleOutcome outcome, ScanJurisdiction jurisdiction) {
+        if (outcome == null || outcome.code() == null) {
+            return outcome;
+        }
+        return metadataResolver.resolve(outcome.code(), jurisdiction)
+                .map(def -> new RuleOutcome(
+                        outcome.code(),
+                        outcome.status(),
+                        def.title(),
+                        def.severity(),
+                        def.category(),
+                        outcome.message(),
+                        def.positiveTitle(),
+                        def.positiveMessage()))
+                .orElse(outcome);
     }
 
     /** Слияние метрик краулера и ошибок правил в один JSON для {@code diagnostics_json} (§2.2). */
