@@ -112,6 +112,29 @@ class RuleMetadataResolverTest {
     }
 
     @Test
+    void commonCodeResolvesUkMetadataNotEuOnUkScan() {
+        // UK не наследует EU: на UK-скане common-код берёт UK-overlay (PECR/UK GDPR), не EU.
+        RuleMetadataResolver resolver = new RuleMetadataResolver(
+                List.of(new io.okdocs.compliance.rules.common.SessionCookieWithoutHttpOnlyRule()),
+                concat(io.okdocs.compliance.rules.eu.EuCommonMetadata.entries(),
+                        io.okdocs.compliance.rules.uk.UkCommonMetadata.entries()));
+
+        assertThat(resolver.resolve("SESSION_COOKIE_WITHOUT_HTTPONLY", ScanJurisdiction.UK))
+                .get().extracting(RuleDefinition::legalBasis)
+                .matches(s -> s.contains("PECR") || s.contains("UK GDPR"), "UK legal basis");
+        // На EU-скане тот же код — EU-overlay (ePrivacy/GDPR).
+        assertThat(resolver.resolve("SESSION_COOKIE_WITHOUT_HTTPONLY", ScanJurisdiction.EU))
+                .get().extracting(RuleDefinition::legalBasis)
+                .matches(s -> s.contains("ePrivacy") || s.contains("GDPR"), "EU legal basis");
+    }
+
+    private static List<RuleDefinition> concat(List<RuleDefinition> a, List<RuleDefinition> b) {
+        List<RuleDefinition> all = new java.util.ArrayList<>(a);
+        all.addAll(b);
+        return all;
+    }
+
+    @Test
     void unknownCodeResolvesEmpty() {
         RuleMetadataResolver resolver = new RuleMetadataResolver(List.of(
                 rule("GDPR Art. 6 / ePrivacy", ScanJurisdiction.EU, Set.of(JurisdictionLayer.EU))));

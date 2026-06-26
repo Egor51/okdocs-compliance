@@ -28,7 +28,7 @@ public final class TrackerCookieNames {
     }
 
     /** Похоже ли имя cookie/ключа на трекинговый маркер (case-insensitive подстрока). */
-    static boolean isTracker(String name) {
+    public static boolean isTracker(String name) {
         if (name == null || name.isBlank()) {
             return false;
         }

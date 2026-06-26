@@ -1,82 +1,27 @@
 package io.okdocs.compliance.rules.eu;
 
-import io.okdocs.compliance.contracts.crawler.PageAnalysisResult;
 import io.okdocs.compliance.contracts.crawler.ScanAnalysisContext;
-
-import java.util.List;
-import java.util.Locale;
-import java.util.regex.Pattern;
+import io.okdocs.compliance.rules.common.GdprPatterns;
 
 /**
- * GDPR-эвристики для правил пакета {@code eu}: regex privacy notice, идентичности контролёра и прав
- * субъекта данных. Нейтральны к RU-формулировкам (отделены от {@code RuPatterns}); язык — английский
- * + общеевропейские термины (de/fr/es), т.к. EU-скан может быть на любом языке Союза. Детекция
- * статическая (по тексту/ссылкам страниц), без consent-сценариев (те — Фаза 5).
+ * GDPR-эвристики пакета {@code eu}. Тонкая обёртка над нейтральным {@link GdprPatterns} (общий с
+ * {@code uk}, т.к. механика детекции privacy notice / controller / rights одинакова для GDPR и
+ * UK GDPR). Оставлена как точка для EU-специфичных эвристик, если появятся.
  */
 final class EuPatterns {
 
     private EuPatterns() {
     }
 
-    /** Ссылка/упоминание privacy notice (политики конфиденциальности). */
-    static final Pattern PRIVACY_NOTICE = Pattern.compile(
-            "privacy[\\-_ ]?(polic|notice|statement)|/privacy\\b|data[\\-_ ]?protection"
-                    + "|datenschutz" // de
-                    + "|politique[\\-_ ]?de[\\-_ ]?confidentialit|confidentialit" // fr
-                    + "|pol[íi]tica[\\-_ ]?de[\\-_ ]?privacidad|privacidad", // es
-            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-
-    /** Идентичность контролёра данных (controller identity): кто обрабатывает + контакт. */
-    static final Pattern CONTROLLER_IDENTITY = Pattern.compile(
-            "data[\\-_ ]?controller|controller[\\-_ ]?of[\\-_ ]?(the[\\-_ ]?)?data"
-                    + "|verantwortliche[r]?" // de
-                    + "|responsable[\\-_ ]?du[\\-_ ]?traitement" // fr
-                    + "|responsable[\\-_ ]?del[\\-_ ]?tratamiento" // es
-                    + "|registered[\\-_ ]?(office|address)|company[\\-_ ]?(no|number|registration)",
-            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-
-    /** Права субъекта данных (access/erasure/rectification/portability/objection). */
-    static final Pattern DATA_SUBJECT_RIGHTS = Pattern.compile(
-            "right[\\s\\S]{0,20}(to[\\s\\S]{0,5})?(access|erasure|be[\\s\\-]?forgotten|rectif"
-                    + "|portabilit|object|restrict|withdraw)"
-                    + "|data[\\-_ ]?subject[\\-_ ]?rights|your[\\-_ ]?(gdpr[\\-_ ]?)?rights"
-                    + "|betroffenenrechte|auskunftsrecht" // de
-                    + "|droit[\\s\\S]{0,20}(d['e]?acc[èe]s|effacement|rectification|opposition)" // fr
-                    + "|derecho[\\s\\S]{0,20}(de[\\s\\S]{0,5})?(acceso|supresi[óo]n|rectificaci[óo]n|oposici[óo]n)", // es
-            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-
-    private static List<PageAnalysisResult> pages(ScanAnalysisContext ctx) {
-        return ctx.pages() == null ? List.of() : ctx.pages();
-    }
-
-    /** Есть ли где-либо privacy notice (внутренние ссылки или текст страницы). */
     static boolean hasPrivacyNotice(ScanAnalysisContext ctx) {
-        return matchesAnyPage(ctx, PRIVACY_NOTICE, true);
+        return GdprPatterns.hasPrivacyNotice(ctx);
     }
 
-    /** Раскрыта ли идентичность контролёра в тексте хотя бы одной страницы. */
     static boolean hasControllerIdentity(ScanAnalysisContext ctx) {
-        return matchesAnyPage(ctx, CONTROLLER_IDENTITY, false);
+        return GdprPatterns.hasControllerIdentity(ctx);
     }
 
-    /** Упомянуты ли права субъекта данных в тексте хотя бы одной страницы. */
     static boolean hasDataSubjectRights(ScanAnalysisContext ctx) {
-        return matchesAnyPage(ctx, DATA_SUBJECT_RIGHTS, false);
-    }
-
-    private static boolean matchesAnyPage(ScanAnalysisContext ctx, Pattern pattern, boolean alsoLinks) {
-        for (PageAnalysisResult p : pages(ctx)) {
-            if (alsoLinks && p.internalLinks() != null) {
-                for (String link : p.internalLinks()) {
-                    if (pattern.matcher(link.toLowerCase(Locale.ROOT)).find()) {
-                        return true;
-                    }
-                }
-            }
-            if (p.text() != null && pattern.matcher(p.text()).find()) {
-                return true;
-            }
-        }
-        return false;
+        return GdprPatterns.hasDataSubjectRights(ctx);
     }
 }

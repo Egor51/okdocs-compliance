@@ -235,6 +235,16 @@ public final class TestFixtures {
                 false, List.of(), RenderMode.DYNAMIC, List.of(), cookies, storageKeys, true, true);
     }
 
+    /** DYNAMIC-страница с заданным consent-сценарием (Фаза 5). */
+    public static PageAnalysisResult dynamicPageWithConsent(
+            String url, io.okdocs.compliance.contracts.crawler.ConsentScenarioResult scenario) {
+        return new PageAnalysisResult(
+                url, "title", "текст", "<html></html>",
+                List.of(), List.of(), List.of(),
+                false, List.of(), RenderMode.DYNAMIC, List.of(), List.of(), List.of(), true, true,
+                scenario);
+    }
+
     /** Cookie с явными флагами (persistent, не session). */
     public static io.okdocs.compliance.contracts.crawler.ObservedCookie cookie(
             String name, boolean secure, boolean httpOnly) {
