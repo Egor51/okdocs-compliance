@@ -52,11 +52,18 @@ public interface ComplianceScanRepository extends JpaRepository<ComplianceScan, 
     List<ComplianceScan> findTerminalWithoutReport(@Param("statuses") Collection<ScanStatus> statuses,
                                                     Pageable pageable);
 
-    /** История кабинета с опциональными фильтрами domain (ILIKE substring) и status (§4.1). */
+    /**
+     * История кабинета с опциональными фильтрами domain (ILIKE substring) и status (§4.1).
+     * <p>
+     * {@code cast(:domain as string)} обязателен: при {@code domain = null} Postgres не может вывести
+     * тип bind-параметра внутри {@code lower(concat(...))} и трактует его как {@code bytea}, из-за чего
+     * планировщик падает с {@code lower(bytea) does not exist} (short-circuit {@code IS NULL} не спасает —
+     * выражение типизируется на этапе планирования). Явный cast в text фиксирует тип.
+     */
     @Query("""
             SELECT s FROM ComplianceScan s
             WHERE s.userId = :userId
-              AND (:domain IS NULL OR lower(s.siteDomain) LIKE lower(concat('%', :domain, '%')))
+              AND (:domain IS NULL OR lower(s.siteDomain) LIKE lower(concat('%', cast(:domain as string), '%')))
               AND (:status IS NULL OR s.status = :status)
             ORDER BY s.createdAt DESC
             """)
