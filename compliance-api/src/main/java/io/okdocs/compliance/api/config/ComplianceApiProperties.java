@@ -39,13 +39,15 @@ public record ComplianceApiProperties(
     /**
      * Настройки соц-логина (F.8).
      *
-     * @param successRedirectUrl фронтовый callback, куда success-handler редиректит с one-time
-     *                           кодом ({@code ?code=...}). Дефолт — локальный фронт.
+     * @param successRedirectUrl фронтовый BFF-callback (Route Handler), куда success-handler
+     *                           редиректит с one-time кодом ({@code ?code=...}). Плейсхолдер
+     *                           {@code {locale}} success-handler заменяет на язык интерфейса (из OAuth
+     *                           state, F.8); BFF после обмена уводит на {@code /{locale}/dashboard}.
      */
     public record Oauth(String successRedirectUrl) {
         public Oauth {
             if (successRedirectUrl == null || successRedirectUrl.isBlank()) {
-                successRedirectUrl = "http://localhost:3000/auth/callback";
+                successRedirectUrl = "http://localhost:3000/api/auth/oauth/callback?locale={locale}";
             }
         }
     }

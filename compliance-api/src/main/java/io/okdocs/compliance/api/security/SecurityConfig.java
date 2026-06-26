@@ -1,9 +1,11 @@
 package io.okdocs.compliance.api.security;
 
+import io.okdocs.compliance.api.security.oauth.LocaleAwareAuthorizationRequestResolver;
 import io.okdocs.compliance.api.security.oauth.OAuthLoginSuccessHandler;
+import io.okdocs.compliance.api.security.oauth.OAuthProvidersConfiguredCondition;
 import lombok.RequiredArgsConstructor;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpMethod;
@@ -38,20 +40,28 @@ public class SecurityConfig {
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
 
     /**
-     * OAuth2-login цепочка. Создаётся ТОЛЬКО если сконфигурирован хотя бы один провайдер (есть
-     * {@link ClientRegistrationRepository}) — иначе без client-id/secret приложение всё равно
-     * стартует (соц-логин просто выключен). Сессия разрешена: OAuth2 хранит state между редиректами.
+     * OAuth2-login цепочка. Создаётся ТОЛЬКО если сконфигурирован хотя бы один провайдер.
+     * Проверяем credentials тем же условием, что и {@link ClientRegistrationRepository}: обычный
+     * {@code @ConditionalOnBean} здесь ненадёжен, поскольку порядок обработки пользовательских
+     * {@code @Configuration} не гарантирует, что definition репозитория уже виден. Сессия разрешена:
+     * OAuth2 хранит state между редиректами.
      */
     @Bean
     @Order(1)
-    @ConditionalOnBean(ClientRegistrationRepository.class)
+    @Conditional(OAuthProvidersConfiguredCondition.class)
     public SecurityFilterChain oauthSecurityFilterChain(HttpSecurity http,
-                                                        OAuthLoginSuccessHandler successHandler) throws Exception {
+                                                        OAuthLoginSuccessHandler successHandler,
+                                                        ClientRegistrationRepository clientRegistrationRepository) throws Exception {
+        // Кастомный resolver несёт locale интерфейса через state (F.8) — см. success-handler.
+        var authorizationRequestResolver = new LocaleAwareAuthorizationRequestResolver(
+                clientRegistrationRepository, "/oauth2/authorization");
         http
                 .securityMatcher("/oauth2/**", "/login/oauth2/**")
                 .csrf(AbstractHttpConfigurer::disable)
                 .authorizeHttpRequests(auth -> auth.anyRequest().permitAll())
-                .oauth2Login(oauth -> oauth.successHandler(successHandler));
+                .oauth2Login(oauth -> oauth
+                        .authorizationEndpoint(ep -> ep.authorizationRequestResolver(authorizationRequestResolver))
+                        .successHandler(successHandler));
         return http.build();
     }
 

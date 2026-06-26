@@ -42,23 +42,27 @@ class OAuthLoginSuccessHandlerTest {
     void setUp() {
         ComplianceApiProperties props = new ComplianceApiProperties(
                 null, null, null, null, null, null, null,
-                new ComplianceApiProperties.Oauth("https://app.example.com/auth/callback"), null);
+                new ComplianceApiProperties.Oauth("https://app.example.com/api/auth/oauth/callback?locale={locale}"), null);
         handler = new OAuthLoginSuccessHandler(accountService, loginCodeService, props);
     }
 
-    @Test
-    void resolvesAccountIssuesCodeAndRedirectsToFrontend() throws IOException {
+    private OAuth2AuthenticationToken googleToken() {
         OAuth2User principal = new DefaultOAuth2User(
                 List.of(new SimpleGrantedAuthority("ROLE_USER")),
                 Map.of("sub", "g-1", "email", "a@gmail.com", "email_verified", true, "name", "Ann"),
                 "sub");
-        OAuth2AuthenticationToken token = new OAuth2AuthenticationToken(
-                principal, principal.getAuthorities(), "google");
+        return new OAuth2AuthenticationToken(principal, principal.getAuthorities(), "google");
+    }
 
+    @Test
+    void resolvesAccountIssuesCodeAndRedirectsToFrontend() throws IOException {
+        OAuth2AuthenticationToken token = googleToken();
         AppUser user = new AppUser();
         user.setId(55L);
         when(accountService.resolveOrCreate(any(OAuthUserInfo.class))).thenReturn(user);
         when(loginCodeService.issue(55L)).thenReturn("one-time-code");
+        // state с locale-суффиксом, как его зашивает LocaleAwareAuthorizationRequestResolver.
+        when(request.getParameter("state")).thenReturn("csrf-abc__en");
 
         handler.onAuthenticationSuccess(request, response, token);
 
@@ -68,11 +72,49 @@ class OAuthLoginSuccessHandlerTest {
         assertThat(info.getValue().provider()).isEqualTo(OAuthProvider.GOOGLE);
         assertThat(info.getValue().emailVerified()).isTrue();
 
-        // Редирект на фронт с one-time кодом (JWT в URL не светим).
+        // Редирект на BFF-callback с подставленным locale и one-time кодом (JWT в URL не светим).
         ArgumentCaptor<String> redirect = ArgumentCaptor.forClass(String.class);
         verify(response).sendRedirect(redirect.capture());
         assertThat(redirect.getValue())
-                .startsWith("https://app.example.com/auth/callback")
+                .startsWith("https://app.example.com/api/auth/oauth/callback")
+                .contains("locale=en")
                 .contains("code=one-time-code");
+    }
+
+    @Test
+    void fallsBackToDefaultLocaleWhenStateHasNoLocaleSuffix() throws IOException {
+        OAuth2AuthenticationToken token = googleToken();
+        AppUser user = new AppUser();
+        user.setId(7L);
+        when(accountService.resolveOrCreate(any(OAuthUserInfo.class))).thenReturn(user);
+        when(loginCodeService.issue(7L)).thenReturn("c");
+        when(request.getParameter("state")).thenReturn("csrf-only");
+
+        handler.onAuthenticationSuccess(request, response, token);
+
+        ArgumentCaptor<String> redirect = ArgumentCaptor.forClass(String.class);
+        verify(response).sendRedirect(redirect.capture());
+        // Дефолт locale (ru) подставлен в {locale}.
+        assertThat(redirect.getValue())
+                .startsWith("https://app.example.com/api/auth/oauth/callback")
+                .contains("locale=ru");
+    }
+
+    @Test
+    void fallsBackToDefaultLocaleWhenStateLocaleUnsupported() throws IOException {
+        OAuth2AuthenticationToken token = googleToken();
+        AppUser user = new AppUser();
+        user.setId(8L);
+        when(accountService.resolveOrCreate(any(OAuthUserInfo.class))).thenReturn(user);
+        when(loginCodeService.issue(8L)).thenReturn("c");
+        when(request.getParameter("state")).thenReturn("csrf__de");
+
+        handler.onAuthenticationSuccess(request, response, token);
+
+        ArgumentCaptor<String> redirect = ArgumentCaptor.forClass(String.class);
+        verify(response).sendRedirect(redirect.capture());
+        assertThat(redirect.getValue())
+                .startsWith("https://app.example.com/api/auth/oauth/callback")
+                .contains("locale=ru");
     }
 }
