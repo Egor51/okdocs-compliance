@@ -82,7 +82,9 @@ public final class EsAepdNoClearRejectRule implements Rule {
                     EvidenceType.DYNAMIC_RENDER,
                     0.85,
                     rejectMissing ? "aepd-reject-absent" : "aepd-reject-not-equal",
-                    VerificationStatus.DETECTED));
+                    VerificationStatus.DETECTED,
+                    rejectMissing ? "ES_AEPD_REJECT_ABSENT" : "ES_AEPD_REJECT_UNEQUAL",
+                    java.util.Map.of("cmp", ConsentSupport.cmpSuffix(banner))));
         }
         return facts;
     }

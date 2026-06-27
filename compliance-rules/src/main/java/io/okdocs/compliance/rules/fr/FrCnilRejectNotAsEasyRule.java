@@ -82,7 +82,9 @@ public final class FrCnilRejectNotAsEasyRule implements Rule {
                     EvidenceType.DYNAMIC_RENDER,
                     0.85,
                     rejectMissing ? "cnil-reject-absent" : "cnil-reject-not-equal",
-                    VerificationStatus.DETECTED));
+                    VerificationStatus.DETECTED,
+                    rejectMissing ? "FR_CNIL_REJECT_ABSENT" : "FR_CNIL_REJECT_UNEQUAL",
+                    java.util.Map.of("cmp", ConsentSupport.cmpSuffix(banner))));
         }
         return facts;
     }

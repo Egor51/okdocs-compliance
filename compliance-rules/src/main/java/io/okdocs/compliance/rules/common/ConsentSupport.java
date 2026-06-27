@@ -46,4 +46,15 @@ public final class ConsentSupport {
         }
         return result;
     }
+
+    /**
+     * Готовый suffix " CMP: {provider}." для structured-evidence param (или пусто). Один формат для
+     * всех consent-правил (EU/UK/FR/DE/ES), чтобы не дублировать тернарник в каждом детекторе.
+     */
+    public static String cmpSuffix(io.okdocs.compliance.contracts.crawler.ConsentBannerInfo banner) {
+        if (banner == null || banner.cmpProvider() == null || banner.cmpProvider().isBlank()) {
+            return "";
+        }
+        return " CMP: " + banner.cmpProvider() + ".";
+    }
 }

@@ -12,7 +12,7 @@ target/
 
 *.log
 logs/
-
+docs/**
 .env
 compliance-app/.env.app
 compliance-api/.env.api

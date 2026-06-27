@@ -107,4 +107,36 @@ class EvidenceRendererTest {
         assertThat(renderer.renderMessage("NOT_EVALUATED_RULE_ERROR", Map.of(), "RU-PLAIN", "fr"))
                 .isEqualTo("The rule was not evaluated due to an execution error.");
     }
+
+    // ── EU/overlay keys (Этап 5): cmp-suffix + per-variant + items ──────────────────────────────
+
+    @Test
+    void rejectAbsentWithCmpSuffix() {
+        var fact = structured("NO_REJECT_ABSENT", Map.of("cmp", " CMP: OneTrust."));
+        assertThat(renderer.render(fact, "en"))
+                .isEqualTo("Banner has an accept option but no reject option. CMP: OneTrust.");
+    }
+
+    @Test
+    void rejectAbsentWithEmptyCmp() {
+        var fact = structured("NO_REJECT_ABSENT", Map.of("cmp", ""));
+        assertThat(renderer.render(fact, "en"))
+                .isEqualTo("Banner has an accept option but no reject option.");
+    }
+
+    @Test
+    void trackersAfterRejectJoinsItems() {
+        var fact = structured("TRACKERS_AFTER_REJECT", Map.of("items", List.of("Google", "Meta")));
+        assertThat(renderer.render(fact, "en"))
+                .isEqualTo("Trackers still loading after consent rejection: Google, Meta.");
+    }
+
+    @Test
+    void euOverlayKeyFallsBackToEnForGermanLocale() {
+        // de-шаблона нет → fallback на en (для немца пока английский, до de-шаблонов).
+        var fact = structured("DE_TDDDG_TERMINAL_ACCESS_WITHOUT_CONSENT",
+                Map.of("items", List.of("cookie:_ga")));
+        assertThat(renderer.render(fact, "de"))
+                .isEqualTo("Non-essential storage/access after consent rejection: cookie:_ga.");
+    }
 }

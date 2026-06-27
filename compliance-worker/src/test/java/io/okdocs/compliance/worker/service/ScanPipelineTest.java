@@ -201,6 +201,38 @@ class ScanPipelineTest {
                 .isEqualTo("The rule was not evaluated: no input data to check.");
     }
 
+    @Test
+    void nullLocaleNormalizesToDefaultRu() throws Exception {
+        // Legacy/ручной скан без locale → worker нормализует к ru: message по ru-шаблону, не en/plain.
+        ComplianceScan scan = freeScan(io.okdocs.compliance.contracts.enums.ScanJurisdiction.RU);
+        scan.setLocale(null);
+        when(siteCrawler.crawl(anyString(), anyInt())).thenReturn(new SiteCrawler.CrawlResult(
+                List.of(page("https://example.com/")), List.of(),
+                new CrawlerDiagnostics(1, 1, 0, false)));
+        stubAnalysisNoEngine();
+        var notEvaluated = new io.okdocs.compliance.rules.RuleOutcome(
+                "SOME_RULE", io.okdocs.compliance.rules.RuleOutcomeStatus.NOT_EVALUATED,
+                "t", io.okdocs.compliance.contracts.enums.FindingSeverity.LOW,
+                io.okdocs.compliance.contracts.enums.FindingCategory.SECURITY,
+                "RU-plain-fallback", "NOT_EVALUATED_NO_INPUT");
+        when(ruleEngine.evaluate(any())).thenReturn(
+                new RuleEngineResult(List.of(), List.of(), List.of(notEvaluated)));
+        when(metadataResolver.resolve(eq("SOME_RULE"), any())).thenReturn(java.util.Optional.empty());
+
+        ScanPipeline.PipelineOutcome outcome = pipeline.run(scan, scan.getId());
+
+        var node = new ObjectMapper().readTree(outcome.result().diagnosticsJson());
+        assertThat(node.path("ruleOutcomes").path(0).path("message").asText())
+                .isEqualTo("Правило не проверялось: нет входных данных для проверки.");
+    }
+
+    @Test
+    void normalizeLocaleDefaultsAndTrims() {
+        assertThat(ScanPipeline.normalizeLocale(null)).isEqualTo("ru");
+        assertThat(ScanPipeline.normalizeLocale("  ")).isEqualTo("ru");
+        assertThat(ScanPipeline.normalizeLocale(" EN ")).isEqualTo("en");
+    }
+
     /** stubAnalysis без ruleEngine/findingAssembler-стабов: тест задаёт их сам. */
     private void stubAnalysisNoEngine() {
         lenient().when(tlsInspector.inspect(anyString(), org.mockito.ArgumentMatchers.anyList())).thenReturn(

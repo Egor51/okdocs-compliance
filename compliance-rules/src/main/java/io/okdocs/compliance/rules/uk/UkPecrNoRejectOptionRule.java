@@ -82,7 +82,9 @@ public final class UkPecrNoRejectOptionRule implements Rule {
                     EvidenceType.DYNAMIC_RENDER,
                     0.85,
                     rejectMissing ? "reject-button-absent" : "reject-not-same-level",
-                    VerificationStatus.DETECTED));
+                    VerificationStatus.DETECTED,
+                    rejectMissing ? "NO_REJECT_ABSENT" : "NO_REJECT_UNEQUAL",
+                    java.util.Map.of("cmp", ConsentSupport.cmpSuffix(banner))));
         }
         return facts;
     }

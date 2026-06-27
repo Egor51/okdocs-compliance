@@ -85,7 +85,9 @@ public final class EuNonEssentialCookiesBeforeConsentRule implements Rule {
                     EvidenceType.DYNAMIC_RENDER,
                     0.90,
                     String.join(",", trackers),
-                    VerificationStatus.DETECTED));
+                    VerificationStatus.DETECTED,
+                    "EU_NON_ESSENTIAL_COOKIES_BEFORE_CONSENT",
+                    java.util.Map.of("items", trackers)));
         }
         return facts;
     }

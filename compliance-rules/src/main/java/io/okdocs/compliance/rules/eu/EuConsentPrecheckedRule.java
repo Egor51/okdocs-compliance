@@ -75,7 +75,9 @@ public final class EuConsentPrecheckedRule implements Rule {
                     EvidenceType.DYNAMIC_RENDER,
                     0.80,
                     "prechecked-consent-toggles",
-                    VerificationStatus.DETECTED));
+                    VerificationStatus.DETECTED,
+                    "EU_CONSENT_PRECHECKED_OR_DEFAULT_ON",
+                    java.util.Map.of("cmp", ConsentSupport.cmpSuffix(banner))));
         }
         return facts;
     }

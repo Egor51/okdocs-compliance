@@ -53,10 +53,10 @@ spring:
       # без headers он не знает тип и падает с «No type information in headers».
       value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
     listener:
-      concurrency: 3
+      concurrency: ${KAFKA_LISTENER_CONCURRENCY:6}
       ack-mode: manual
-#server:
-#  port: 8081
+server:
+  port: 8081
 management:
   endpoints:
     web:

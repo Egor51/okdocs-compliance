@@ -162,8 +162,12 @@ public class ScanPipeline {
                 scan.getJurisdiction(), pages, hostCountry, resolvedIps, registryStatus, diag, technical);
 
         RuleEngineResult engineResult = ruleEngine.evaluate(ctx);
+        // Worker-side нормализация locale: для новых сканов API всегда ставит locale (Этап 1), но
+        // legacy/ручные DB-записи могут иметь null. Явный дефолт здесь делает поведение предсказуемым
+        // (а не зависящим от plain-fallback рендерера) и чинит асимметрию locale→en цепочки при null.
+        String locale = normalizeLocale(scan.getLocale());
         List<ComplianceFinding> findings = findingAssembler.assemble(
-                scanId, scan.getJurisdiction(), scan.getLocale(), engineResult.facts());
+                scanId, scan.getJurisdiction(), locale, engineResult.facts());
         int score = scoreCalculator.calculate(findings);
 
         // Observability: метрики краула, findings и ошибок правил (§5.7).
@@ -178,7 +182,7 @@ public class ScanPipeline {
         // не-RU сканах positiveChecks common-правил остались бы на RU-текстах. Findings берём из
         // оригинального engineResult — их слой уже накладывает assembler.
         RuleEngineResult diagnosticsResult =
-                enrichOutcomes(engineResult, scan.getJurisdiction(), scan.getLocale());
+                enrichOutcomes(engineResult, scan.getJurisdiction(), locale);
         String diagnosticsJson = serializeDiagnostics(diag, diagnosticsResult);
 
         progressService.updateProgress(scanId, 90, "Формирование отчёта");
@@ -344,6 +348,17 @@ public class ScanPipeline {
      * тест) — outcome остаётся без изменений. Facts/errors не трогаем (для них слой накладывает
      * assembler / они без юрисдикции).
      */
+    /** Дефолт locale для legacy/ручных сканов без явного значения (зеркалит API-дефолт). */
+    static final String DEFAULT_LOCALE = "ru";
+
+    /** null/пусто → дефолт; иначе trim+lowercase. Whitelist уже валидирует API при создании скана. */
+    static String normalizeLocale(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return DEFAULT_LOCALE;
+        }
+        return raw.trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
     private RuleEngineResult enrichOutcomes(RuleEngineResult result, ScanJurisdiction jurisdiction,
                                             String locale) {
         if (result.outcomes() == null || result.outcomes().isEmpty()) {

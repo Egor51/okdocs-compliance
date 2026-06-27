@@ -39,15 +39,14 @@ compliance:
       # CDP-таймауты/лимиты dynamic-прохода. enabled/base-url/auth-token/premium-enabled
       # — env-специфика, задаются в application.yml каждого приложения, НЕ здесь.
       page-timeout-ms: 30000
-      concurrency: 3
+      concurrency: 2
       # Сколько приоритетных страниц перекраулить headless поверх static-карты.
       # Должно быть <= crawler.max-pages (инвариант в ComplianceWorkerProperties).
-      # 10 (не 20): dynamic CDP-проход — главный потребитель времени отчёта (~1.2с/страница,
-      # на медленных SPA — до page-timeout). Приоритетные страницы (формы/политика/контакты)
-      # рендерятся первыми, поэтому урезание хвоста почти не теряет покрытие, но вдвое режет время
-      # и снижает риск упереться в total-deadline (3m). Тюнится из env при необходимости.
-      max-pages: 8
-      batch-timeout-seconds: 180
+      # CDP-проход — главный потребитель времени отчёта. Держим только самые ценные
+      # приоритетные страницы (главная/политика/контакты/формы), чтобы premium не занимал
+      # consumer lane на весь total-deadline и не задерживал быстрые FREE_MARKETING-сканы.
+      max-pages: 4
+      batch-timeout-seconds: 90
       # Как часто перепроверять живость CDP-эндпоинта между сканами.
       availability-recheck-interval: 10s
       network-idle:
@@ -75,7 +74,7 @@ compliance:
     redeliver-delay: 30s
     # Жёсткий общий дедлайн на весь скан сверх crawler-таймаута (страховка от
     # зависания не в краулере). Не меньше crawler.crawler-timeout-seconds.
-    total-deadline: 3m
+    total-deadline: 4m
   backfill:
     # Разовый backfill старых terminal-сканов без report snapshot. Включать только на время миграции.
     reports-enabled: ${REPORT_BACKFILL_ENABLED:false}
