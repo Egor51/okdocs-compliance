@@ -1,0 +1,27 @@
+# Соц-логин (F.8) — креды провайдеров под СОБСТВЕННЫМ префиксом compliance.oauth.client.providers.*
+# (НЕ spring.security.oauth2.client.*: тот валидируется Boot'ом и падает на пустом client-id).
+#
+# Каждый провайдер включается НЕЗАВИСИМО: запись с пустым client-id отбрасывается
+# OAuthClientRegistrationConfig. Можно поднять, например, только Google — остальные не задавать.
+# Если не задан ни один — ClientRegistrationRepository не создаётся, соц-логин выключен.
+#
+# Регистрации по locale: ru → Яндекс/VK, en → Google/GitHub.
+# Redirect URI у провайдера: {baseUrl}/login/oauth2/code/{registrationId}
+#   например http://localhost:8080/login/oauth2/code/google
+# Endpoints/scopes Google/GitHub — из CommonOAuth2Provider; Яндекс/VK — заданы в коде.
+compliance:
+  oauth:
+    client:
+      providers:
+        google:
+          client-id: ${OAUTH_GOOGLE_CLIENT_ID:}
+          client-secret: ${OAUTH_GOOGLE_CLIENT_SECRET:}
+        github:
+          client-id: ${OAUTH_GITHUB_CLIENT_ID:}
+          client-secret: ${OAUTH_GITHUB_CLIENT_SECRET:}
+        yandex:
+          client-id: ${OAUTH_YANDEX_CLIENT_ID:}
+          client-secret: ${OAUTH_YANDEX_CLIENT_SECRET:}
+        vk:
+          client-id: ${OAUTH_VK_CLIENT_ID:}
+          client-secret: ${OAUTH_VK_CLIENT_SECRET:}

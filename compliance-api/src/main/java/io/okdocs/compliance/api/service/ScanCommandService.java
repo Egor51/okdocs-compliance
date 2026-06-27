@@ -67,7 +67,7 @@ public class ScanCommandService {
         rateLimitService.checkScanAllowed(principal, ipAddress);
         UrlValidatorService.ValidatedUrl validated = urlValidator.validate(request.siteUrl());
 
-        ScanJurisdiction jurisdiction = parseJurisdiction(request.jurisdiction());
+        ScanJurisdiction jurisdiction = resolveEnabledJurisdiction(request.jurisdiction());
 
         ComplianceScan scan = newScan(validated, ipAddress, principal, null,
                 ScanKind.FREE_MARKETING, properties.scan().freeMarketingMaxPages(), false, jurisdiction);
@@ -92,7 +92,7 @@ public class ScanCommandService {
         UrlValidatorService.ValidatedUrl validated = urlValidator.validate(request.siteUrl());
         UUID parentScanId = resolveParent(request.parentScanId(), validated.domain(), principal);
 
-        ScanJurisdiction jurisdiction = parseJurisdiction(request.jurisdiction());
+        ScanJurisdiction jurisdiction = resolveEnabledJurisdiction(request.jurisdiction());
 
         ComplianceScan scan = newScan(validated, ipAddress, principal, parentScanId,
                 ScanKind.CABINET_PREMIUM, properties.scan().userMaxPages(), true, jurisdiction);
@@ -103,6 +103,33 @@ public class ScanCommandService {
         scanRepository.save(scan);
         publishScanRequested(scan, principal);
         return toStatusResponse(scan);
+    }
+
+    /**
+     * Внутренний запуск premium-скана (F.4 §F13) — для webhook'а оплаты, у которого НЕТ
+     * {@link CompliancePrincipal}/IP/rate-limit (публичный {@link #startCabinetScan} для этого не
+     * годится). Списывает 1 кредит (его перед этим пополнил {@code purchase}) и ставит CABINET_PREMIUM
+     * в очередь. Должен вызываться ВНУТРИ транзакции webhook'а: если упадёт (нет баланса/ошибка
+     * outbox) — откатится вместе с {@code purchase}, и платёж уйдёт в retry (F.14).
+     * <p>
+     * {@code siteUrl}/{@code jurisdiction} — уже валидированный prefill (валидируются при создании
+     * checkout-сессии, F.3). Возвращает id запущенного скана для записи в {@code premium_scan_id}.
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public UUID startInternalPremiumScan(Long userId, String siteUrl, ScanJurisdiction jurisdiction) {
+        UrlValidatorService.ValidatedUrl validated = urlValidator.validate(siteUrl);
+        // Синтетический principal: у внутреннего вызова нет HTTP-контекста, но newScan/outbox
+        // ожидают userId. Роль USER — скан принадлежит юзеру кабинета.
+        CompliancePrincipal principal = CompliancePrincipal.user(userId, io.okdocs.compliance.contracts.enums.UserRole.USER);
+        ComplianceScan scan = newScan(validated, null, principal, null,
+                ScanKind.CABINET_PREMIUM, properties.scan().userMaxPages(), true, jurisdiction);
+
+        // Списание только что купленного кредита — в той же транзакции webhook'а.
+        balanceService.debit(userId, scan.getId());
+
+        scanRepository.save(scan);
+        publishScanRequested(scan, principal);
+        return scan.getId();
     }
 
     /** Сборка строки скана в QUEUED. Режим выполнения (kind/maxPages/dynamicRequired) — здесь. */
@@ -236,7 +263,7 @@ public class ScanCommandService {
      * Невалидное/пустое значение → 400 ({@link ComplianceValidationException}), без неявного дефолта —
      * выбор юрисдикции явно делает фронт (от неё зависят набор правил и тариф).
      */
-    private static ScanJurisdiction parseJurisdiction(String raw) {
+    static ScanJurisdiction parseJurisdiction(String raw) {
         if (raw == null || raw.isBlank()) {
             throw new ComplianceValidationException("Не указана юрисдикция скана");
         }
@@ -245,6 +272,39 @@ public class ScanCommandService {
         } catch (IllegalArgumentException e) {
             throw new ComplianceValidationException("Неизвестная юрисдикция скана: " + raw);
         }
+    }
+
+    /**
+     * Бизнес-проверка доступности юрисдикции (§ Этап 13): юрисдикция синтаксически валидна, но набор
+     * правил для неё может быть ещё не готов ({@code enabled-jurisdictions}). Защита от «пустого
+     * идеального отчёта»: скан по неподдерживаемой юрисдикции → 400, а не пустой PASS-отчёт. Отделено
+     * от {@link #parseJurisdiction} (синтаксис) — единая точка для scan и checkout.
+     */
+    static void assertJurisdictionEnabled(ScanJurisdiction jurisdiction,
+                                          java.util.Set<ScanJurisdiction> enabled) {
+        if (!enabled.contains(jurisdiction)) {
+            throw new ComplianceValidationException(
+                    "Юрисдикция пока не поддерживается: " + jurisdiction);
+        }
+    }
+
+    /** Разбор + проверка доступности одним вызовом — для scan и checkout. */
+    static ScanJurisdiction parseAndAssertEnabled(String raw, java.util.Set<ScanJurisdiction> enabled) {
+        ScanJurisdiction jurisdiction = parseJurisdiction(raw);
+        assertJurisdictionEnabled(jurisdiction, enabled);
+        return jurisdiction;
+    }
+
+    /**
+     * Instance-обёртка над {@link #parseAndAssertEnabled} с {@code enabled-jurisdictions} из
+     * properties — единая точка для checkout (у которого нет своих properties).
+     */
+    public ScanJurisdiction resolveEnabledJurisdiction(String raw) {
+        // Парсим (синтаксис) ДО чтения properties: неизвестная юрисдикция → 400 без обращения к
+        // enabled-jurisdictions (важно и для тестов с замоканными properties).
+        ScanJurisdiction jurisdiction = parseJurisdiction(raw);
+        assertJurisdictionEnabled(jurisdiction, properties.scan().enabledJurisdictions());
+        return jurisdiction;
     }
 
     private UUID resolveParent(UUID parentScanId, String domain, CompliancePrincipal principal) {

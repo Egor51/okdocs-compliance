@@ -82,9 +82,18 @@ compliance:
     user-max-pages: 100
     guest-retention-days: 7
     free-marketing-retention-days: 7
+    # Юрисдикции с готовым набором правил (Этап 13). Скан/чекаут по другой юрисдикции → 400
+    # (защита от «пустого идеального отчёта»).
+    enabled-jurisdictions:
+      - RU
+      - EU
+      - UK
+      - DE
+      - FR
+      - ES
   plan:
     quota:
-      FREE: 1
+      FREE: 0
       PRO: 30
       BUSINESS: 200
   paywall-cta:
@@ -106,3 +115,12 @@ compliance:
     # Доверять X-Forwarded-For только за доверенным ingress/proxy. По умолчанию false
     # (иначе guest-rate-limit по IP обходится подделкой заголовка).
     trust-forwarded-header: ${TRUST_FORWARDED_HEADER:false}
+  oauth:
+    # Фронтовый BFF-callback (Route Handler), куда после OAuth-login редиректим с one-time кодом
+    # (F.8). Handler меняет code→JWT, ставит httpOnly cookie и уводит на /{locale}/dashboard.
+    # {locale} подставляет success-handler из OAuth state; идёт query-параметром (путь — /api/*).
+    success-redirect-url: ${OAUTH_SUCCESS_REDIRECT_URL:http://localhost:3000/api/auth/oauth/callback?locale={locale}}
+  payment:
+    # Shared-secret webhook'а оплаты (header X-Webhook-Secret). Не задан → webhook fail-closed
+    # отвергает все запросы (защита от подделки). Штатная подпись провайдера — F.16.
+    webhook-secret: ${PAYMENT_WEBHOOK_SECRET:}

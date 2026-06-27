@@ -45,6 +45,12 @@
             <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
 
+        <!-- OAuth2 client: соц-логин (F.2 §F8) — Яндекс/VK/Google/GitHub -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-oauth2-client</artifactId>
+        </dependency>
+
         <!-- Bean Validation (@Valid на DTO запросов) -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

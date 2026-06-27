@@ -42,11 +42,11 @@ class FindingAssemblerTest {
 
     @Test
     void appliesDefinitionMetadataAndFactObservation() {
-        when(resolver.resolve("NO_PRIVACY_POLICY")).thenReturn(Optional.of(DEF));
-        when(resolver.isEnabled("NO_PRIVACY_POLICY")).thenReturn(true);
+        when(resolver.resolve("NO_PRIVACY_POLICY", ScanJurisdiction.RU)).thenReturn(Optional.of(DEF));
         UUID scanId = UUID.randomUUID();
 
-        List<ComplianceFinding> findings = assembler.assemble(scanId, List.of(fact("NO_PRIVACY_POLICY")));
+        List<ComplianceFinding> findings =
+                assembler.assemble(scanId, ScanJurisdiction.RU, List.of(fact("NO_PRIVACY_POLICY")));
 
         assertThat(findings).hasSize(1);
         ComplianceFinding f = findings.get(0);
@@ -72,21 +72,23 @@ class FindingAssemblerTest {
     @Test
     void dropsFactForUnknownRuleCode() {
         // Код, которого нет в коде (мёртвый факт) — резолвер возвращает empty.
-        when(resolver.resolve("GHOST_RULE")).thenReturn(Optional.empty());
-        List<ComplianceFinding> findings = assembler.assemble(UUID.randomUUID(), List.of(fact("GHOST_RULE")));
+        when(resolver.resolve("GHOST_RULE", ScanJurisdiction.RU)).thenReturn(Optional.empty());
+        List<ComplianceFinding> findings =
+                assembler.assemble(UUID.randomUUID(), ScanJurisdiction.RU, List.of(fact("GHOST_RULE")));
         assertThat(findings).isEmpty();
     }
 
     @Test
-    void dropsFactForDisabledRule() {
-        when(resolver.resolve("NO_PRIVACY_POLICY")).thenReturn(Optional.of(DEF));
-        when(resolver.isEnabled("NO_PRIVACY_POLICY")).thenReturn(false);
-        List<ComplianceFinding> findings = assembler.assemble(UUID.randomUUID(), List.of(fact("NO_PRIVACY_POLICY")));
+    void dropsFactNotResolvableForJurisdiction() {
+        // Правило не объявлено ни в одном слое юрисдикции скана → empty → факт отбрасывается.
+        when(resolver.resolve("NO_PRIVACY_POLICY", ScanJurisdiction.EU)).thenReturn(Optional.empty());
+        List<ComplianceFinding> findings =
+                assembler.assemble(UUID.randomUUID(), ScanJurisdiction.EU, List.of(fact("NO_PRIVACY_POLICY")));
         assertThat(findings).isEmpty();
     }
 
     @Test
     void emptyFactsGiveEmptyFindings() {
-        assertThat(assembler.assemble(UUID.randomUUID(), List.of())).isEmpty();
+        assertThat(assembler.assemble(UUID.randomUUID(), ScanJurisdiction.RU, List.of())).isEmpty();
     }
 }

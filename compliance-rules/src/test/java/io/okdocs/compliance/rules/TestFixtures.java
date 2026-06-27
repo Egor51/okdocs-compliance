@@ -38,12 +38,29 @@ public final class TestFixtures {
                 new CrawlerDiagnostics(pages.length, pages.length, 0, false));
     }
 
+    /** Контекст заданной юрисдикции — для проверки multi-layer гейта движка. */
+    public static ScanAnalysisContext ctxFor(ScanJurisdiction jurisdiction, PageAnalysisResult... pages) {
+        return new ScanAnalysisContext(
+                jurisdiction,
+                List.of(pages),
+                "RU",
+                List.of("1.2.3.4"),
+                RegistryStatus.FOUND,
+                new CrawlerDiagnostics(pages.length, pages.length, 0, false));
+    }
+
     // ── Technical (headers) ─────────────────────────────────────────────────────────────────
 
     /** Контекст с techical-паспортом из заданных HTTP-ответов (одна fake-страница для hasPages). */
     public static ScanAnalysisContext ctxWithResponses(HttpResponseInfo... responses) {
+        return ctxForWithResponses(ScanJurisdiction.RU, responses);
+    }
+
+    /** То же, но для заданной юрисдикции — для проверки common-правил на EU/UK/DE-сканах. */
+    public static ScanAnalysisContext ctxForWithResponses(ScanJurisdiction jurisdiction,
+                                                          HttpResponseInfo... responses) {
         return new ScanAnalysisContext(
-                ScanJurisdiction.RU,
+                jurisdiction,
                 List.of(simplePage("https://site.ru")),
                 "RU",
                 List.of("1.2.3.4"),
@@ -216,6 +233,16 @@ public final class TestFixtures {
                 url, "title", "текст", "<html></html>",
                 List.of(), List.of(), List.of(),
                 false, List.of(), RenderMode.DYNAMIC, List.of(), cookies, storageKeys, true, true);
+    }
+
+    /** DYNAMIC-страница с заданным consent-сценарием (Фаза 5). */
+    public static PageAnalysisResult dynamicPageWithConsent(
+            String url, io.okdocs.compliance.contracts.crawler.ConsentScenarioResult scenario) {
+        return new PageAnalysisResult(
+                url, "title", "текст", "<html></html>",
+                List.of(), List.of(), List.of(),
+                false, List.of(), RenderMode.DYNAMIC, List.of(), List.of(), List.of(), true, true,
+                scenario);
     }
 
     /** Cookie с явными флагами (persistent, не session). */

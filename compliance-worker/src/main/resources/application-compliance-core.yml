@@ -60,6 +60,13 @@ compliance:
         # таймлайн запросов — что грузилось раньше. false → краулер не инжектит наблюдатель и отдаёт
         # пустой preConsentTrackerHosts (правило остаётся на вероятностном UNVERIFIED). Откат-рубильник.
         enabled: true
+      consent-scenarios:
+        # Прогон consent-сценариев (Фаза 4): после снимка «до согласия» краулер кликает Reject, затем
+        # Accept, фиксируя cookies/трекеры после каждого действия (вход для EU/UK consent-правил).
+        # Best-effort, дороже по времени. В core-профиле включено, чтобы consent-правила получали
+        # фактические сигналы баннера; аварийный откат — enabled=false.
+        enabled: true
+        wait-after-click-ms: 1500
   scan:
     # Порог reaper'а: скан без апдейта дольше этого срока считается зависшим.
     # Строго больше crawler.crawler-timeout-seconds (90s) — инвариант, fail-fast.

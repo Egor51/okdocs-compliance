@@ -98,6 +98,19 @@ final class PageExtractor {
                                       List<String> preConsentStorageKeys,
                                       boolean preConsentCookiesSnapshotAvailable,
                                       boolean preConsentStorageSnapshotAvailable) {
+        return extract(url, doc, startDomain, renderMode, preConsentTrackerHosts, preConsentCookies,
+                preConsentStorageKeys, preConsentCookiesSnapshotAvailable,
+                preConsentStorageSnapshotAvailable, null);
+    }
+
+    /** Полная DYNAMIC-форма с consent-сценарием (Фаза 4). */
+    static PageAnalysisResult extract(String url, Document doc, String startDomain, RenderMode renderMode,
+                                      List<String> preConsentTrackerHosts,
+                                      List<io.okdocs.compliance.contracts.crawler.ObservedCookie> preConsentCookies,
+                                      List<String> preConsentStorageKeys,
+                                      boolean preConsentCookiesSnapshotAvailable,
+                                      boolean preConsentStorageSnapshotAvailable,
+                                      io.okdocs.compliance.contracts.crawler.ConsentScenarioResult consentScenario) {
         String html = doc.html();
         String text = doc.text();
 
@@ -165,7 +178,8 @@ final class PageExtractor {
                 preConsentCookies == null ? List.of() : List.copyOf(preConsentCookies),
                 preConsentStorageKeys == null ? List.of() : List.copyOf(preConsentStorageKeys),
                 preConsentCookiesSnapshotAvailable,
-                preConsentStorageSnapshotAvailable);
+                preConsentStorageSnapshotAvailable,
+                consentScenario);
     }
 
     private static FormInfo extractForm(Element form) {

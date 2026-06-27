@@ -44,7 +44,13 @@ public record PageAnalysisResult(
          * Был ли успешно снят JS-снимок localStorage до согласия. true + пустой список означает, что
          * ключей реально нет; false означает, что проверка не проводилась/не удалась.
          */
-        boolean preConsentStorageSnapshotAvailable
+        boolean preConsentStorageSnapshotAvailable,
+        /**
+         * Результат прогона consent-сценариев (Reject/Accept) на странице (Фаза 4). {@code null} на
+         * STATIC и на DYNAMIC-сканах без consent-взаимодействия; {@code available == false} внутри —
+         * сценарий не отработал (нет баннера/сбой). Вход для EU/UK consent-правил.
+         */
+        ConsentScenarioResult consentScenario
 ) {
     public PageAnalysisResult {
         preConsentTrackerHosts = preConsentTrackerHosts == null
@@ -63,7 +69,7 @@ public record PageAnalysisResult(
                               List<String> internalLinks, boolean cookiePresent,
                               List<FormInfo> forms, RenderMode renderMode) {
         this(url, title, text, html, externalScriptDomains, externalStyleDomains, internalLinks,
-                cookiePresent, forms, renderMode, List.of(), List.of(), List.of(), false, false);
+                cookiePresent, forms, renderMode, List.of(), List.of(), List.of(), false, false, null);
     }
 
     /**
@@ -76,7 +82,8 @@ public record PageAnalysisResult(
                               List<FormInfo> forms, RenderMode renderMode,
                               List<String> preConsentTrackerHosts) {
         this(url, title, text, html, externalScriptDomains, externalStyleDomains, internalLinks,
-                cookiePresent, forms, renderMode, preConsentTrackerHosts, List.of(), List.of(), false, false);
+                cookiePresent, forms, renderMode, preConsentTrackerHosts, List.of(), List.of(), false,
+                false, null);
     }
 
     /**
@@ -94,6 +101,25 @@ public record PageAnalysisResult(
                               List<String> preConsentStorageKeys) {
         this(url, title, text, html, externalScriptDomains, externalStyleDomains, internalLinks,
                 cookiePresent, forms, renderMode, preConsentTrackerHosts, preConsentCookies,
-                preConsentStorageKeys, false, false);
+                preConsentStorageKeys, false, false, null);
+    }
+
+    /**
+     * DYNAMIC-конструктор с pre-consent данными + флагами + consent-сценарием. Полная DYNAMIC-форма
+     * для CDP-краулера, прогоняющего Reject/Accept.
+     */
+    public PageAnalysisResult(String url, String title, String text, String html,
+                              List<String> externalScriptDomains, List<String> externalStyleDomains,
+                              List<String> internalLinks, boolean cookiePresent,
+                              List<FormInfo> forms, RenderMode renderMode,
+                              List<String> preConsentTrackerHosts,
+                              List<ObservedCookie> preConsentCookies,
+                              List<String> preConsentStorageKeys,
+                              boolean preConsentCookiesSnapshotAvailable,
+                              boolean preConsentStorageSnapshotAvailable) {
+        this(url, title, text, html, externalScriptDomains, externalStyleDomains, internalLinks,
+                cookiePresent, forms, renderMode, preConsentTrackerHosts, preConsentCookies,
+                preConsentStorageKeys, preConsentCookiesSnapshotAvailable,
+                preConsentStorageSnapshotAvailable, null);
     }
 }

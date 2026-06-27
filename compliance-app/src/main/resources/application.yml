@@ -115,7 +115,7 @@ compliance:
     # worker-часть scan.* (stale-after/redeliver-delay/total-deadline) — в core-yml.
   plan:
     quota:
-      FREE: 1
+      FREE: 0
       PRO: 30
       BUSINESS: 200
   paywall-cta:

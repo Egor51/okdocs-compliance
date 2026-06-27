@@ -44,6 +44,7 @@ public class BalanceTransactionMapper {
         return new BalanceTransactionDto(
                 t.getId(),
                 t.getType(),
+                t.getSource(),
                 t.getAmount(),
                 t.getBalanceAfter(),
                 t.getScanId(),

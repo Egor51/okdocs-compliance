@@ -1,5 +1,6 @@
 package io.okdocs.compliance.worker.service;
 
+import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.persistence.scan.ComplianceFinding;
 import io.okdocs.compliance.rules.RuleDefinition;
 import io.okdocs.compliance.rules.RuleFact;
@@ -28,12 +29,16 @@ public class FindingAssembler {
 
     private final RuleMetadataResolver metadataResolver;
 
-    public List<ComplianceFinding> assemble(UUID scanId, List<RuleFact> facts) {
+    public List<ComplianceFinding> assemble(UUID scanId, ScanJurisdiction jurisdiction, List<RuleFact> facts) {
         List<ComplianceFinding> findings = new ArrayList<>();
         for (RuleFact fact : facts) {
-            Optional<RuleDefinition> definition = metadataResolver.resolve(fact.code());
-            if (definition.isEmpty() || !metadataResolver.isEnabled(fact.code())) {
-                log.debug("Dropping fact for unknown/disabled rule code={}", fact.code());
+            // Метаданные резолвятся под юрисдикцию скана: DE-скан получает DE-метаданные с
+            // fallback на EU-baseline (§ multi-layer). Без юрисдикции DE/FR/ES findings остались
+            // бы без локального legal-контекста.
+            Optional<RuleDefinition> definition = metadataResolver.resolve(fact.code(), jurisdiction);
+            if (definition.isEmpty()) {
+                log.debug("Dropping fact for unknown/disabled rule code={} jurisdiction={}",
+                        fact.code(), jurisdiction);
                 continue;
             }
             findings.add(toFinding(scanId, fact, definition.get()));

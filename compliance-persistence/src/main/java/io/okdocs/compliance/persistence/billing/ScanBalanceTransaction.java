@@ -1,5 +1,6 @@
 package io.okdocs.compliance.persistence.billing;
 
+import io.okdocs.compliance.contracts.enums.BalanceTxnSource;
 import io.okdocs.compliance.contracts.enums.BalanceTxnType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -32,6 +33,11 @@ public class ScanBalanceTransaction {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
     private BalanceTxnType type;
+
+    /** Карман для DEBIT (что списали) и REFUND (что вернули); NULL для остальных типов. */
+    @Enumerated(EnumType.STRING)
+    @Column(length = 16)
+    private BalanceTxnSource source;
 
     /** ± сканов (DEBIT отрицательный). */
     @Column(nullable = false)

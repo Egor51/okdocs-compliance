@@ -47,6 +47,7 @@ class ScanPipelineTest {
     @Mock RknRegistryClient rknRegistryClient;
     @Mock RuleEngine ruleEngine;
     @Mock FindingAssembler findingAssembler;
+    @Mock RuleMetadataResolver metadataResolver;
     @Mock ScoreCalculator scoreCalculator;
     @Mock ScanProgressService progressService;
 
@@ -55,8 +56,10 @@ class ScanPipelineTest {
     @BeforeEach
     void setUp() {
         pipeline = new ScanPipeline(siteCrawler, dynamicCrawler, tlsInspector, dnsInspector,
-                rknRegistryClient, ruleEngine, findingAssembler, scoreCalculator, progressService,
-                new ObjectMapper(), new io.okdocs.compliance.worker.config.WorkerMetrics(new SimpleMeterRegistry()), new ComplianceWorkerProperties());
+                rknRegistryClient, ruleEngine, findingAssembler, metadataResolver, scoreCalculator,
+                progressService, new ObjectMapper(),
+                new io.okdocs.compliance.worker.config.WorkerMetrics(new SimpleMeterRegistry()),
+                new ComplianceWorkerProperties());
     }
 
     @Test
@@ -128,6 +131,74 @@ class ScanPipelineTest {
         org.mockito.Mockito.verify(dynamicCrawler).crawlPages(eq(List.of("https://example.com/about")), any());
     }
 
+    @Test
+    void diagnosticsOutcomesReResolvedToScanJurisdiction() throws Exception {
+        // Этап fix: positiveChecks/outcomes common-правила (own-слой RU) на DE-скане должны быть
+        // пере-резолвлены под EU/DE metadata, иначе в отчёте смешаются языки. WEAK_CSP PASSED с
+        // русским positiveTitle от движка → в diagnosticsJson должен попасть английский (per-layer).
+        ComplianceScan scan = freeScan(io.okdocs.compliance.contracts.enums.ScanJurisdiction.DE);
+        when(siteCrawler.crawl(anyString(), anyInt())).thenReturn(new SiteCrawler.CrawlResult(
+                List.of(page("https://example.com/")), List.of(),
+                new CrawlerDiagnostics(1, 1, 0, false)));
+        stubAnalysisNoEngine();
+
+        var ruRu = new io.okdocs.compliance.rules.RuleOutcome(
+                "WEAK_CSP", io.okdocs.compliance.rules.RuleOutcomeStatus.PASSED,
+                "CSP надёжна", io.okdocs.compliance.contracts.enums.FindingSeverity.LOW,
+                io.okdocs.compliance.contracts.enums.FindingCategory.SECURITY, null,
+                "CSP надёжна", "Небезопасных директив не найдено.");
+        when(ruleEngine.evaluate(any())).thenReturn(
+                new RuleEngineResult(List.of(), List.of(), List.of(ruRu)));
+
+        var euDef = new io.okdocs.compliance.rules.RuleDefinition(
+                "WEAK_CSP", io.okdocs.compliance.contracts.enums.ScanJurisdiction.EU,
+                io.okdocs.compliance.contracts.enums.FindingSeverity.LOW,
+                io.okdocs.compliance.contracts.enums.FindingCategory.SECURITY,
+                "Weak Content-Security-Policy", null, "GDPR Art. 32", null, null,
+                "Content-Security-Policy is robust", "No weak directives detected.");
+        when(metadataResolver.resolve("WEAK_CSP", io.okdocs.compliance.contracts.enums.ScanJurisdiction.DE))
+                .thenReturn(java.util.Optional.of(euDef));
+
+        ScanPipeline.PipelineOutcome outcome = pipeline.run(scan, scan.getId());
+
+        assertThat(outcome.result()).isNotNull();
+        var node = new ObjectMapper().readTree(outcome.result().diagnosticsJson());
+        var first = node.path("ruleOutcomes").path(0);
+        assertThat(first.path("code").asText()).isEqualTo("WEAK_CSP");
+        // metadata — английская (per-layer), runtime status — сохранён.
+        assertThat(first.path("positiveTitle").asText()).isEqualTo("Content-Security-Policy is robust");
+        assertThat(first.path("title").asText()).isEqualTo("Weak Content-Security-Policy");
+        assertThat(first.path("status").asText()).isEqualTo("PASSED");
+    }
+
+    /** stubAnalysis без ruleEngine/findingAssembler-стабов: тест задаёт их сам. */
+    private void stubAnalysisNoEngine() {
+        lenient().when(tlsInspector.inspect(anyString(), org.mockito.ArgumentMatchers.anyList())).thenReturn(
+                new io.okdocs.compliance.contracts.crawler.TlsInfo(
+                        "example.com", true, null, "TLSv1.3", "TLS_AES_128_GCM_SHA256",
+                        null, null, List.of(), null, null));
+        lenient().when(dnsInspector.inspect(anyString())).thenReturn(
+                new io.okdocs.compliance.contracts.crawler.DnsInfo(
+                        "example.com", false, "RU", List.of("203.0.113.1"), List.of("RU"),
+                        List.of(), List.of(), List.of()));
+        lenient().when(rknRegistryClient.lookup(anyString(), any()))
+                .thenReturn(io.okdocs.compliance.contracts.enums.RegistryStatus.LOOKUP_FAILED);
+        when(findingAssembler.assemble(any(), any(), any())).thenReturn(List.of());
+        lenient().when(scoreCalculator.calculate(any())).thenReturn(100);
+    }
+
+    private ComplianceScan freeScan(io.okdocs.compliance.contracts.enums.ScanJurisdiction jurisdiction) {
+        ComplianceScan scan = new ComplianceScan();
+        scan.setId(UUID.randomUUID());
+        scan.setSiteUrl("https://example.com");
+        scan.setSiteDomain("example.com");
+        scan.setKind(ScanKind.FREE_MARKETING);
+        scan.setMaxPages(1);
+        scan.setDynamicRequired(false);
+        scan.setJurisdiction(jurisdiction);
+        return scan;
+    }
+
     private void stubAnalysis() {
         lenient().when(tlsInspector.inspect(anyString(), org.mockito.ArgumentMatchers.anyList())).thenReturn(
                 new io.okdocs.compliance.contracts.crawler.TlsInfo(
@@ -140,7 +211,7 @@ class ScanPipelineTest {
         when(rknRegistryClient.lookup(anyString(), any()))
                 .thenReturn(io.okdocs.compliance.contracts.enums.RegistryStatus.LOOKUP_FAILED);
         when(ruleEngine.evaluate(any())).thenReturn(new RuleEngineResult(List.of(), List.of()));
-        when(findingAssembler.assemble(any(), any())).thenReturn(List.of());
+        when(findingAssembler.assemble(any(), any(), any())).thenReturn(List.of());
         lenient().when(scoreCalculator.calculate(any())).thenReturn(100);
     }
 

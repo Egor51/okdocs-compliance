@@ -1,11 +1,14 @@
 package io.okdocs.compliance.api.config;
 
+import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.contracts.enums.UserPlan;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
 import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Конфигурация compliance-api (prefix {@code compliance}, §4.4).
@@ -19,13 +22,49 @@ public record ComplianceApiProperties(
         Plan plan,
         PaywallCta paywallCta,
         Auth auth,
-        Security security
+        Security security,
+        Oauth oauth,
+        Payment payment
 ) {
 
     public ComplianceApiProperties {
         if (security == null) {
             security = new Security(null);
         }
+        if (oauth == null) {
+            oauth = new Oauth(null);
+        }
+        if (payment == null) {
+            payment = new Payment(null);
+        }
+    }
+
+    /**
+     * Настройки соц-логина (F.8).
+     *
+     * @param successRedirectUrl фронтовый BFF-callback (Route Handler), куда success-handler
+     *                           редиректит с one-time кодом ({@code ?code=...}). Плейсхолдер
+     *                           {@code {locale}} success-handler заменяет на язык интерфейса (из OAuth
+     *                           state, F.8); BFF после обмена уводит на {@code /{locale}/dashboard}.
+     */
+    public record Oauth(String successRedirectUrl) {
+        public Oauth {
+            if (successRedirectUrl == null || successRedirectUrl.isBlank()) {
+                successRedirectUrl = "http://localhost:3000/api/auth/oauth/callback?locale={locale}";
+            }
+        }
+    }
+
+    /**
+     * Настройки платежей (F.4/F.16).
+     *
+     * @param webhookSecret общий секрет для аутентификации webhook'а оплаты (header
+     *                      {@code X-Webhook-Secret}) — минимальная защита MVP-каркаса от подделки
+     *                      запроса из интернета, пока нет штатной проверки подписи провайдера (F.16).
+     *                      Если {@code null}/пусто — webhook отвергает ВСЕ запросы (fail-closed),
+     *                      чтобы незаданный секрет не открывал бесплатный premium.
+     */
+    public record Payment(String webhookSecret) {
     }
 
     /** Топики Kafka назначения для outbox-публикации. */
@@ -65,7 +104,8 @@ public record ComplianceApiProperties(
 
     /** Параметры скана: лимиты страниц по flow/принципалу и TTL короткоживущих сканов. */
     public record Scan(Integer freeMarketingMaxPages, Integer guestMaxPages, Integer userMaxPages,
-                       Integer guestRetentionDays, Integer freeMarketingRetentionDays) {
+                       Integer guestRetentionDays, Integer freeMarketingRetentionDays,
+                       Set<ScanJurisdiction> enabledJurisdictions) {
         public Scan {
             if (freeMarketingMaxPages == null) {
                 freeMarketingMaxPages = 1; // FREE_MARKETING — лид-магнит: главная страница
@@ -82,6 +122,15 @@ public record ComplianceApiProperties(
             if (freeMarketingRetentionDays == null) {
                 freeMarketingRetentionDays = 7; // короткоживущий лид-магнит
             }
+            // Юрисдикции с готовым набором правил (§ Этап 13: защита от «пустого идеального отчёта»).
+            // GM — устаревшая, не включается. UK включён (Фаза 6: UK GDPR/PECR-правила + overlay).
+            if (enabledJurisdictions == null || enabledJurisdictions.isEmpty()) {
+                enabledJurisdictions = EnumSet.of(ScanJurisdiction.RU, ScanJurisdiction.EU,
+                        ScanJurisdiction.UK, ScanJurisdiction.DE, ScanJurisdiction.FR,
+                        ScanJurisdiction.ES);
+            } else {
+                enabledJurisdictions = EnumSet.copyOf(enabledJurisdictions);
+            }
         }
     }
 
@@ -89,7 +138,7 @@ public record ComplianceApiProperties(
     public record Plan(Map<UserPlan, Integer> quota) {
         public Plan {
             Map<UserPlan, Integer> defaults = new EnumMap<>(UserPlan.class);
-            defaults.put(UserPlan.FREE, 1);
+            defaults.put(UserPlan.FREE, 0); // FREE = 0 premium-квоты (§4c); бесплатен только FREE_MARKETING
             defaults.put(UserPlan.PRO, 30);
             defaults.put(UserPlan.BUSINESS, 200);
             if (quota != null) {

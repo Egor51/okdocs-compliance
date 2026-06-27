@@ -4,7 +4,7 @@ import java.time.Instant;
 
 /**
  * Баланс сканов юзера. {@code available = monthlyQuota − usedThisPeriod + purchasedRemaining}
- * (в MVP {@code purchasedRemaining} всегда 0 — докупки нет).
+ * Докупленные сканы и ручные корректировки отражаются в {@code purchasedRemaining}.
  */
 public record ScanBalanceDto(
         int monthlyQuota,

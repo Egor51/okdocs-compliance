@@ -23,10 +23,12 @@ import java.text.DecimalFormatSymbols;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -296,10 +298,30 @@ public class ScanReportBuilder {
         }
     }
 
+    /**
+     * Зависимости «уточняющее правило → его предпосылка»: PASSED уточняющего правила имеет смысл
+     * только если предпосылка НЕ провалена. Пример: {@code WEAK_CSP} («CSP не содержит слабых
+     * директив») бессмысленно как positive, если {@code MISSING_CSP} FAILED (CSP вообще нет) — нельзя
+     * говорить «CSP robust» там, где CSP отсутствует. Такие PASSED подавляются: не идут в
+     * {@code positiveChecks} и не считаются зелёными (учитываются как notEvaluated — «не проверяли»).
+     * <p>
+     * Карта декларативная и расширяемая: ключ — уточняющий код, значение — код-предпосылка.
+     */
+    private static final Map<String, String> POSITIVE_PRECONDITION = Map.of(
+            "WEAK_CSP", "MISSING_CSP");
+
     private static ReportQualityDto quality(DiagnosticsDto diagnostics) {
         if (diagnostics == null || diagnostics.ruleOutcomes() == null || diagnostics.ruleOutcomes().isEmpty()) {
             return new ReportQualityDto(0, 0, 0, List.of());
         }
+        // Коды проваленных правил — для подавления зависимых positive-проверок.
+        Set<String> failedCodes = new HashSet<>();
+        for (RuleOutcomeDto o : diagnostics.ruleOutcomes()) {
+            if (o != null && "FAILED".equals(o.status()) && hasText(o.code())) {
+                failedCodes.add(o.code());
+            }
+        }
+
         int passed = 0;
         int failed = 0;
         int notEvaluated = 0;
@@ -310,10 +332,15 @@ public class ScanReportBuilder {
             }
             switch (outcome.status()) {
                 case "PASSED" -> {
-                    passed++;
-                    PositiveCheckDto positive = positiveCheck(outcome);
-                    if (positive != null) {
-                        positiveChecks.add(positive);
+                    if (isSuppressedByPrecondition(outcome.code(), failedCodes)) {
+                        // Предпосылка провалена → positive вводит в заблуждение. Не зелёный.
+                        notEvaluated++;
+                    } else {
+                        passed++;
+                        PositiveCheckDto positive = positiveCheck(outcome);
+                        if (positive != null) {
+                            positiveChecks.add(positive);
+                        }
                     }
                 }
                 case "FAILED" -> failed++;
@@ -324,6 +351,12 @@ public class ScanReportBuilder {
             }
         }
         return new ReportQualityDto(passed, failed, notEvaluated, List.copyOf(positiveChecks));
+    }
+
+    /** PASSED-правило подавлено, если его предпосылка (по карте) есть среди проваленных. */
+    private static boolean isSuppressedByPrecondition(String code, Set<String> failedCodes) {
+        String precondition = POSITIVE_PRECONDITION.get(code);
+        return precondition != null && failedCodes.contains(precondition);
     }
 
     private static PositiveCheckDto positiveCheck(RuleOutcomeDto outcome) {
