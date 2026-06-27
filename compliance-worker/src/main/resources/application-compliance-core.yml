@@ -74,7 +74,7 @@ compliance:
     redeliver-delay: 30s
     # Жёсткий общий дедлайн на весь скан сверх crawler-таймаута (страховка от
     # зависания не в краулере). Не меньше crawler.crawler-timeout-seconds.
-    total-deadline: 4m
+    total-deadline: 5m
   backfill:
     # Разовый backfill старых terminal-сканов без report snapshot. Включать только на время миграции.
     reports-enabled: ${REPORT_BACKFILL_ENABLED:false}
