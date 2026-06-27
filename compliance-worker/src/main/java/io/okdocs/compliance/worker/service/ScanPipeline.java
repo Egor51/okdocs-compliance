@@ -47,6 +47,7 @@ public class ScanPipeline {
     private final RuleEngine ruleEngine;
     private final FindingAssembler findingAssembler;
     private final RuleMetadataResolver metadataResolver;
+    private final EvidenceRenderer evidenceRenderer;
     private final ScoreCalculator scoreCalculator;
     private final ScanProgressService progressService;
     private final ObjectMapper objectMapper;
@@ -161,8 +162,12 @@ public class ScanPipeline {
                 scan.getJurisdiction(), pages, hostCountry, resolvedIps, registryStatus, diag, technical);
 
         RuleEngineResult engineResult = ruleEngine.evaluate(ctx);
-        List<ComplianceFinding> findings =
-                findingAssembler.assemble(scanId, scan.getJurisdiction(), engineResult.facts());
+        // Worker-side нормализация locale: для новых сканов API всегда ставит locale (Этап 1), но
+        // legacy/ручные DB-записи могут иметь null. Явный дефолт здесь делает поведение предсказуемым
+        // (а не зависящим от plain-fallback рендерера) и чинит асимметрию locale→en цепочки при null.
+        String locale = normalizeLocale(scan.getLocale());
+        List<ComplianceFinding> findings = findingAssembler.assemble(
+                scanId, scan.getJurisdiction(), locale, engineResult.facts());
         int score = scoreCalculator.calculate(findings);
 
         // Observability: метрики краула, findings и ошибок правил (§5.7).
@@ -176,7 +181,8 @@ public class ScanPipeline {
         // пере-резолвим metadata под юрисдикцию скана (как findings через assembler), иначе на
         // не-RU сканах positiveChecks common-правил остались бы на RU-текстах. Findings берём из
         // оригинального engineResult — их слой уже накладывает assembler.
-        RuleEngineResult diagnosticsResult = enrichOutcomes(engineResult, scan.getJurisdiction());
+        RuleEngineResult diagnosticsResult =
+                enrichOutcomes(engineResult, scan.getJurisdiction(), locale);
         String diagnosticsJson = serializeDiagnostics(diag, diagnosticsResult);
 
         progressService.updateProgress(scanId, 90, "Формирование отчёта");
@@ -342,33 +348,52 @@ public class ScanPipeline {
      * тест) — outcome остаётся без изменений. Facts/errors не трогаем (для них слой накладывает
      * assembler / они без юрисдикции).
      */
-    private RuleEngineResult enrichOutcomes(RuleEngineResult result, ScanJurisdiction jurisdiction) {
-        if (jurisdiction == null || result.outcomes() == null || result.outcomes().isEmpty()) {
+    /** Дефолт locale для legacy/ручных сканов без явного значения (зеркалит API-дефолт). */
+    static final String DEFAULT_LOCALE = "ru";
+
+    /** null/пусто → дефолт; иначе trim+lowercase. Whitelist уже валидирует API при создании скана. */
+    static String normalizeLocale(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return DEFAULT_LOCALE;
+        }
+        return raw.trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
+    private RuleEngineResult enrichOutcomes(RuleEngineResult result, ScanJurisdiction jurisdiction,
+                                            String locale) {
+        if (result.outcomes() == null || result.outcomes().isEmpty()) {
             return result;
         }
         List<RuleOutcome> enriched = new ArrayList<>(result.outcomes().size());
         for (RuleOutcome outcome : result.outcomes()) {
-            enriched.add(enrichOutcome(outcome, jurisdiction));
+            enriched.add(enrichOutcome(outcome, jurisdiction, locale));
         }
         return new RuleEngineResult(result.facts(), result.errors(), List.copyOf(enriched));
     }
 
-    /** Один outcome: metadata из per-layer definition, runtime status/message — из outcome. */
-    private RuleOutcome enrichOutcome(RuleOutcome outcome, ScanJurisdiction jurisdiction) {
+    /**
+     * Один outcome: metadata (title/severity/category/positive*) из per-layer definition под
+     * jurisdiction; {@code message} — локализуется по locale ({@code messageKey}→шаблон, fallback на
+     * plain); runtime {@code status} сохраняется. Если jurisdiction==null или metadata нет — metadata
+     * берётся из исходного outcome, но message всё равно локализуется.
+     */
+    private RuleOutcome enrichOutcome(RuleOutcome outcome, ScanJurisdiction jurisdiction, String locale) {
         if (outcome == null || outcome.code() == null) {
             return outcome;
         }
-        return metadataResolver.resolve(outcome.code(), jurisdiction)
-                .map(def -> new RuleOutcome(
-                        outcome.code(),
-                        outcome.status(),
-                        def.title(),
-                        def.severity(),
-                        def.category(),
-                        outcome.message(),
-                        def.positiveTitle(),
-                        def.positiveMessage()))
-                .orElse(outcome);
+        String message = evidenceRenderer.renderMessage(
+                outcome.messageKey(), outcome.messageParams(), outcome.message(), locale);
+        RuleDefinition def = jurisdiction == null ? null
+                : metadataResolver.resolve(outcome.code(), jurisdiction).orElse(null);
+        if (def == null) {
+            // metadata не меняем (own-слой), но message локализован.
+            return new RuleOutcome(outcome.code(), outcome.status(), outcome.title(),
+                    outcome.severity(), outcome.category(), message, outcome.positiveTitle(),
+                    outcome.positiveMessage(), outcome.messageKey(), outcome.messageParams());
+        }
+        return new RuleOutcome(outcome.code(), outcome.status(), def.title(), def.severity(),
+                def.category(), message, def.positiveTitle(), def.positiveMessage(),
+                outcome.messageKey(), outcome.messageParams());
     }
 
     /** Слияние метрик краулера и ошибок правил в один JSON для {@code diagnostics_json} (§2.2). */

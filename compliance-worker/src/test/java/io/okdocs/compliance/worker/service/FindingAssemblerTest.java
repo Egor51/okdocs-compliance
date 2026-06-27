@@ -32,7 +32,8 @@ class FindingAssemblerTest {
     @BeforeEach
     void setUp() {
         resolver = Mockito.mock(RuleMetadataResolver.class);
-        assembler = new FindingAssembler(resolver);
+        // Реальный рендерер: legacy-facts (evidenceKey==null) → plain fact.evidence(), поведение то же.
+        assembler = new FindingAssembler(resolver, new EvidenceRenderer());
     }
 
     private static RuleFact fact(String code) {
@@ -46,7 +47,7 @@ class FindingAssemblerTest {
         UUID scanId = UUID.randomUUID();
 
         List<ComplianceFinding> findings =
-                assembler.assemble(scanId, ScanJurisdiction.RU, List.of(fact("NO_PRIVACY_POLICY")));
+                assembler.assemble(scanId, ScanJurisdiction.RU, "ru", List.of(fact("NO_PRIVACY_POLICY")));
 
         assertThat(findings).hasSize(1);
         ComplianceFinding f = findings.get(0);
@@ -74,7 +75,7 @@ class FindingAssemblerTest {
         // Код, которого нет в коде (мёртвый факт) — резолвер возвращает empty.
         when(resolver.resolve("GHOST_RULE", ScanJurisdiction.RU)).thenReturn(Optional.empty());
         List<ComplianceFinding> findings =
-                assembler.assemble(UUID.randomUUID(), ScanJurisdiction.RU, List.of(fact("GHOST_RULE")));
+                assembler.assemble(UUID.randomUUID(), ScanJurisdiction.RU, "ru", List.of(fact("GHOST_RULE")));
         assertThat(findings).isEmpty();
     }
 
@@ -83,12 +84,34 @@ class FindingAssemblerTest {
         // Правило не объявлено ни в одном слое юрисдикции скана → empty → факт отбрасывается.
         when(resolver.resolve("NO_PRIVACY_POLICY", ScanJurisdiction.EU)).thenReturn(Optional.empty());
         List<ComplianceFinding> findings =
-                assembler.assemble(UUID.randomUUID(), ScanJurisdiction.EU, List.of(fact("NO_PRIVACY_POLICY")));
+                assembler.assemble(UUID.randomUUID(), ScanJurisdiction.EU, "ru", List.of(fact("NO_PRIVACY_POLICY")));
         assertThat(findings).isEmpty();
     }
 
     @Test
     void emptyFactsGiveEmptyFindings() {
-        assertThat(assembler.assemble(UUID.randomUUID(), ScanJurisdiction.RU, List.of())).isEmpty();
+        assertThat(assembler.assemble(UUID.randomUUID(), ScanJurisdiction.RU, "ru", List.of())).isEmpty();
+    }
+
+    @Test
+    void structuredEvidenceRenderedPerLocale() {
+        // Мигрированный факт (evidenceKey+params) рендерится по locale: en → английский evidence,
+        // ru → русский. Это сквозная проверка Этапа 3 (detector→RuleFact→renderer→finding).
+        var def = new RuleDefinition("MISSING_HSTS", ScanJurisdiction.EU, FindingSeverity.MEDIUM,
+                FindingCategory.SECURITY, "t", null, "GDPR Art. 32", null, null);
+        when(resolver.resolve("MISSING_HSTS", ScanJurisdiction.DE)).thenReturn(Optional.of(def));
+        var structuredFact = new RuleFact("MISSING_HSTS", "PLAIN-RU-FALLBACK", "https://s/p",
+                SourceType.HTTP_HEADER, EvidenceType.STATIC_ANALYSIS, 0.95, null,
+                VerificationStatus.DETECTED, "MISSING_HSTS", java.util.Map.of("page", "https://s/p"));
+
+        var en = assembler.assemble(UUID.randomUUID(), ScanJurisdiction.DE, "en", List.of(structuredFact));
+        assertThat(en).singleElement().satisfies(f ->
+                assertThat(f.getEvidence())
+                        .isEqualTo("The Strict-Transport-Security header is missing on https://s/p."));
+
+        var ru = assembler.assemble(UUID.randomUUID(), ScanJurisdiction.DE, "ru", List.of(structuredFact));
+        assertThat(ru).singleElement().satisfies(f ->
+                assertThat(f.getEvidence())
+                        .isEqualTo("На странице https://s/p отсутствует заголовок Strict-Transport-Security."));
     }
 }

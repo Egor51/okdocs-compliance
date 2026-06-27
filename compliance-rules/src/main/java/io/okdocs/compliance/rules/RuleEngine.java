@@ -50,7 +50,8 @@ public final class RuleEngine {
             } catch (RuntimeException e) {
                 errors.add(new RuleEvaluationError(code, e.getClass().getSimpleName(), e.getMessage()));
                 outcomes.add(new RuleOutcome(code, RuleOutcomeStatus.NOT_EVALUATED,
-                        code, null, null, "Правило не удалось подготовить к проверке."));
+                        code, null, null, "Правило не удалось подготовить к проверке.",
+                        "NOT_EVALUATED_DEFINITION_BROKEN"));
                 continue;
             }
             // Common EU-правило ({EU}) пересекается со слоями DE-скана ({EU, DE}) → запускается.
@@ -65,7 +66,8 @@ public final class RuleEngine {
                 if (!rule.appliesTo(ctx)) {
                     outcomes.add(new RuleOutcome(code, RuleOutcomeStatus.NOT_EVALUATED,
                             definition.title(), definition.severity(), definition.category(),
-                            "Правило не проверялось: нет входных данных для проверки."));
+                            "Правило не проверялось: нет входных данных для проверки.",
+                            "NOT_EVALUATED_NO_INPUT"));
                     continue;
                 }
                 List<RuleFact> ruleFacts = rule.evaluate(ctx);
@@ -77,7 +79,8 @@ public final class RuleEngine {
                 } else {
                     outcomes.add(new RuleOutcome(code, RuleOutcomeStatus.NOT_EVALUATED,
                             definition.title(), definition.severity(), definition.category(),
-                            "Правило не проверялось: краулер не вернул страниц."));
+                            "Правило не проверялось: краулер не вернул страниц.",
+                            "NOT_EVALUATED_NO_PAGES"));
                 }
             } catch (RuntimeException e) {
                 errors.add(new RuleEvaluationError(
@@ -86,7 +89,8 @@ public final class RuleEngine {
                         e.getMessage()));
                 outcomes.add(new RuleOutcome(code, RuleOutcomeStatus.NOT_EVALUATED,
                         definition.title(), definition.severity(), definition.category(),
-                        "Правило не проверялось из-за ошибки выполнения."));
+                        "Правило не проверялось из-за ошибки выполнения.",
+                        "NOT_EVALUATED_RULE_ERROR"));
             }
         }
 

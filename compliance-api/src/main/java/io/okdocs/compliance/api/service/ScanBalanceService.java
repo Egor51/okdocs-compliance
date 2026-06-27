@@ -77,7 +77,7 @@ public class ScanBalanceService {
         if (amount <= 0) {
             throw new IllegalArgumentException("Сумма покупки должна быть > 0, передано: " + amount);
         }
-        ScanBalance balance = load(userId);
+        ScanBalance balance = loadForUpdate(userId);
         balance.setPurchasedRemaining(balance.getPurchasedRemaining() + amount);
         balanceRepository.save(balance);
         writeTxn(userId, BalanceTxnType.PURCHASE, amount, balance.available(), null, null,
@@ -87,7 +87,7 @@ public class ScanBalanceService {
     /** Списание 1 скана. Сначала месячная квота, затем докупленное (в MVP — только квота). */
     @Transactional
     public void debit(Long userId, UUID scanId) {
-        ScanBalance balance = load(userId);
+        ScanBalance balance = loadForUpdate(userId);
         if (balance.available() <= 0) {
             throw new InsufficientScanBalanceException(userId);
         }
@@ -138,7 +138,7 @@ public class ScanBalanceService {
 
     @Transactional
     public void doRefund(Long userId, UUID scanId) {
-        ScanBalance balance = load(userId);
+        ScanBalance balance = loadForUpdate(userId);
         // Возвращаем в тот же карман, из которого списали: source исходного DEBIT — источник правды,
         // а не эвристика «usedThisPeriod>0» (она вернула бы в monthly даже PURCHASED-списание).
         BalanceTxnSource source = txnRepository.findFirstByScanIdAndType(scanId, BalanceTxnType.DEBIT)
@@ -162,7 +162,7 @@ public class ScanBalanceService {
     /** Сброс месячной квоты в начале нового периода. */
     @Transactional
     public void grantMonthly(Long userId, int quota) {
-        ScanBalance balance = load(userId);
+        ScanBalance balance = loadForUpdate(userId);
         balance.setMonthlyQuota(quota);
         balance.setUsedThisPeriod(0);
         balance.setPeriodResetAt(Instant.now().plus(PERIOD_DAYS, ChronoUnit.DAYS));
@@ -173,7 +173,7 @@ public class ScanBalanceService {
     /** Ручная корректировка админом (± сканов). Идёт в покупленный «карман» (не сгорает). */
     @Transactional
     public void adminAdjust(Long userId, int amount, String reason) {
-        ScanBalance balance = load(userId);
+        ScanBalance balance = loadForUpdate(userId);
         balance.setPurchasedRemaining(balance.getPurchasedRemaining() + amount);
         balanceRepository.save(balance);
         writeTxn(userId, BalanceTxnType.ADMIN_ADJUST, amount, balance.available(), null, null, reason);
@@ -186,6 +186,11 @@ public class ScanBalanceService {
 
     private ScanBalance load(Long userId) {
         return balanceRepository.findByUserId(userId)
+                .orElseThrow(() -> new IllegalStateException("Баланс не найден для юзера " + userId));
+    }
+
+    private ScanBalance loadForUpdate(Long userId) {
+        return balanceRepository.findWithLockByUserId(userId)
                 .orElseThrow(() -> new IllegalStateException("Баланс не найден для юзера " + userId));
     }
 

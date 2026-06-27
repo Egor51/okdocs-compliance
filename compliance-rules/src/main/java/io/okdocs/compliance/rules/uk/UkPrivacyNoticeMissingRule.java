@@ -64,6 +64,8 @@ public final class UkPrivacyNoticeMissingRule implements Rule {
                 RuleSupport.evidenceType(ctx),
                 null,
                 "privacy-notice-absent",
-                VerificationStatus.UNVERIFIED));
+                VerificationStatus.UNVERIFIED,
+                "PRIVACY_NOTICE_ABSENT",
+                java.util.Map.of()));
     }
 }

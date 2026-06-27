@@ -63,6 +63,7 @@ public class CheckoutService {
         session.setSiteUrl(validated.normalizedUrl());
         session.setSiteDomain(validated.domain());
         session.setJurisdiction(jurisdiction);
+        session.setLocale(ScanCommandService.parseLocale(request.locale()));
         session.setPromoCode(request.promoCode());
         session.setStatus(CheckoutStatus.CREATED);
         session = sessionRepository.save(session);
@@ -124,7 +125,8 @@ public class CheckoutService {
         UUID scanId;
         try {
             scanId = scanCommandService.startInternalPremiumScan(
-                    session.getUserId(), session.getSiteUrl(), session.getJurisdiction());
+                    session.getUserId(), session.getSiteUrl(), session.getJurisdiction(),
+                    session.getLocale());
         } catch (RuntimeException e) {
             // Помечаем причину для внешнего обработчика; бросок откатывает purchase выше.
             log.error("Premium-start упал для checkout {} — откат purchase, уйдёт в retry", checkoutId, e);

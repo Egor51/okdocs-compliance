@@ -91,7 +91,9 @@ public final class LocalStorageTrackingBeforeConsentRule implements Rule {
                     EvidenceType.DYNAMIC_RENDER,
                     0.85,
                     "local-storage-tracking-before-consent;" + String.join(",", trackers),
-                    VerificationStatus.CONFIRMED));
+                    VerificationStatus.CONFIRMED,
+                    "LOCAL_STORAGE_TRACKING_BEFORE_CONSENT",
+                    java.util.Map.of("page", HttpHeaderSupport.shortUrl(page.url()), "items", trackers)));
         }
         return facts;
     }

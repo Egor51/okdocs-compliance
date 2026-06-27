@@ -71,6 +71,8 @@ public final class EuControllerIdentityMissingRule implements Rule {
                 RuleSupport.evidenceType(ctx),
                 null,
                 "controller-identity-absent",
-                VerificationStatus.UNVERIFIED));
+                VerificationStatus.UNVERIFIED,
+                "EU_CONTROLLER_IDENTITY_MISSING",
+                java.util.Map.of()));
     }
 }

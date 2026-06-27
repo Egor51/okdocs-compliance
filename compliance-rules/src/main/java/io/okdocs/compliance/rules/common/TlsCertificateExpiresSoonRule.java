@@ -81,7 +81,10 @@ public final class TlsCertificateExpiresSoonRule implements Rule {
                         EvidenceType.STATIC_ANALYSIS,
                         0.95,
                         "tls-expires-soon;daysLeft=" + daysLeft,
-                        VerificationStatus.DETECTED));
+                        VerificationStatus.DETECTED,
+                        "TLS_CERTIFICATE_EXPIRES_SOON",
+                        java.util.Map.of("host", tls.host(), "daysLeft", daysLeft,
+                                "until", String.valueOf(tls.notAfter()))));
             }
         }
         return facts;

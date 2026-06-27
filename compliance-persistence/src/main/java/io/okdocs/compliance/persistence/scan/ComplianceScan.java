@@ -89,6 +89,14 @@ public class ComplianceScan {
     @Column(name = "scan_jurisdiction", nullable = false, length = 30)
     private ScanJurisdiction jurisdiction;
 
+    /**
+     * Язык отчёта (locale пользователя, напр. {@code ru}/{@code en}/{@code de}). Ось локализации
+     * evidence/message ≠ jurisdiction (UK-скан английский, но немец на DE хочет немецкий). Worker
+     * рендерит локализуемые тексты по этому значению. nullable для legacy-сканов (worker → дефолт ru).
+     */
+    @Column(name = "report_locale", length = 16)
+    private String locale;
+
     /** Лимит страниц краула (перенесён из события — worker читает из БД). */
     @Column(name = "max_pages", nullable = false)
     private int maxPages;

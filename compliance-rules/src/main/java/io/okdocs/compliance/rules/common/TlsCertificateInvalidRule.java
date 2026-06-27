@@ -78,9 +78,22 @@ public final class TlsCertificateInvalidRule implements Rule {
                     EvidenceType.STATIC_ANALYSIS,
                     certError ? 0.95 : 0.50,
                     "tls-handshake-failed;certError=" + certError,
-                    certError ? VerificationStatus.DETECTED : VerificationStatus.UNVERIFIED));
+                    certError ? VerificationStatus.DETECTED : VerificationStatus.UNVERIFIED,
+                    evidenceKey(tls, certError),
+                    java.util.Map.of("host", tls.host(), "error", errorText(tls))));
         }
         return facts;
+    }
+
+    private static String errorText(TlsInfo tls) {
+        return tls.handshakeError() == null ? "ошибка валидации сертификата" : tls.handshakeError();
+    }
+
+    private static String evidenceKey(TlsInfo tls, boolean certError) {
+        if (tls.handshakeOk() && !tls.certificateTrusted()) {
+            return "TLS_CERT_UNTRUSTED";
+        }
+        return certError ? "TLS_HANDSHAKE_FAILED" : "TLS_HANDSHAKE_FAILED_MAYBE_NETWORK";
     }
 
     private static String evidence(TlsInfo tls, boolean certError) {

@@ -52,7 +52,7 @@ class ScanBalanceServiceTest {
 
     @Test
     void debitConsumesMonthlyQuotaAndWritesLedger() {
-        when(balanceRepository.findByUserId(1L)).thenReturn(Optional.of(balance));
+        when(balanceRepository.findWithLockByUserId(1L)).thenReturn(Optional.of(balance));
         UUID scanId = UUID.randomUUID();
 
         service.debit(1L, scanId);
@@ -61,6 +61,7 @@ class ScanBalanceServiceTest {
         assertThat(balance.available()).isEqualTo(4);
 
         ArgumentCaptor<ScanBalanceTransaction> txn = ArgumentCaptor.forClass(ScanBalanceTransaction.class);
+        verify(balanceRepository).findWithLockByUserId(1L);
         verify(txnRepository).save(txn.capture());
         assertThat(txn.getValue().getType()).isEqualTo(BalanceTxnType.DEBIT);
         assertThat(txn.getValue().getAmount()).isEqualTo(-1);
@@ -74,7 +75,7 @@ class ScanBalanceServiceTest {
         balance.setMonthlyQuota(2);
         balance.setUsedThisPeriod(2);
         balance.setPurchasedRemaining(3);
-        when(balanceRepository.findByUserId(1L)).thenReturn(Optional.of(balance));
+        when(balanceRepository.findWithLockByUserId(1L)).thenReturn(Optional.of(balance));
 
         service.debit(1L, UUID.randomUUID());
 
@@ -90,7 +91,7 @@ class ScanBalanceServiceTest {
 
     @Test
     void purchaseAddsToPurchasedPocketAndWritesLedger() {
-        when(balanceRepository.findByUserId(1L)).thenReturn(Optional.of(balance));
+        when(balanceRepository.findWithLockByUserId(1L)).thenReturn(Optional.of(balance));
 
         service.purchase(1L, 1);
 
@@ -112,14 +113,14 @@ class ScanBalanceServiceTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> service.purchase(1L, -5))
                 .isInstanceOf(IllegalArgumentException.class);
-        verify(balanceRepository, never()).findByUserId(org.mockito.ArgumentMatchers.anyLong());
+        verify(balanceRepository, never()).findWithLockByUserId(org.mockito.ArgumentMatchers.anyLong());
         verify(txnRepository, never()).save(org.mockito.ArgumentMatchers.any());
     }
 
     @Test
     void debitThrowsWhenNoBalance() {
         balance.setMonthlyQuota(0);
-        when(balanceRepository.findByUserId(1L)).thenReturn(Optional.of(balance));
+        when(balanceRepository.findWithLockByUserId(1L)).thenReturn(Optional.of(balance));
 
         assertThatThrownBy(() -> service.debit(1L, UUID.randomUUID()))
                 .isInstanceOf(InsufficientScanBalanceException.class);
@@ -134,7 +135,7 @@ class ScanBalanceServiceTest {
 
         service.refund(1L, scanId);
 
-        verify(balanceRepository, never()).findByUserId(org.mockito.ArgumentMatchers.anyLong());
+        verify(balanceRepository, never()).findWithLockByUserId(org.mockito.ArgumentMatchers.anyLong());
         verify(txnRepository, never()).saveAndFlush(org.mockito.ArgumentMatchers.any());
     }
 
@@ -146,7 +147,7 @@ class ScanBalanceServiceTest {
 
         service.refund(1L, scanId);
 
-        verify(balanceRepository, never()).findByUserId(org.mockito.ArgumentMatchers.anyLong());
+        verify(balanceRepository, never()).findWithLockByUserId(org.mockito.ArgumentMatchers.anyLong());
         verify(txnRepository, never()).save(org.mockito.ArgumentMatchers.any());
     }
 
@@ -155,7 +156,7 @@ class ScanBalanceServiceTest {
         balance.setUsedThisPeriod(2);
         UUID scanId = UUID.randomUUID();
         stubRefundable(scanId, BalanceTxnSource.MONTHLY);
-        when(balanceRepository.findByUserId(1L)).thenReturn(Optional.of(balance));
+        when(balanceRepository.findWithLockByUserId(1L)).thenReturn(Optional.of(balance));
 
         service.refund(1L, scanId);
 
@@ -176,7 +177,7 @@ class ScanBalanceServiceTest {
         balance.setPurchasedRemaining(0);
         UUID scanId = UUID.randomUUID();
         stubRefundable(scanId, BalanceTxnSource.PURCHASED);
-        when(balanceRepository.findByUserId(1L)).thenReturn(Optional.of(balance));
+        when(balanceRepository.findWithLockByUserId(1L)).thenReturn(Optional.of(balance));
 
         service.refund(1L, scanId);
 
@@ -195,7 +196,7 @@ class ScanBalanceServiceTest {
         balance.setMonthlyQuota(2);
         balance.setUsedThisPeriod(1); // в monthly остался 1
         balance.setPurchasedRemaining(2);
-        when(balanceRepository.findByUserId(1L)).thenReturn(Optional.of(balance));
+        when(balanceRepository.findWithLockByUserId(1L)).thenReturn(Optional.of(balance));
 
         UUID monthlyScan = UUID.randomUUID();
         service.debit(1L, monthlyScan); // последний monthly → used=2
@@ -224,7 +225,7 @@ class ScanBalanceServiceTest {
     void refundSwallowsUniqueViolationFromConcurrentRefund() {
         UUID scanId = UUID.randomUUID();
         stubRefundable(scanId, BalanceTxnSource.MONTHLY);
-        when(balanceRepository.findByUserId(1L)).thenReturn(Optional.of(balance));
+        when(balanceRepository.findWithLockByUserId(1L)).thenReturn(Optional.of(balance));
         when(txnRepository.saveAndFlush(org.mockito.ArgumentMatchers.any()))
                 .thenThrow(new org.springframework.dao.DataIntegrityViolationException("dup"));
 

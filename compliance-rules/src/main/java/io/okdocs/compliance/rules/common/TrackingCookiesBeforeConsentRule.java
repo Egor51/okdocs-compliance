@@ -91,7 +91,9 @@ public final class TrackingCookiesBeforeConsentRule implements Rule {
                     EvidenceType.DYNAMIC_RENDER,
                     0.90,
                     "tracking-cookies-before-consent;" + String.join(",", trackers),
-                    VerificationStatus.CONFIRMED));
+                    VerificationStatus.CONFIRMED,
+                    "TRACKING_COOKIES_BEFORE_CONSENT",
+                    java.util.Map.of("page", HttpHeaderSupport.shortUrl(page.url()), "items", trackers)));
         }
         return facts;
     }

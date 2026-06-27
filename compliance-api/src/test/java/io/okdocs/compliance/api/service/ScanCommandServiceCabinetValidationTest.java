@@ -65,7 +65,7 @@ class ScanCommandServiceCabinetValidationTest {
                 .thenThrow(new ComplianceValidationException("Адрес сайта недопустим (приватная сеть)"));
 
         assertThatThrownBy(() -> service.startCabinetScan(
-                new ScanRequest("http://169.254.169.254/", "RU", null), "1.2.3.4", user))
+                new ScanRequest("http://169.254.169.254/", "RU", null, null), "1.2.3.4", user))
                 .isInstanceOf(ComplianceValidationException.class);
 
         verify(balanceService, never()).debit(anyLong(), any());
@@ -79,7 +79,7 @@ class ScanCommandServiceCabinetValidationTest {
                 .thenReturn(new UrlValidatorService.ValidatedUrl("https://example.ru", "example.ru"));
 
         assertThatThrownBy(() -> service.startCabinetScan(
-                new ScanRequest("https://example.ru", "ATLANTIS", null), "1.2.3.4", user))
+                new ScanRequest("https://example.ru", "ATLANTIS", null, null), "1.2.3.4", user))
                 .isInstanceOf(ComplianceValidationException.class);
 
         verify(balanceService, never()).debit(anyLong(), any());
@@ -98,7 +98,7 @@ class ScanCommandServiceCabinetValidationTest {
                 new ComplianceApiProperties.KafkaTopics.Topic("scan.requested", "scan.completed", "scan.failed")));
 
         java.util.UUID scanId = service.startInternalPremiumScan(
-                7L, "https://example.ru", io.okdocs.compliance.contracts.enums.ScanJurisdiction.RU);
+                7L, "https://example.ru", io.okdocs.compliance.contracts.enums.ScanJurisdiction.RU, "ru");
 
         assertThat(scanId).isNotNull();
         verify(rateLimitService, never()).checkScanAllowed(any(), any());
@@ -113,7 +113,7 @@ class ScanCommandServiceCabinetValidationTest {
         CompliancePrincipal guest = CompliancePrincipal.guest(java.util.UUID.randomUUID());
 
         assertThatThrownBy(() -> service.startCabinetScan(
-                new ScanRequest("https://example.ru", "RU", null), "1.2.3.4", guest))
+                new ScanRequest("https://example.ru", "RU", null, null), "1.2.3.4", guest))
                 .isInstanceOf(AccessDeniedToScanException.class);
 
         verify(rateLimitService, never()).checkScanAllowed(any(), any());

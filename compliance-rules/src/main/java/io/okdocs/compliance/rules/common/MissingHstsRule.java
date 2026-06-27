@@ -76,7 +76,9 @@ public final class MissingHstsRule implements Rule {
                         EvidenceType.STATIC_ANALYSIS,
                         0.95,
                         "missing-header=strict-transport-security",
-                        VerificationStatus.DETECTED));
+                        VerificationStatus.DETECTED,
+                        "MISSING_HSTS",
+                        java.util.Map.of("page", HttpHeaderSupport.shortUrl(r.url()))));
             }
         }
         return facts;

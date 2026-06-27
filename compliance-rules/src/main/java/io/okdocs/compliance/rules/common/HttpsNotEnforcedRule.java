@@ -81,7 +81,9 @@ public final class HttpsNotEnforcedRule implements Rule {
                         EvidenceType.STATIC_ANALYSIS,
                         0.95,
                         "https-not-enforced;status=" + r.statusCode(),
-                        VerificationStatus.DETECTED));
+                        VerificationStatus.DETECTED,
+                        r.redirect() ? "HTTPS_NOT_ENFORCED_REDIRECT" : "HTTPS_NOT_ENFORCED_PLAIN",
+                        java.util.Map.of("page", HttpHeaderSupport.shortUrl(r.url()))));
             }
         }
         return facts;

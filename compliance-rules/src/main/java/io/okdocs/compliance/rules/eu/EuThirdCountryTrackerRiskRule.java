@@ -82,7 +82,9 @@ public final class EuThirdCountryTrackerRiskRule implements Rule {
                     RuleSupport.evidenceType(ctx),
                     0.85,
                     String.join(",", thirdCountry.keySet()),
-                    VerificationStatus.DETECTED));
+                    VerificationStatus.DETECTED,
+                    "EU_THIRD_COUNTRY_TRACKER_RISK",
+                    java.util.Map.of("items", descr)));
         }
         return facts;
     }

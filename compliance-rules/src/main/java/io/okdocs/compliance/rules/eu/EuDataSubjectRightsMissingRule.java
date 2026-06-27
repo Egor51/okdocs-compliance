@@ -66,6 +66,8 @@ public final class EuDataSubjectRightsMissingRule implements Rule {
                 RuleSupport.evidenceType(ctx),
                 null,
                 "data-subject-rights-absent",
-                VerificationStatus.UNVERIFIED));
+                VerificationStatus.UNVERIFIED,
+                "EU_DATA_SUBJECT_RIGHTS_MISSING",
+                java.util.Map.of()));
     }
 }

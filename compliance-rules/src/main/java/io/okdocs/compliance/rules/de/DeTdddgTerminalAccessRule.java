@@ -86,7 +86,9 @@ public final class DeTdddgTerminalAccessRule implements Rule {
                     EvidenceType.DYNAMIC_RENDER,
                     0.90,
                     String.join(",", evidence),
-                    VerificationStatus.DETECTED));
+                    VerificationStatus.DETECTED,
+                    "DE_TDDDG_TERMINAL_ACCESS_WITHOUT_CONSENT",
+                    java.util.Map.of("items", evidence)));
         }
         return facts;
     }

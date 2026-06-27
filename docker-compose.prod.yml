@@ -36,7 +36,7 @@ services:
 #  EOF
 #  for t in compliance.scan.requested compliance.scan.completed compliance.scan.failed; do
 #  kafka-topics.sh --bootstrap-server $KAFKA_EXTERNAL_HOST:9094 --command-config /tmp/admin.properties \
-#  --create --if-not-exists --topic $t --partitions 3 --replication-factor 1
+#  --create --if-not-exists --topic $t --partitions 12 --replication-factor 1
 #  done
 #  echo "=== список топиков ==="
 #  kafka-topics.sh --bootstrap-server $KAFKA_EXTERNAL_HOST:9094 --command-config /tmp/admin.properties --list

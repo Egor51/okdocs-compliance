@@ -84,7 +84,9 @@ public final class EuTrackersBeforeConsentRule implements Rule {
                     EvidenceType.DYNAMIC_RENDER,
                     0.90,
                     String.join(",", named),
-                    VerificationStatus.DETECTED));
+                    VerificationStatus.DETECTED,
+                    "TRACKERS_AFTER_REJECT",
+                    java.util.Map.of("items", named)));
         }
         return facts;
     }

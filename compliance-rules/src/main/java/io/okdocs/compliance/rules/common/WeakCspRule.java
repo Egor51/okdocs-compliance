@@ -89,7 +89,9 @@ public final class WeakCspRule implements Rule {
                     EvidenceType.STATIC_ANALYSIS,
                     0.90,
                     "weak-csp=" + String.join(";", weaknesses),
-                    VerificationStatus.DETECTED));
+                    VerificationStatus.DETECTED,
+                    "WEAK_CSP",
+                    java.util.Map.of("page", HttpHeaderSupport.shortUrl(r.url()), "items", weaknesses)));
         }
         return facts;
     }
