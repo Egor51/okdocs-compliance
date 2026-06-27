@@ -46,4 +46,15 @@ class JurisdictionEnablementTest {
                 .isInstanceOf(ComplianceValidationException.class)
                 .hasMessageContaining("UK");
     }
+
+    // ── locale (§ PLAN-evidence-localization, Этап 1) ───────────────────────────────────────────
+
+    @Test
+    void parseLocaleNormalizesAndDefaults() {
+        assertThat(ScanCommandService.parseLocale("DE")).isEqualTo("de");   // регистр
+        assertThat(ScanCommandService.parseLocale(" en ")).isEqualTo("en"); // trim
+        assertThat(ScanCommandService.parseLocale(null)).isEqualTo("ru");   // пусто → дефолт
+        assertThat(ScanCommandService.parseLocale("")).isEqualTo("ru");
+        assertThat(ScanCommandService.parseLocale("klingon")).isEqualTo("ru"); // неизвестный → дефолт (мягко)
+    }
 }

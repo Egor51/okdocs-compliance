@@ -72,7 +72,9 @@ public final class MissingCspRule implements Rule {
                         EvidenceType.STATIC_ANALYSIS,
                         0.95,
                         "missing-header=content-security-policy",
-                        VerificationStatus.DETECTED));
+                        VerificationStatus.DETECTED,
+                        "MISSING_CSP",
+                        java.util.Map.of("page", HttpHeaderSupport.shortUrl(r.url()))));
             }
         }
         return facts;

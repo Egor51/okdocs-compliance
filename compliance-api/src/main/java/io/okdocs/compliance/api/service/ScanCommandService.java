@@ -70,7 +70,8 @@ public class ScanCommandService {
         ScanJurisdiction jurisdiction = resolveEnabledJurisdiction(request.jurisdiction());
 
         ComplianceScan scan = newScan(validated, ipAddress, principal, null,
-                ScanKind.FREE_MARKETING, properties.scan().freeMarketingMaxPages(), false, jurisdiction);
+                ScanKind.FREE_MARKETING, properties.scan().freeMarketingMaxPages(), false, jurisdiction,
+                parseLocale(request.locale()));
         scanRepository.save(scan);
         publishScanRequested(scan, principal);
         return toStatusResponse(scan);
@@ -95,7 +96,8 @@ public class ScanCommandService {
         ScanJurisdiction jurisdiction = resolveEnabledJurisdiction(request.jurisdiction());
 
         ComplianceScan scan = newScan(validated, ipAddress, principal, parentScanId,
-                ScanKind.CABINET_PREMIUM, properties.scan().userMaxPages(), true, jurisdiction);
+                ScanKind.CABINET_PREMIUM, properties.scan().userMaxPages(), true, jurisdiction,
+                parseLocale(request.locale()));
 
         // Списание баланса — в той же транзакции (oversell ловит @Version; нет баланса → 402).
         balanceService.debit(principal.userId(), scan.getId());
@@ -116,13 +118,15 @@ public class ScanCommandService {
      * checkout-сессии, F.3). Возвращает id запущенного скана для записи в {@code premium_scan_id}.
      */
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
-    public UUID startInternalPremiumScan(Long userId, String siteUrl, ScanJurisdiction jurisdiction) {
+    public UUID startInternalPremiumScan(Long userId, String siteUrl, ScanJurisdiction jurisdiction,
+                                         String locale) {
         UrlValidatorService.ValidatedUrl validated = urlValidator.validate(siteUrl);
         // Синтетический principal: у внутреннего вызова нет HTTP-контекста, но newScan/outbox
         // ожидают userId. Роль USER — скан принадлежит юзеру кабинета.
         CompliancePrincipal principal = CompliancePrincipal.user(userId, io.okdocs.compliance.contracts.enums.UserRole.USER);
         ComplianceScan scan = newScan(validated, null, principal, null,
-                ScanKind.CABINET_PREMIUM, properties.scan().userMaxPages(), true, jurisdiction);
+                ScanKind.CABINET_PREMIUM, properties.scan().userMaxPages(), true, jurisdiction,
+                parseLocale(locale));
 
         // Списание только что купленного кредита — в той же транзакции webhook'а.
         balanceService.debit(userId, scan.getId());
@@ -135,11 +139,13 @@ public class ScanCommandService {
     /** Сборка строки скана в QUEUED. Режим выполнения (kind/maxPages/dynamicRequired) — здесь. */
     private ComplianceScan newScan(UrlValidatorService.ValidatedUrl validated, String ipAddress,
                                    CompliancePrincipal principal, UUID parentScanId,
-                                   ScanKind kind, int maxPages, boolean dynamicRequired, ScanJurisdiction jurisdiction) {
+                                   ScanKind kind, int maxPages, boolean dynamicRequired,
+                                   ScanJurisdiction jurisdiction, String locale) {
         ComplianceScan scan = new ComplianceScan();
         scan.setId(UUID.randomUUID());
         scan.setUserId(principal.userId());
         scan.setJurisdiction(jurisdiction);
+        scan.setLocale(locale);
         scan.setGuestId(principal.guestId());
         scan.setParentScanId(parentScanId);
         scan.setIpAddress(ipAddress);
@@ -272,6 +278,24 @@ public class ScanCommandService {
         } catch (IllegalArgumentException e) {
             throw new ComplianceValidationException("Неизвестная юрисдикция скана: " + raw);
         }
+    }
+
+    /** Поддерживаемые локали отчёта (§ PLAN-evidence-localization). Дефолт — RU. */
+    private static final java.util.Set<String> SUPPORTED_LOCALES =
+            java.util.Set.of("ru", "en", "de", "fr", "es");
+    static final String DEFAULT_LOCALE = "ru";
+
+    /**
+     * Нормализует locale отчёта: пусто → дефолт {@link #DEFAULT_LOCALE}; неизвестный → дефолт (мягко,
+     * не 400 — locale косметический, не должен ронять скан). Ось локализации evidence/message, НЕ
+     * jurisdiction. Хранится в строке скана, worker рендерит по нему.
+     */
+    static String parseLocale(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return DEFAULT_LOCALE;
+        }
+        String normalized = raw.trim().toLowerCase(java.util.Locale.ROOT);
+        return SUPPORTED_LOCALES.contains(normalized) ? normalized : DEFAULT_LOCALE;
     }
 
     /**

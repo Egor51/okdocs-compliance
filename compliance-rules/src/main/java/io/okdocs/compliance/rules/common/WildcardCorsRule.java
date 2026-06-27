@@ -79,7 +79,9 @@ public final class WildcardCorsRule implements Rule {
                     EvidenceType.STATIC_ANALYSIS,
                     withCredentials ? 0.95 : 0.90,
                     "wildcard-cors" + (withCredentials ? ";with-credentials" : ""),
-                    VerificationStatus.DETECTED));
+                    VerificationStatus.DETECTED,
+                    withCredentials ? "WILDCARD_CORS_CREDS" : "WILDCARD_CORS",
+                    java.util.Map.of("page", HttpHeaderSupport.shortUrl(r.url()))));
         }
         return facts;
     }

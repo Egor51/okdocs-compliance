@@ -60,13 +60,13 @@ class CheckoutServiceTest {
             return s;
         });
 
-        CheckoutResponse resp = service.createCheckout(5L, new CheckoutRequest("example.ru", "ru", null));
+        CheckoutResponse resp = service.createCheckout(5L, new CheckoutRequest("example.ru", "ru", null, null));
 
         assertThat(resp.checkoutId()).isEqualTo(CHECKOUT_ID);
         assertThat(resp.confirmationUrl()).contains(CHECKOUT_ID.toString());
         // Активация не происходит на создании сессии.
         verify(balanceService, never()).purchase(anyLong(), anyInt());
-        verify(scanCommandService, never()).startInternalPremiumScan(anyLong(), any(), any());
+        verify(scanCommandService, never()).startInternalPremiumScan(anyLong(), any(), any(), any());
     }
 
     @Test
@@ -76,7 +76,7 @@ class CheckoutServiceTest {
         when(scanCommandService.resolveEnabledJurisdiction("ATLANTIS"))
                 .thenThrow(new ComplianceValidationException("Неизвестная юрисдикция скана: ATLANTIS"));
 
-        assertThatThrownBy(() -> service.createCheckout(5L, new CheckoutRequest("example.ru", "ATLANTIS", null)))
+        assertThatThrownBy(() -> service.createCheckout(5L, new CheckoutRequest("example.ru", "ATLANTIS", null, null)))
                 .isInstanceOf(ComplianceValidationException.class);
         verify(sessionRepository, never()).save(any());
     }
@@ -86,7 +86,7 @@ class CheckoutServiceTest {
         when(urlValidator.validate(any()))
                 .thenThrow(new ComplianceValidationException("Адрес сайта недопустим (приватная сеть)"));
 
-        assertThatThrownBy(() -> service.createCheckout(5L, new CheckoutRequest("http://127.0.0.1", "RU", null)))
+        assertThatThrownBy(() -> service.createCheckout(5L, new CheckoutRequest("http://127.0.0.1", "RU", null, null)))
                 .isInstanceOf(ComplianceValidationException.class);
         verify(sessionRepository, never()).save(any());
     }
@@ -100,13 +100,13 @@ class CheckoutServiceTest {
                 .thenReturn(Optional.empty());
         when(sessionRepository.findWithLockById(CHECKOUT_ID)).thenReturn(Optional.of(session));
         UUID scanId = UUID.randomUUID();
-        when(scanCommandService.startInternalPremiumScan(7L, "https://example.ru", ScanJurisdiction.RU))
+        when(scanCommandService.startInternalPremiumScan(7L, "https://example.ru", ScanJurisdiction.RU, "ru"))
                 .thenReturn(scanId);
 
         service.handleWebhook(CHECKOUT_ID, PROVIDER, PAYMENT_ID);
 
         verify(balanceService).purchase(7L, 1);
-        verify(scanCommandService).startInternalPremiumScan(7L, "https://example.ru", ScanJurisdiction.RU);
+        verify(scanCommandService).startInternalPremiumScan(7L, "https://example.ru", ScanJurisdiction.RU, "ru");
         assertThat(session.getStatus()).isEqualTo(CheckoutStatus.PAID_CONSUMED);
         assertThat(session.getPremiumScanId()).isEqualTo(scanId);
         assertThat(session.getProviderPaymentId()).isEqualTo(PAYMENT_ID);
@@ -127,7 +127,7 @@ class CheckoutServiceTest {
 
         verify(sessionRepository, never()).findWithLockById(any());
         verify(balanceService, never()).purchase(anyLong(), anyInt());
-        verify(scanCommandService, never()).startInternalPremiumScan(anyLong(), any(), any());
+        verify(scanCommandService, never()).startInternalPremiumScan(anyLong(), any(), any(), any());
     }
 
     @Test
@@ -142,7 +142,7 @@ class CheckoutServiceTest {
         service.handleWebhook(CHECKOUT_ID, PROVIDER, PAYMENT_ID);
 
         verify(balanceService, never()).purchase(anyLong(), anyInt());
-        verify(scanCommandService, never()).startInternalPremiumScan(anyLong(), any(), any());
+        verify(scanCommandService, never()).startInternalPremiumScan(anyLong(), any(), any(), any());
     }
 
     // ---- failure path: premium-start падает ----
@@ -153,7 +153,7 @@ class CheckoutServiceTest {
         when(sessionRepository.findByProviderAndProviderPaymentId(PROVIDER, PAYMENT_ID))
                 .thenReturn(Optional.empty());
         when(sessionRepository.findWithLockById(CHECKOUT_ID)).thenReturn(Optional.of(session));
-        when(scanCommandService.startInternalPremiumScan(anyLong(), any(), any()))
+        when(scanCommandService.startInternalPremiumScan(anyLong(), any(), any(), any()))
                 .thenThrow(new IllegalStateException("worker недоступен"));
         // markFailedToStart грузит сессию заново (отдельная транзакция).
         when(sessionRepository.findById(CHECKOUT_ID)).thenReturn(Optional.of(session));
@@ -176,14 +176,14 @@ class CheckoutServiceTest {
                 .thenReturn(Optional.of(failed));
         when(sessionRepository.findWithLockById(CHECKOUT_ID)).thenReturn(Optional.of(failed));
         UUID scanId = UUID.randomUUID();
-        when(scanCommandService.startInternalPremiumScan(7L, "https://example.ru", ScanJurisdiction.RU))
+        when(scanCommandService.startInternalPremiumScan(7L, "https://example.ru", ScanJurisdiction.RU, "ru"))
                 .thenReturn(scanId);
 
         service.handleWebhook(CHECKOUT_ID, PROVIDER, PAYMENT_ID);
 
         // Retry прошёл: purchase+start выполнены, статус стал consumed.
         verify(balanceService).purchase(7L, 1);
-        verify(scanCommandService).startInternalPremiumScan(7L, "https://example.ru", ScanJurisdiction.RU);
+        verify(scanCommandService).startInternalPremiumScan(7L, "https://example.ru", ScanJurisdiction.RU, "ru");
         assertThat(failed.getStatus()).isEqualTo(CheckoutStatus.PAID_CONSUMED);
         assertThat(failed.getPremiumScanId()).isEqualTo(scanId);
     }
@@ -204,6 +204,7 @@ class CheckoutServiceTest {
         s.setSiteUrl("https://example.ru");
         s.setSiteDomain("example.ru");
         s.setJurisdiction(ScanJurisdiction.RU);
+        s.setLocale("ru");
         s.setStatus(CheckoutStatus.CREATED);
         return s;
     }

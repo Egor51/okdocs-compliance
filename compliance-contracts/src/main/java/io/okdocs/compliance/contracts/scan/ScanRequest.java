@@ -14,6 +14,8 @@ import java.util.UUID;
 public record ScanRequest(
         @NotBlank String siteUrl,
         @NotBlank String  jurisdiction,
-        UUID parentScanId
+        UUID parentScanId,
+        /** Язык отчёта (ru/en/de/fr/es); опционально, сервер ставит дефолт. Ось ≠ jurisdiction. */
+        String locale
 ) {
 }

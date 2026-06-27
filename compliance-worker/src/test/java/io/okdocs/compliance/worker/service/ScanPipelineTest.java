@@ -56,7 +56,8 @@ class ScanPipelineTest {
     @BeforeEach
     void setUp() {
         pipeline = new ScanPipeline(siteCrawler, dynamicCrawler, tlsInspector, dnsInspector,
-                rknRegistryClient, ruleEngine, findingAssembler, metadataResolver, scoreCalculator,
+                rknRegistryClient, ruleEngine, findingAssembler, metadataResolver,
+                new EvidenceRenderer(), scoreCalculator,
                 progressService, new ObjectMapper(),
                 new io.okdocs.compliance.worker.config.WorkerMetrics(new SimpleMeterRegistry()),
                 new ComplianceWorkerProperties());
@@ -171,6 +172,35 @@ class ScanPipelineTest {
         assertThat(first.path("status").asText()).isEqualTo("PASSED");
     }
 
+    @Test
+    void diagnosticsMessageLocalizedByLocale() throws Exception {
+        // Этап 4: NOT_EVALUATED-outcome с messageKey + RU-plain fallback. На en-locale в diagnosticsJson
+        // message должен стать английским; status сохранён.
+        ComplianceScan scan = freeScan(io.okdocs.compliance.contracts.enums.ScanJurisdiction.EU);
+        scan.setLocale("en");
+        when(siteCrawler.crawl(anyString(), anyInt())).thenReturn(new SiteCrawler.CrawlResult(
+                List.of(page("https://example.com/")), List.of(),
+                new CrawlerDiagnostics(1, 1, 0, false)));
+        stubAnalysisNoEngine();
+
+        var notEvaluated = new io.okdocs.compliance.rules.RuleOutcome(
+                "SOME_RULE", io.okdocs.compliance.rules.RuleOutcomeStatus.NOT_EVALUATED,
+                "t", io.okdocs.compliance.contracts.enums.FindingSeverity.LOW,
+                io.okdocs.compliance.contracts.enums.FindingCategory.SECURITY,
+                "Правило не проверялось: нет входных данных для проверки.", "NOT_EVALUATED_NO_INPUT");
+        when(ruleEngine.evaluate(any())).thenReturn(
+                new RuleEngineResult(List.of(), List.of(), List.of(notEvaluated)));
+        when(metadataResolver.resolve(eq("SOME_RULE"), any())).thenReturn(java.util.Optional.empty());
+
+        ScanPipeline.PipelineOutcome outcome = pipeline.run(scan, scan.getId());
+
+        var node = new ObjectMapper().readTree(outcome.result().diagnosticsJson());
+        var first = node.path("ruleOutcomes").path(0);
+        assertThat(first.path("status").asText()).isEqualTo("NOT_EVALUATED");
+        assertThat(first.path("message").asText())
+                .isEqualTo("The rule was not evaluated: no input data to check.");
+    }
+
     /** stubAnalysis без ruleEngine/findingAssembler-стабов: тест задаёт их сам. */
     private void stubAnalysisNoEngine() {
         lenient().when(tlsInspector.inspect(anyString(), org.mockito.ArgumentMatchers.anyList())).thenReturn(
@@ -183,7 +213,7 @@ class ScanPipelineTest {
                         List.of(), List.of(), List.of()));
         lenient().when(rknRegistryClient.lookup(anyString(), any()))
                 .thenReturn(io.okdocs.compliance.contracts.enums.RegistryStatus.LOOKUP_FAILED);
-        when(findingAssembler.assemble(any(), any(), any())).thenReturn(List.of());
+        when(findingAssembler.assemble(any(), any(), any(), any())).thenReturn(List.of());
         lenient().when(scoreCalculator.calculate(any())).thenReturn(100);
     }
 
@@ -211,7 +241,7 @@ class ScanPipelineTest {
         when(rknRegistryClient.lookup(anyString(), any()))
                 .thenReturn(io.okdocs.compliance.contracts.enums.RegistryStatus.LOOKUP_FAILED);
         when(ruleEngine.evaluate(any())).thenReturn(new RuleEngineResult(List.of(), List.of()));
-        when(findingAssembler.assemble(any(), any(), any())).thenReturn(List.of());
+        when(findingAssembler.assemble(any(), any(), any(), any())).thenReturn(List.of());
         lenient().when(scoreCalculator.calculate(any())).thenReturn(100);
     }
 

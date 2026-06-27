@@ -99,7 +99,9 @@ public final class MixedContentRule implements Rule {
                     RuleSupport.evidenceType(ctx),
                     0.90,
                     "mixed-content;" + String.join(";", insecure),
-                    VerificationStatus.DETECTED));
+                    VerificationStatus.DETECTED,
+                    "MIXED_CONTENT_DETECTED",
+                    java.util.Map.of("page", HttpHeaderSupport.shortUrl(page.url()), "items", insecure)));
         }
         return facts;
     }

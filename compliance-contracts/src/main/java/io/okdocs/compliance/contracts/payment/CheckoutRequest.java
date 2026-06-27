@@ -10,10 +10,12 @@ import jakarta.validation.constraints.NotBlank;
  * @param siteUrl      сайт для premium-проверки
  * @param jurisdiction по какому закону проверять
  * @param promoCode    опциональный промокод
+ * @param locale       язык отчёта (ru/en/de/fr/es); опционально, сервер ставит дефолт; ось ≠ jurisdiction
  */
 public record CheckoutRequest(
         @NotBlank String siteUrl,
         @NotBlank String jurisdiction,
-        String promoCode
+        String promoCode,
+        String locale
 ) {
 }

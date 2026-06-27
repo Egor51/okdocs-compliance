@@ -97,7 +97,9 @@ public final class SessionCookieWithoutHttpOnlyRule implements Rule {
                     EvidenceType.DYNAMIC_RENDER,
                     0.85,
                     "session-cookie-without-httponly;" + String.join(",", exposed),
-                    VerificationStatus.DETECTED));
+                    VerificationStatus.DETECTED,
+                    "SESSION_COOKIE_WITHOUT_HTTPONLY",
+                    java.util.Map.of("page", HttpHeaderSupport.shortUrl(page.url()), "items", exposed)));
         }
         return facts;
     }

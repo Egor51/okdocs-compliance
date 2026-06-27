@@ -28,8 +28,10 @@ import java.util.UUID;
 public class FindingAssembler {
 
     private final RuleMetadataResolver metadataResolver;
+    private final EvidenceRenderer evidenceRenderer;
 
-    public List<ComplianceFinding> assemble(UUID scanId, ScanJurisdiction jurisdiction, List<RuleFact> facts) {
+    public List<ComplianceFinding> assemble(UUID scanId, ScanJurisdiction jurisdiction, String locale,
+                                            List<RuleFact> facts) {
         List<ComplianceFinding> findings = new ArrayList<>();
         for (RuleFact fact : facts) {
             // Метаданные резолвятся под юрисдикцию скана: DE-скан получает DE-метаданные с
@@ -41,12 +43,16 @@ public class FindingAssembler {
                         fact.code(), jurisdiction);
                 continue;
             }
-            findings.add(toFinding(scanId, fact, definition.get()));
+            // Evidence локализуется по locale пользователя (§ Этап 2): structured-key+params →
+            // EvidenceRenderer; немигрированные правила (key==null) → fallback на plain fact.evidence().
+            String evidence = evidenceRenderer.render(fact, locale);
+            findings.add(toFinding(scanId, fact, definition.get(), evidence));
         }
         return findings;
     }
 
-    private static ComplianceFinding toFinding(UUID scanId, RuleFact fact, RuleDefinition def) {
+    private static ComplianceFinding toFinding(UUID scanId, RuleFact fact, RuleDefinition def,
+                                               String evidence) {
         ComplianceFinding finding = new ComplianceFinding();
         finding.setScanId(scanId);
         finding.setCode(def.code());
@@ -58,8 +64,8 @@ public class FindingAssembler {
         finding.setLegalBasis(def.legalBasis());
         finding.setExplanation(def.explanation());
         finding.setRecommendation(def.recommendation());
-        // Наблюдение — из факта (где/как/насколько уверенно).
-        finding.setEvidence(fact.evidence());
+        // Наблюдение — из факта (где/как/насколько уверенно). evidence уже отрендерен по locale.
+        finding.setEvidence(evidence);
         finding.setSourceUrl(fact.sourceUrl());
         finding.setPageUrl(fact.sourceUrl());
         finding.setSourceType(fact.sourceType());

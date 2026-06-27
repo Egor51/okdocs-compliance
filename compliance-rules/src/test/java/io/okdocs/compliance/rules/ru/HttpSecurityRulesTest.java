@@ -112,7 +112,12 @@ class HttpSecurityRulesTest {
         @Test
         void flagsHttpsWithoutHsts() {
             var ctx = TestFixtures.ctxWithResponses(TestFixtures.response(URL, without("strict-transport-security")));
-            assertThat(single(rule.evaluate(ctx)).code()).isEqualTo("MISSING_HSTS");
+            var fact = single(rule.evaluate(ctx));
+            assertThat(fact.code()).isEqualTo("MISSING_HSTS");
+            // Structured evidence (Этап 3): ключ+params для локализуемого рендера; plain — fallback.
+            assertThat(fact.evidenceKey()).isEqualTo("MISSING_HSTS");
+            assertThat(fact.params()).containsKey("page");
+            assertThat(fact.evidence()).isNotBlank(); // legacy plain сохранён как fallback
         }
 
         @Test

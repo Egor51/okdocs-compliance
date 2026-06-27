@@ -10,6 +10,8 @@ import jakarta.validation.constraints.NotBlank;
  */
 public record FreeScanRequest(
         @NotBlank String siteUrl,
-        @NotBlank String  jurisdiction
+        @NotBlank String  jurisdiction,
+        /** Язык отчёта (ru/en/de/fr/es); опционально, сервер ставит дефолт. Ось ≠ jurisdiction. */
+        String locale
 ) {
 }

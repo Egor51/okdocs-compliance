@@ -46,6 +46,10 @@ public class CheckoutSession {
     @Column(nullable = false, length = 16)
     private ScanJurisdiction jurisdiction;
 
+    /** Язык отчёта (locale пользователя), переносится в premium-скан при активации. nullable (legacy). */
+    @Column(name = "report_locale", length = 16)
+    private String locale;
+
     @Column(name = "promo_code", length = 64)
     private String promoCode;
 

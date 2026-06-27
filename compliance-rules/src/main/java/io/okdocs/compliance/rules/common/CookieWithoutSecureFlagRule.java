@@ -89,7 +89,9 @@ public final class CookieWithoutSecureFlagRule implements Rule {
                     EvidenceType.DYNAMIC_RENDER,
                     0.90,
                     "cookie-without-secure;" + String.join(",", insecure),
-                    VerificationStatus.DETECTED));
+                    VerificationStatus.DETECTED,
+                    "COOKIE_WITHOUT_SECURE_FLAG",
+                    java.util.Map.of("page", HttpHeaderSupport.shortUrl(page.url()), "items", insecure)));
         }
         return facts;
     }
