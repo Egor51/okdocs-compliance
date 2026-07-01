@@ -12,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
@@ -21,16 +22,25 @@ import java.util.UUID;
 /**
  * Атомарное управление балансом сканов + append-only леджер (§4.2, §2.7).
  * <p>
- * Все мутации работают внутри транзакции вызывающего (например {@code startScan}); каждое
- * движение пишет {@link ScanBalanceTransaction}. {@code @Version} на {@link ScanBalance} ловит
- * конкурентное списание (oversell). {@code purchase} пополняет {@code purchasedRemaining} из
- * webhook'а оплаты (F.4); {@code EXPIRE} пока не задействован.
+ * Все мутации работают внутри транзакции вызывающего; каждое движение пишет
+ * {@link ScanBalanceTransaction}. {@code @Version} на {@link ScanBalance} ловит конкурентное списание
+ * (oversell). Пополнение из оплаты — идемпотентный {@link #purchaseFromPayment} (Balance-first,
+ * docs/PLAN-payments.md); {@code EXPIRE} пока не задействован.
  */
 @Slf4j
 @Service
 public class ScanBalanceService {
 
     private static final int PERIOD_DAYS = 30;
+
+    /**
+     * Конец периода квоты, синхронный с {@code planRenewsAt}: {@code null} когда квоты нет (FREE,
+     * quota=0 — сбрасывать нечего), иначе {@code now+30d} (активный PRO/BUSINESS). Держит одну
+     * дату-правду и не показывает фронту «сброс», которого не будет.
+     */
+    private static Instant periodResetFor(int quota) {
+        return quota > 0 ? Instant.now().plus(PERIOD_DAYS, ChronoUnit.DAYS) : null;
+    }
 
     private final ScanBalanceRepository balanceRepository;
     private final ScanBalanceTransactionRepository txnRepository;
@@ -53,24 +63,21 @@ public class ScanBalanceService {
         balance.setMonthlyQuota(monthlyQuota);
         balance.setUsedThisPeriod(0);
         balance.setPurchasedRemaining(0);
-        balance.setPeriodResetAt(Instant.now().plus(PERIOD_DAYS, ChronoUnit.DAYS));
+        balance.setPeriodResetAt(periodResetFor(monthlyQuota)); // FREE (quota=0) → null
         balanceRepository.save(balance);
         writeTxn(userId, BalanceTxnType.PLAN_GRANT, monthlyQuota, balance.available(), null, null,
                 "Начальная месячная квота");
     }
 
     /**
-     * Пополнение докупленными сканами (вызывается webhook'ом после оплаты, F.4).
+     * Пополнение докупленными сканами без привязки к платежу — для ручных/internal-сценариев.
      * <p>
-     * Кладёт в {@code purchasedRemaining} (не сгорает) и пишет {@link BalanceTxnType#PURCHASE}
-     * без source (покупка — не списание из кармана). Должна выполняться внутри транзакции webhook'а,
-     * чтобы при неудаче premium-start откатилась вместе с ней (F.14).
+     * Кладёт в {@code purchasedRemaining} (не сгорает) и пишет {@link BalanceTxnType#PURCHASE} без
+     * source (покупка — не списание из кармана).
      * <p>
-     * <b>НЕ идемпотентен сам по себе:</b> повторный вызов прибавит amount ещё раз. Дедупликация —
-     * ответственность вызывающего (F.4/F.15): webhook обязан вызывать {@code purchase} ровно один
-     * раз на платёж, под блокировкой {@code checkout_session} и с проверкой idempotency-key
-     * провайдера (повторная доставка webhook'а → {@code return OK} до {@code purchase}). Прямой
-     * вызов без этой защиты приведёт к двойному пополнению.
+     * <b>НЕ идемпотентен:</b> повторный вызов прибавит amount ещё раз. Для пополнения из оплаты
+     * используйте {@link #purchaseFromPayment} (дедуп по {@code paymentId}); прямой вызов {@code purchase}
+     * из webhook-flow привёл бы к двойному пополнению.
      */
     @Transactional
     public void purchase(Long userId, int amount) {
@@ -82,6 +89,51 @@ public class ScanBalanceService {
         balanceRepository.save(balance);
         writeTxn(userId, BalanceTxnType.PURCHASE, amount, balance.available(), null, null,
                 "Покупка " + amount + " скан(ов)");
+    }
+
+    /**
+     * Идемпотентное пополнение баланса докупленными кредитами по факту оплаты (Balance-first,
+     * docs/PLAN-payments.md). Вызывается из webhook'а оплаты ровно по одному платежу.
+     * <p>
+     * <b>Идемпотентность по {@code paymentId}</b> (в отличие от {@link #purchase}): повторная доставка
+     * webhook'а того же платежа не пополнит баланс второй раз. Защита двойная, как в {@link #refund}:
+     * (1) быстрый пре-чек по наличию PURCHASE; (2) партиальный уникальный индекс
+     * {@code uq_balance_txns_purchase_per_payment} (V028) — параллельный второй PURCHASE по тому же
+     * платежу падает с unique violation.
+     * <p>
+     * {@code doPurchaseFromPayment} — {@link Propagation#REQUIRES_NEW}: unique violation откатывает
+     * только эту суб-транзакцию, а НЕ внешнюю транзакцию активации платежа ({@code PaymentActivationService}),
+     * иначе outer tx стала бы rollback-only и упала бы на commit. Ловим исключение ВНЕ суб-транзакции.
+     */
+    public void purchaseFromPayment(Long userId, int credits, UUID paymentId) {
+        if (credits <= 0) {
+            throw new IllegalArgumentException("Кредитов к зачислению должно быть > 0, передано: " + credits);
+        }
+        if (txnRepository.existsByPaymentIdAndType(paymentId, BalanceTxnType.PURCHASE)) {
+            log.debug("Пополнение по платежу {} уже выполнено — пропуск", paymentId);
+            return;
+        }
+        try {
+            self.doPurchaseFromPayment(userId, credits, paymentId);
+        } catch (DataIntegrityViolationException e) {
+            // Параллельный webhook уже записал PURCHASE — суб-транзакция откатилась (REQUIRES_NEW),
+            // внешняя tx активации не задета. Идемпотентность сохранена.
+            log.debug("Пополнение по платежу {} проиграло гонку (unique violation) — пропуск", paymentId);
+        }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void doPurchaseFromPayment(Long userId, int credits, UUID paymentId) {
+        ScanBalance balance = loadForUpdate(userId);
+        balance.setPurchasedRemaining(balance.getPurchasedRemaining() + credits);
+        balanceRepository.save(balance);
+        // PURCHASE-строку пишем и флашим с явным flush: на дубле unique-индекс
+        // (uq_balance_txns_purchase_per_payment) бросает DataIntegrityViolationException здесь,
+        // откатывая всю транзакцию вместе с пополнением баланса выше.
+        ScanBalanceTransaction txn = buildTxn(userId, BalanceTxnType.PURCHASE, credits,
+                balance.available(), null, null, "Покупка " + credits + " скан(ов)");
+        txn.setPaymentId(paymentId);
+        txnRepository.saveAndFlush(txn);
     }
 
     /** Списание 1 скана. Сначала месячная квота, затем докупленное (в MVP — только квота). */
@@ -165,9 +217,48 @@ public class ScanBalanceService {
         ScanBalance balance = loadForUpdate(userId);
         balance.setMonthlyQuota(quota);
         balance.setUsedThisPeriod(0);
-        balance.setPeriodResetAt(Instant.now().plus(PERIOD_DAYS, ChronoUnit.DAYS));
+        balance.setPeriodResetAt(periodResetFor(quota)); // FREE/expire (quota=0) → null
         balanceRepository.save(balance);
         writeTxn(userId, BalanceTxnType.PLAN_GRANT, quota, balance.available(), null, null, "Месячная квота тарифа");
+    }
+
+    /**
+     * Месячная квота тарифа, выданная по оплате (активация PRO/BUSINESS, docs/PLAN-payments.md Этап 2).
+     * Сбрасывает только monthly-карман (как {@link #grantMonthly}) — {@code purchasedRemaining} от
+     * докупленных ONE_REPORT не трогается.
+     * <p>
+     * <b>Идемпотентно по {@code paymentId}</b> (как {@link #purchaseFromPayment}): повторный
+     * webhook/status-poll не выдаст квоту дважды. Защита двойная: (1) пре-чек на наличие PLAN_GRANT по
+     * платежу; (2) партиальный уникальный индекс {@code uq_balance_txns_plan_per_payment} (V029).
+     * {@code doGrantMonthlyFromPayment} — {@link Propagation#REQUIRES_NEW}: unique violation откатывает
+     * только суб-транзакцию, а не внешнюю tx активации платежа.
+     */
+    public void grantMonthlyFromPayment(Long userId, int quota, UUID paymentId) {
+        if (txnRepository.existsByPaymentIdAndType(paymentId, BalanceTxnType.PLAN_GRANT)) {
+            log.debug("Квота по платежу {} уже выдана — пропуск", paymentId);
+            return;
+        }
+        try {
+            self.doGrantMonthlyFromPayment(userId, quota, paymentId);
+        } catch (DataIntegrityViolationException e) {
+            // Параллельная активация уже записала PLAN_GRANT — суб-транзакция откатилась (REQUIRES_NEW),
+            // внешняя tx активации не задета. Идемпотентность сохранена.
+            log.debug("Выдача квоты по платежу {} проиграла гонку (unique violation) — пропуск", paymentId);
+        }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void doGrantMonthlyFromPayment(Long userId, int quota, UUID paymentId) {
+        ScanBalance balance = loadForUpdate(userId);
+        balance.setMonthlyQuota(quota);
+        balance.setUsedThisPeriod(0);
+        balance.setPeriodResetAt(periodResetFor(quota)); // активный тариф → now+30d
+        balanceRepository.save(balance);
+        // saveAndFlush: на дубле unique-индекс бросает DataIntegrityViolationException здесь.
+        ScanBalanceTransaction txn = buildTxn(userId, BalanceTxnType.PLAN_GRANT, quota,
+                balance.available(), null, null, "Месячная квота тарифа (оплата)");
+        txn.setPaymentId(paymentId);
+        txnRepository.saveAndFlush(txn);
     }
 
     /** Ручная корректировка админом (± сканов). Идёт в покупленный «карман» (не сгорает). */

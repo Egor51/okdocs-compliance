@@ -10,22 +10,25 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 
 /**
- * Сброс месячной квоты сканов (§4.6). Безопасен при нескольких репликах: атомарный claim
- * ({@code claimDueForRenewal} одним UPDATE...RETURNING) сдвигает {@code plan_renews_at} и возвращает
- * только реально захваченных юзеров — двойного PLAN_GRANT не возникает. Claim и начисление квоты
- * идут в одной транзакции: падение после claim откатит и сдвиг срока.
+ * Завершение истёкших платных тарифов PRO/BUSINESS (docs/PLAN-payments.md, Этап 2).
+ * <p>
+ * Модель non-recurring: платный тариф = разово купленные 30 дней. Job НЕ продлевает тариф (иначе один
+ * платёж давал бы квоту вечно — revenue leak), а по истечении {@code plan_renews_at} переводит юзера на
+ * FREE и выдаёт FREE-квоту. Продление — только новой оплатой.
+ * <p>
+ * Безопасен при нескольких репликах: атомарный claim ({@code claimExpiredPaidPlans} одним
+ * UPDATE...RETURNING) переводит на FREE и обнуляет срок, возвращая только реально захваченных —
+ * двойного downgrade не возникает. Claim и начисление квоты идут в одной транзакции: падение после
+ * claim откатит и downgrade.
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class MonthlyQuotaScheduler {
-
-    private static final Duration PERIOD = Duration.ofDays(30);
 
     private final AppUserRepository userRepository;
     private final ScanBalanceService balanceService;
@@ -33,17 +36,15 @@ public class MonthlyQuotaScheduler {
 
     @Scheduled(fixedDelayString = "${compliance.quota.scheduler-interval-ms:3600000}")
     @Transactional
-    public void renewQuotas() {
-        Instant now = Instant.now();
-        List<Object[]> claimed = userRepository.claimDueForRenewal(now, now.plus(PERIOD));
-        if (claimed.isEmpty()) {
+    public void expirePaidPlans() {
+        List<Long> expired = userRepository.claimExpiredPaidPlans(Instant.now());
+        if (expired.isEmpty()) {
             return;
         }
-        log.info("Месячный сброс квоты для {} юзеров", claimed.size());
-        for (Object[] row : claimed) {
-            Long userId = ((Number) row[0]).longValue();
-            UserPlan plan = UserPlan.valueOf((String) row[1]);
-            balanceService.grantMonthly(userId, properties.plan().quotaFor(plan));
+        log.info("Завершение платного тарифа (→ FREE) для {} юзеров", expired.size());
+        int freeQuota = properties.plan().quotaFor(UserPlan.FREE);
+        for (Long userId : expired) {
+            balanceService.grantMonthly(userId, freeQuota);
         }
     }
 }

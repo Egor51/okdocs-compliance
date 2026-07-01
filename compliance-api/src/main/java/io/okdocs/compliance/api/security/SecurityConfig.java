@@ -85,15 +85,19 @@ public class SecurityConfig {
                         // публичный продуктовый каталог для маркетинга и формы запуска scan
                         .requestMatchers(HttpMethod.GET,
                                 "/api/jurisdictions",
-                                "/api/jurisdictions/**").permitAll()
-                        // webhook оплаты — у провайдера нет JWT; подлинность через проверку подписи
-                        // в обработчике (F.16), не через Spring Security.
-                        .requestMatchers(HttpMethod.POST, "/api/payments/webhook").permitAll()
+                                "/api/jurisdictions/**",
+                                "/api/pricing/plans",
+                                "/api/pricing/plans/**").permitAll()
+                        // webhook оплаты — у провайдера нет JWT; подлинность через fail-closed
+                        // shared-secret + remote-проверку в обработчике (docs/PLAN-payments.md).
+                        .requestMatchers(HttpMethod.POST, "/api/payments/webhooks/**").permitAll()
                         // actuator
                         .requestMatchers("/actuator/health/**", "/actuator/info").permitAll()
                         // ролевые зоны
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .requestMatchers("/api/cabinet/**").hasRole("USER")
+                        // платежи (создание/статус) — только USER; webhook выше уже permit'нут
+                        .requestMatchers("/api/payments/**").hasRole("USER")
                         // история сканов — только USER (§4.3)
                         .requestMatchers(HttpMethod.GET, "/api/compliance-scans").hasRole("USER")
                         // free marketing scan — любой валидный токен (guest получает его через

@@ -73,7 +73,8 @@ public class AuthService {
         user.setRole(UserRole.USER);
         user.setStatus(UserStatus.ACTIVE);
         user.setPlan(UserPlan.FREE);
-        user.setPlanRenewsAt(Instant.now().plus(java.time.Duration.ofDays(30)));
+        // FREE без платного периода: planRenewsAt ставится только при покупке PRO/BUSINESS
+        // (docs/PLAN-payments.md, Этап 2).
         user = userRepository.save(user);
 
         int quota = properties.plan().quotaFor(UserPlan.FREE);

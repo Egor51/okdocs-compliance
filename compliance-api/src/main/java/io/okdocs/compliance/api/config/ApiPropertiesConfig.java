@@ -9,6 +9,6 @@ import org.springframework.context.annotation.Configuration;
  * и объединённым ComplianceApplication — без правки boot-классов.
  */
 @Configuration
-@EnableConfigurationProperties(ComplianceApiProperties.class)
+@EnableConfigurationProperties({ComplianceApiProperties.class, YooKassaProperties.class})
 public class ApiPropertiesConfig {
 }

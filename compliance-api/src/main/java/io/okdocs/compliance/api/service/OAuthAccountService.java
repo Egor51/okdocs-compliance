@@ -15,8 +15,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Duration;
-import java.time.Instant;
 
 /**
  * Резолв локального аккаунта из OAuth-профиля (F.2 §F9). Источник правды связки — таблица
@@ -87,7 +85,8 @@ public class OAuthAccountService {
         user.setRole(UserRole.USER);
         user.setStatus(UserStatus.ACTIVE);
         user.setPlan(UserPlan.FREE);
-        user.setPlanRenewsAt(Instant.now().plus(Duration.ofDays(30)));
+        // FREE не имеет платного периода: planRenewsAt — конец оплаченного тарифа, ставится только
+        // при покупке PRO/BUSINESS (docs/PLAN-payments.md, Этап 2). Для FREE остаётся null.
         user = userRepository.save(user);
 
         int quota = properties.plan().quotaFor(UserPlan.FREE);

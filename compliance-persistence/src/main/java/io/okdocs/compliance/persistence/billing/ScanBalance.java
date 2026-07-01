@@ -40,7 +40,11 @@ public class ScanBalance {
     @Column(name = "purchased_remaining", nullable = false)
     private int purchasedRemaining;
 
-    @Column(name = "period_reset_at", nullable = false)
+    /**
+     * Конец текущего периода квоты = зеркало {@code app_users.plan_renews_at}. {@code null} для FREE
+     * (нет платного периода; квота 0, сбрасывать нечего); {@code now+30d} для активного PRO/BUSINESS.
+     */
+    @Column(name = "period_reset_at")
     private Instant periodResetAt;
 
     @Column(name = "created_at", nullable = false, updatable = false)

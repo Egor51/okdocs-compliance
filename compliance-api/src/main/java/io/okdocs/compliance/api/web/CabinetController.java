@@ -4,7 +4,6 @@ import io.okdocs.compliance.api.security.CompliancePrincipal;
 import io.okdocs.compliance.api.security.CurrentPrincipal;
 import io.okdocs.compliance.api.service.AuthService;
 import io.okdocs.compliance.api.service.BalanceTransactionMapper;
-import io.okdocs.compliance.api.service.CheckoutService;
 import io.okdocs.compliance.api.service.DashboardService;
 import io.okdocs.compliance.api.service.ScanBalanceService;
 import io.okdocs.compliance.api.service.ScanCommandService;
@@ -12,8 +11,6 @@ import io.okdocs.compliance.contracts.auth.ChangePasswordRequest;
 import io.okdocs.compliance.contracts.cabinet.BalanceTransactionDto;
 import io.okdocs.compliance.contracts.cabinet.ScanBalanceDto;
 import io.okdocs.compliance.contracts.cabinet.UserDashboardResponse;
-import io.okdocs.compliance.contracts.payment.CheckoutRequest;
-import io.okdocs.compliance.contracts.payment.CheckoutResponse;
 import io.okdocs.compliance.contracts.scan.ScanRequest;
 import io.okdocs.compliance.contracts.scan.ScanStatusResponse;
 import io.okdocs.compliance.persistence.billing.ScanBalanceTransaction;
@@ -46,7 +43,6 @@ public class CabinetController {
     private final ScanBalanceService balanceService;
     private final AuthService authService;
     private final ScanCommandService scanCommandService;
-    private final CheckoutService checkoutService;
     private final ClientIpResolver clientIpResolver;
     private final ScanBalanceTransactionRepository txnRepository;
     private final BalanceTransactionMapper txnMapper;
@@ -62,16 +58,6 @@ public class CabinetController {
         ScanStatusResponse response = scanCommandService.startCabinetScan(
                 request, clientIpResolver.resolve(http), principal);
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
-    }
-
-    /**
-     * Создать checkout-сессию оплаты premium-скана (F.4 §F12). От authenticated USER (userId из JWT).
-     * Активация (баланс/скан) — НЕ здесь, а по webhook'у после оплаты. Возвращает confirmationUrl.
-     */
-    @PostMapping("/checkout")
-    public CheckoutResponse checkout(@Valid @RequestBody CheckoutRequest request) {
-        Long userId = CurrentPrincipal.require().userId();
-        return checkoutService.createCheckout(userId, request);
     }
 
     @GetMapping
