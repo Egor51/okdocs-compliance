@@ -32,19 +32,21 @@ public interface AppUserRepository extends JpaRepository<AppUser, Long> {
     long countByStatus(UserStatus status);
 
     /**
-     * Атомарный claim юзеров на месячный сброс квоты (§4.6) — безопасен при нескольких репликах.
-     * Одним {@code UPDATE ... RETURNING} сдвигает {@code plan_renews_at} на следующий период только
-     * для тех, у кого срок наступил. Row-lock сериализует реплики: после коммита первой остальные
-     * видят сдвинутый срок и не захватывают строку повторно (нет двойного PLAN_GRANT). Возвращает
-     * {@code [id, plan]} захваченных юзеров — по ним scheduler начисляет квоту.
+     * Атомарное завершение истёкших платных тарифов (docs/PLAN-payments.md, Этап 2) — безопасно при
+     * нескольких репликах. Модель non-recurring: {@code plan_renews_at} — конец оплаченного периода, а
+     * НЕ дата автопродления. Одним {@code UPDATE ... RETURNING} переводит на FREE и обнуляет срок только
+     * для PRO/BUSINESS с наступившим сроком. Row-lock сериализует реплики: после коммита первой
+     * остальные уже видят {@code plan=FREE} (не матчит WHERE) и строку не захватывают повторно —
+     * двойного downgrade/PLAN_GRANT нет. Возвращает {@code [id]} завершённых юзеров (им начисляется
+     * FREE-квота). Платный тариф НЕ продлевается бесплатно — продление только новой оплатой.
      */
     @Query(value = """
             UPDATE app_users
-            SET plan_renews_at = :nextRenewal
-            WHERE plan_renews_at IS NOT NULL AND plan_renews_at <= :now
-            RETURNING id, plan
+            SET plan = 'FREE', plan_renews_at = NULL
+            WHERE plan IN ('PRO', 'BUSINESS') AND plan_renews_at IS NOT NULL AND plan_renews_at <= :now
+            RETURNING id
             """, nativeQuery = true)
-    List<Object[]> claimDueForRenewal(@Param("now") Instant now, @Param("nextRenewal") Instant nextRenewal);
+    List<Long> claimExpiredPaidPlans(@Param("now") Instant now);
 
     /** Сводка «кол-во юзеров по тарифу» для статистики админки. */
     @Query("SELECT u.plan, COUNT(u) FROM AppUser u GROUP BY u.plan")

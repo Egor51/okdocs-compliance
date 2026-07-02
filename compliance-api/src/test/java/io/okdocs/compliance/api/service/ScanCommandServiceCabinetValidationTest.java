@@ -87,27 +87,6 @@ class ScanCommandServiceCabinetValidationTest {
     }
 
     @Test
-    void internalPremiumScanDebitsAndStartsWithoutRateLimitOrPrincipal() {
-        // F.13: webhook-путь без principal/IP/rate-limit. Валидирует URL, списывает кредит, ставит скан.
-        when(urlValidator.validate("https://example.ru"))
-                .thenReturn(new UrlValidatorService.ValidatedUrl("https://example.ru", "example.ru"));
-        when(properties.scan()).thenReturn(
-                new ComplianceApiProperties.Scan(null, null, 30, null, null, null));
-        // publishScanRequested дёргает kafka-топик и фабрику outbox.
-        when(properties.kafka()).thenReturn(new ComplianceApiProperties.KafkaTopics(
-                new ComplianceApiProperties.KafkaTopics.Topic("scan.requested", "scan.completed", "scan.failed")));
-
-        java.util.UUID scanId = service.startInternalPremiumScan(
-                7L, "https://example.ru", io.okdocs.compliance.contracts.enums.ScanJurisdiction.RU, "ru");
-
-        assertThat(scanId).isNotNull();
-        verify(rateLimitService, never()).checkScanAllowed(any(), any());
-        verify(balanceService).debit(7L, scanId);
-        verify(scanRepository).save(any());
-        verify(outboxRepository).save(any());
-    }
-
-    @Test
     void rejectsNonUserPrincipalBeforeAnyValidationOrDebit() {
         // Premium-запуск только для USER: guest с подделанным prefill даже не доходит до валидации.
         CompliancePrincipal guest = CompliancePrincipal.guest(java.util.UUID.randomUUID());

@@ -1,17 +1,20 @@
 package io.okdocs.compliance.contracts.enums;
 
 /**
- * Платёжный провайдер (§4a/F.4). Метод оплаты выбирается на checkout по locale-подсказке, но enum
- * общий — бэкенд принимает любой из известных.
+ * Платёжный провайдер (Balance-first, docs/PLAN-payments.md). Метод оплаты выбирается роутером по
+ * locale-подсказке, но enum общий — бэкенд знает весь roadmap-набор.
  * <ul>
- *   <li>{@code YOOKASSA} — карта РФ (RUB);</li>
- *   <li>{@code STRIPE} — международная карта (EUR/USD);</li>
- *   <li>{@code CRYPTO} — крипто-провайдер (USDT/BTC).</li>
+ *   <li>{@code YOOKASSA} — карта РФ (RUB), реализован;</li>
+ *   <li>{@code STRIPE} — международная карта (USD/EUR), позже;</li>
+ *   <li>{@code TELEGRAM} — оплата через Telegram (invoice/deep-link), позже;</li>
+ *   <li>{@code TON} — on-chain TON (pull/reconciliation), позже.</li>
  * </ul>
- * Реальная интеграция (confirmationUrl/подпись/курсы) — F.16; здесь фиксируется допустимый набор.
+ * Реализован только {@code YOOKASSA}; остальные значения зарезервированы под адаптеры и выровнены с
+ * CHECK-констрейнтом {@code payment_sessions.provider} (V027).
  */
 public enum PaymentProvider {
     YOOKASSA,
     STRIPE,
-    CRYPTO
+    TELEGRAM,
+    TON
 }

@@ -45,7 +45,6 @@ import java.util.Map;
 public class AdminService {
 
     private static final int RECENT = 10;
-    private static final int PERIOD_DAYS = 30;
 
     private final AppUserRepository userRepository;
     private final ScanBalanceRepository balanceRepository;
@@ -53,6 +52,7 @@ public class AdminService {
     private final ComplianceScanRepository scanRepository;
     private final AdminAuditLogRepository auditLogRepository;
     private final ScanBalanceService balanceService;
+    private final io.okdocs.compliance.api.service.payment.PaidPlanService paidPlanService;
     private final ScanMapper scanMapper;
     private final BalanceTransactionMapper txnMapper;
     private final ComplianceApiProperties properties;
@@ -100,10 +100,10 @@ public class AdminService {
         requireMatch(pathUserId, request.userId());
         AppUser user = loadUser(pathUserId);
         UserPlan oldPlan = user.getPlan();
-        user.setPlan(request.plan());
-        user.setPlanRenewsAt(Instant.now().plus(PERIOD_DAYS, ChronoUnit.DAYS));
-        userRepository.save(user);
-        // Обновляем месячную квоту по новому тарифу.
+        // Общее ядро активации тарифа (plan + planRenewsAt = now+30d) — то же, что использует
+        // платёжная активация PRO/BUSINESS, чтобы две точки выдачи плана не разъезжались.
+        paidPlanService.applyPlan(user, request.plan());
+        // Обновляем месячную квоту по новому тарифу (админ — прямой grantMonthly, без payment-идемпотентности).
         balanceService.grantMonthly(pathUserId, properties.plan().quotaFor(request.plan()));
         audit(adminId, AdminActionType.SET_PLAN, pathUserId, request.reason(),
                 Map.of("oldPlan", oldPlan, "newPlan", request.plan()));

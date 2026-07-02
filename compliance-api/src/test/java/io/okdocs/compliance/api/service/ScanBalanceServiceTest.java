@@ -51,6 +51,29 @@ class ScanBalanceServiceTest {
     }
 
     @Test
+    void createForNewUserFreeLeavesPeriodResetNull() {
+        // FREE-регистрация: quota=0 → periodResetAt=null (нет периода сброса, синхронно с planRenewsAt).
+        ArgumentCaptor<ScanBalance> saved = ArgumentCaptor.forClass(ScanBalance.class);
+
+        service.createForNewUser(99L, 0);
+
+        verify(balanceRepository).save(saved.capture());
+        assertThat(saved.getValue().getMonthlyQuota()).isZero();
+        assertThat(saved.getValue().getPeriodResetAt()).isNull();
+        assertThat(saved.getValue().available()).isZero();
+    }
+
+    @Test
+    void createForNewUserWithQuotaSetsPeriodReset() {
+        ArgumentCaptor<ScanBalance> saved = ArgumentCaptor.forClass(ScanBalance.class);
+
+        service.createForNewUser(99L, 30);
+
+        verify(balanceRepository).save(saved.capture());
+        assertThat(saved.getValue().getPeriodResetAt()).isAfter(Instant.now());
+    }
+
+    @Test
     void debitConsumesMonthlyQuotaAndWritesLedger() {
         when(balanceRepository.findWithLockByUserId(1L)).thenReturn(Optional.of(balance));
         UUID scanId = UUID.randomUUID();
@@ -231,6 +254,127 @@ class ScanBalanceServiceTest {
 
         // Не должно бросить наружу — гонка проиграна, идемпотентность сохранена.
         service.refund(1L, scanId);
+    }
+
+    @Test
+    void purchaseFromPaymentAddsCreditsAndLinksPayment() {
+        UUID paymentId = UUID.randomUUID();
+        when(txnRepository.existsByPaymentIdAndType(paymentId, BalanceTxnType.PURCHASE)).thenReturn(false);
+        when(balanceRepository.findWithLockByUserId(1L)).thenReturn(Optional.of(balance));
+
+        service.purchaseFromPayment(1L, 1, paymentId);
+
+        assertThat(balance.getPurchasedRemaining()).isEqualTo(1);
+        assertThat(balance.available()).isEqualTo(6);
+        ArgumentCaptor<ScanBalanceTransaction> txn = ArgumentCaptor.forClass(ScanBalanceTransaction.class);
+        verify(txnRepository).saveAndFlush(txn.capture());
+        assertThat(txn.getValue().getType()).isEqualTo(BalanceTxnType.PURCHASE);
+        assertThat(txn.getValue().getAmount()).isEqualTo(1);
+        assertThat(txn.getValue().getPaymentId()).isEqualTo(paymentId);
+        assertThat(txn.getValue().getSource()).isNull();
+    }
+
+    @Test
+    void purchaseFromPaymentIsIdempotentByPaymentId() {
+        UUID paymentId = UUID.randomUUID();
+        // Пре-чек видит уже записанный PURCHASE по этому платежу → no-op, баланс не трогаем.
+        when(txnRepository.existsByPaymentIdAndType(paymentId, BalanceTxnType.PURCHASE)).thenReturn(true);
+
+        service.purchaseFromPayment(1L, 1, paymentId);
+
+        verify(balanceRepository, never()).findWithLockByUserId(org.mockito.ArgumentMatchers.anyLong());
+        verify(txnRepository, never()).saveAndFlush(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void purchaseFromPaymentSwallowsUniqueViolationFromConcurrentWebhook() {
+        UUID paymentId = UUID.randomUUID();
+        when(txnRepository.existsByPaymentIdAndType(paymentId, BalanceTxnType.PURCHASE)).thenReturn(false);
+        when(balanceRepository.findWithLockByUserId(1L)).thenReturn(Optional.of(balance));
+        when(txnRepository.saveAndFlush(org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new org.springframework.dao.DataIntegrityViolationException("dup"));
+
+        // Гонка at-least-once: параллельный webhook уже записал PURCHASE — не бросаем наружу.
+        service.purchaseFromPayment(1L, 1, paymentId);
+    }
+
+    @Test
+    void grantMonthlyFromPaymentResetsMonthlyAndLinksPayment() {
+        // Активация PRO по оплате: выставляет квоту тарифа, пишет PLAN_GRANT с payment_id; purchased цел.
+        balance.setMonthlyQuota(5);
+        balance.setUsedThisPeriod(3);
+        balance.setPurchasedRemaining(2);
+        UUID paymentId = UUID.randomUUID();
+        when(txnRepository.existsByPaymentIdAndType(paymentId, BalanceTxnType.PLAN_GRANT)).thenReturn(false);
+        when(balanceRepository.findWithLockByUserId(1L)).thenReturn(Optional.of(balance));
+
+        service.grantMonthlyFromPayment(1L, 30, paymentId);
+
+        assertThat(balance.getMonthlyQuota()).isEqualTo(30);
+        assertThat(balance.getUsedThisPeriod()).isEqualTo(0);
+        assertThat(balance.getPurchasedRemaining()).isEqualTo(2); // докупленные не тронуты
+        assertThat(balance.getPeriodResetAt()).isAfter(Instant.now()); // активный тариф → now+30d
+        ArgumentCaptor<ScanBalanceTransaction> txn = ArgumentCaptor.forClass(ScanBalanceTransaction.class);
+        verify(txnRepository).saveAndFlush(txn.capture());
+        assertThat(txn.getValue().getType()).isEqualTo(BalanceTxnType.PLAN_GRANT);
+        assertThat(txn.getValue().getPaymentId()).isEqualTo(paymentId);
+    }
+
+    @Test
+    void grantMonthlyFromPaymentIsIdempotentByPaymentId() {
+        UUID paymentId = UUID.randomUUID();
+        when(txnRepository.existsByPaymentIdAndType(paymentId, BalanceTxnType.PLAN_GRANT)).thenReturn(true);
+
+        service.grantMonthlyFromPayment(1L, 30, paymentId);
+
+        verify(balanceRepository, never()).findWithLockByUserId(org.mockito.ArgumentMatchers.anyLong());
+        verify(txnRepository, never()).saveAndFlush(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void grantMonthlyFromPaymentSwallowsUniqueViolation() {
+        UUID paymentId = UUID.randomUUID();
+        when(txnRepository.existsByPaymentIdAndType(paymentId, BalanceTxnType.PLAN_GRANT)).thenReturn(false);
+        when(balanceRepository.findWithLockByUserId(1L)).thenReturn(Optional.of(balance));
+        when(txnRepository.saveAndFlush(org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new org.springframework.dao.DataIntegrityViolationException("dup"));
+
+        // Параллельная активация уже выдала квоту по платежу — не бросаем наружу.
+        service.grantMonthlyFromPayment(1L, 30, paymentId);
+    }
+
+    @Test
+    void grantMonthlyToFreePreservesPurchasedCredits() {
+        // Инвариант на стыке продуктов: истечение PRO/BUSINESS сбрасывает monthly-квоту до FREE,
+        // но отдельно купленные ONE_REPORT-кредиты остаются в purchased_remaining и не сгорают.
+        balance.setMonthlyQuota(30);
+        balance.setUsedThisPeriod(12);
+        balance.setPurchasedRemaining(3);
+        when(balanceRepository.findWithLockByUserId(1L)).thenReturn(Optional.of(balance));
+
+        service.grantMonthly(1L, 0);
+
+        assertThat(balance.getMonthlyQuota()).isZero();
+        assertThat(balance.getUsedThisPeriod()).isZero();
+        assertThat(balance.getPurchasedRemaining()).isEqualTo(3);
+        assertThat(balance.available()).isEqualTo(3);
+        // Истечение до FREE (quota=0) обнуляет периода сброса — синхронно с planRenewsAt=null.
+        assertThat(balance.getPeriodResetAt()).isNull();
+
+        ArgumentCaptor<ScanBalanceTransaction> txn = ArgumentCaptor.forClass(ScanBalanceTransaction.class);
+        verify(txnRepository).save(txn.capture());
+        assertThat(txn.getValue().getType()).isEqualTo(BalanceTxnType.PLAN_GRANT);
+        assertThat(txn.getValue().getAmount()).isZero();
+        assertThat(txn.getValue().getBalanceAfter()).isEqualTo(3);
+        assertThat(txn.getValue().getSource()).isNull();
+    }
+
+    @Test
+    void purchaseFromPaymentRejectsNonPositiveCredits() {
+        assertThatThrownBy(() -> service.purchaseFromPayment(1L, 0, UUID.randomUUID()))
+                .isInstanceOf(IllegalArgumentException.class);
+        verify(txnRepository, never()).existsByPaymentIdAndType(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any());
     }
 
     /** Стабит проверки идемпотентности (есть DEBIT, нет REFUND) и source исходного DEBIT. */

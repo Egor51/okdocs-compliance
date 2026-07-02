@@ -51,6 +51,10 @@ public class ScanBalanceTransaction {
     @Column(name = "scan_id")
     private UUID scanId;
 
+    /** Для PURCHASE из оплаты — какой платёж; основа идемпотентности (uq_balance_txns_purchase_per_payment). */
+    @Column(name = "payment_id")
+    private UUID paymentId;
+
     @Column(columnDefinition = "text")
     private String note;
 

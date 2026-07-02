@@ -3,6 +3,7 @@ package io.okdocs.compliance.api.web;
 import io.okdocs.compliance.contracts.exception.AccessDeniedToScanException;
 import io.okdocs.compliance.contracts.exception.ComplianceRateLimitException;
 import io.okdocs.compliance.contracts.exception.ComplianceValidationException;
+import io.okdocs.compliance.contracts.exception.ForbiddenResourceException;
 import io.okdocs.compliance.contracts.exception.InsufficientScanBalanceException;
 import io.okdocs.compliance.contracts.exception.ScanNotFoundException;
 import io.okdocs.compliance.contracts.exception.ScanReportNotReadyException;
@@ -36,6 +37,11 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(AccessDeniedToScanException.class)
     public ResponseEntity<Map<String, Object>> handleForbidden(AccessDeniedToScanException e, HttpServletRequest req) {
+        return error(HttpStatus.FORBIDDEN, e.getMessage(), req);
+    }
+
+    @ExceptionHandler(ForbiddenResourceException.class)
+    public ResponseEntity<Map<String, Object>> handleForbiddenResource(ForbiddenResourceException e, HttpServletRequest req) {
         return error(HttpStatus.FORBIDDEN, e.getMessage(), req);
     }
 
