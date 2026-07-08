@@ -1,7 +1,10 @@
 # Локальная разработка: платный premium-поток (CDP/headless Chromium) не нужен. Дефолт
 # premium-enabled=true (fail-fast в проде) уронил бы старт без доступного CDP — здесь явно
-# выключаем. Включить локально: запустить browserless и поднять premium-enabled + CDP_* env.
+# выключаем, а enabled=false убирает саму зависимость от browserless (бин-заглушка
+# NoopDynamicCrawler, см. CombinedContextIT). Включить локально: запустить browserless
+# и поднять enabled + premium-enabled + CDP_* env.
 compliance:
   crawler:
     dynamic:
+      enabled: false
       premium-enabled: false
