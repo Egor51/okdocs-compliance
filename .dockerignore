@@ -1,0 +1,15 @@
+.git
+.idea
+.mvn
+**/target
+**/.DS_Store
+
+.env
+*.env
+*.local
+compliance-local.env
+prod-infra.env
+
+docs/PLAN.md
+docs/PROJECT.md
+docs

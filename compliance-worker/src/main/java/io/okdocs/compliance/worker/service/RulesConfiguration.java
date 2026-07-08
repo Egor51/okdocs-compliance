@@ -86,7 +86,7 @@ public class RulesConfiguration {
                 new CrossBorderTransferRule(),
                 new ForeignAuthProviderRule(),
                 new NoOperatorContactsRule(),
-                new NotInRknRegistryRule(),
+//                new NotInRknRegistryRule(),
                 new NonRuHostingRule(),
                 new TrackersBeforeConsentRule(),
                 // RU-специфичные security/transport/DNS (привязаны к 152-ФЗ-формулировкам/хостингу).

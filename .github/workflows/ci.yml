@@ -1,0 +1,79 @@
+# CI: сборка и тесты на pull request в main.
+# Собираются только затронутые модули (-pl <module> -am); изменения в общих
+# модулях (contracts/persistence/messaging/rules/root pom) гоняют полный reactor.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      worker: ${{ steps.filter.outputs.worker }}
+      shared: ${{ steps.filter.outputs.shared }}
+      app: ${{ steps.filter.outputs.app }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            shared: &shared
+              - 'pom.xml'
+              - 'compliance-contracts/**'
+              - 'compliance-persistence/**'
+              - 'compliance-messaging/**'
+              - 'compliance-rules/**'
+            api:
+              - *shared
+              - 'compliance-api/**'
+            worker:
+              - *shared
+              - 'compliance-worker/**'
+            app:
+              - *shared
+              - 'compliance-app/**'
+
+  build-and-test:
+    needs: changes
+    if: needs.changes.outputs.api == 'true' || needs.changes.outputs.worker == 'true' || needs.changes.outputs.app == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Build & test affected modules
+        env:
+          SHARED: ${{ needs.changes.outputs.shared }}
+          API: ${{ needs.changes.outputs.api }}
+          WORKER: ${{ needs.changes.outputs.worker }}
+          APP: ${{ needs.changes.outputs.app }}
+        run: |
+          if [ "$SHARED" = "true" ]; then
+            # Общие модули задеты — проверяем весь reactor.
+            mvn -B -ntp verify
+          else
+            MODULES=""
+            [ "$API" = "true" ] && MODULES="$MODULES,compliance-api"
+            [ "$WORKER" = "true" ] && MODULES="$MODULES,compliance-worker"
+            [ "$APP" = "true" ] && MODULES="$MODULES,compliance-app"
+            MODULES="${MODULES#,}"
+            echo "Testing modules: $MODULES"
+            mvn -B -ntp -pl "$MODULES" -am verify
+          fi

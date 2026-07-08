@@ -70,6 +70,16 @@ public class RedisRateLimitService implements RateLimitService {
         consumeOrThrow("ip:" + ipAddress, properties.rateLimit().guestScansPerIpPerHour());
     }
 
+    @Override
+    public void checkAuthAttemptAllowed(String ipAddress) {
+        var bucket = proxyManager.builder()
+                .build(("auth:" + ipAddress).getBytes(StandardCharsets.UTF_8),
+                        config(properties.rateLimit().authAttemptsPerIpPerHour()));
+        if (!bucket.tryConsume(1)) {
+            throw new ComplianceRateLimitException("Слишком много попыток входа, попробуйте позже");
+        }
+    }
+
     private void consumeOrThrow(String key, int limitPerHour) {
         var bucket = proxyManager.builder()
                 .build(key.getBytes(StandardCharsets.UTF_8), config(limitPerHour));

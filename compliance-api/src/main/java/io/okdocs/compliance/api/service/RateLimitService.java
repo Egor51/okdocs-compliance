@@ -18,4 +18,13 @@ public interface RateLimitService {
      * если лимит исчерпан (→ HTTP 429).
      */
     void checkScanAllowed(CompliancePrincipal principal, String ipAddress);
+
+    /**
+     * Пытается потребить 1 попытку аутентификации (login/register/oauth-exchange) для IP —
+     * анти-brute-force по паролям и one-time кодам. Ключ {@code auth:<ip>}, лимит
+     * {@code authAttemptsPerIpPerHour}. Бросает {@code ComplianceRateLimitException} (→ 429).
+     * <p>
+     * Refresh сюда намеренно НЕ ходит: см. javadoc {@code RateLimit#authAttemptsPerIpPerHour}.
+     */
+    void checkAuthAttemptAllowed(String ipAddress);
 }

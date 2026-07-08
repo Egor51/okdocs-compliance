@@ -165,7 +165,8 @@ public class ScanCommandService {
         boolean premium = effectiveTier(scan) == ScanTier.PREMIUM;
         String json = premium ? snapshot.getPremiumReportJson() : snapshot.getFreeReportJson();
         ScanReportResponse report = deserializeReport(scan.getId(), json);
-        return premium ? report : withPaywallCta(report, paywallCta());
+        // jurisdiction — всегда из живой сущности: снапшоты до добавления поля его не содержат.
+        return withServingFields(report, scan, premium ? report.paywallCta() : paywallCta());
     }
 
     private ScanReportResponse deserializeReport(UUID scanId, String json) {
@@ -196,12 +197,14 @@ public class ScanCommandService {
         return new PaywallCtaDto(cta.title(), cta.text(), cta.actionUrl());
     }
 
-    private static ScanReportResponse withPaywallCta(ScanReportResponse report, PaywallCtaDto cta) {
+    /** Поля, которые API дописывает к снапшоту при выдаче: jurisdiction из сущности + paywallCta. */
+    private static ScanReportResponse withServingFields(ScanReportResponse report, ComplianceScan scan,
+                                                        PaywallCtaDto cta) {
         return new ScanReportResponse(
-                report.id(), report.siteUrl(), report.siteDomain(), report.status(), report.score(),
-                report.tier(), report.parentScanId(), report.summary(), report.findings(),
-                report.diagnostics(), report.quality(), cta, report.durationMs(),
-                report.createdAt(), report.finishedAt());
+                report.id(), report.siteUrl(), report.siteDomain(), scan.getJurisdiction(),
+                report.status(), report.score(), report.tier(), report.parentScanId(),
+                report.summary(), report.findings(), report.diagnostics(), report.quality(), cta,
+                report.durationMs(), report.createdAt(), report.finishedAt());
     }
 
     /** История сканов юзера с фильтрами domain/status (§2.2). Только для USER. */

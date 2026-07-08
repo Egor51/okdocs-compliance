@@ -17,7 +17,8 @@ import static org.mockito.Mockito.verify;
 
 /**
  * Webhook YooKassa публичный (у провайдера нет JWT), поэтому первый барьер — fail-closed shared-secret
- * из header {@code X-Webhook-Secret}: без него кто угодно подделкой JSON начислял бы себе кредиты.
+ * в query-параметре {@code token} webhook-URL (кастомные header'ы YooKassa не поддерживает): без него
+ * кто угодно подделкой JSON начислял бы себе кредиты.
  */
 @ExtendWith(MockitoExtension.class)
 class PaymentControllerTest {
@@ -35,7 +36,7 @@ class PaymentControllerTest {
     }
 
     @Test
-    void processesWebhookWhenSecretMatches() {
+    void processesWebhookWhenTokenMatches() {
         PaymentController controller = controllerWithSecret("s3cret");
 
         ResponseEntity<Void> resp = controller.yooKassaWebhook("s3cret", payload);
@@ -45,7 +46,7 @@ class PaymentControllerTest {
     }
 
     @Test
-    void rejectsWrongSecret() {
+    void rejectsWrongToken() {
         PaymentController controller = controllerWithSecret("s3cret");
 
         ResponseEntity<Void> resp = controller.yooKassaWebhook("wrong", payload);
@@ -56,7 +57,6 @@ class PaymentControllerTest {
 
     @Test
     void failsClosedWhenSecretNotConfigured() {
-        // Незаданный секрет → отвергаем всё (иначе незаданный секрет открыл бы бесплатное пополнение).
         PaymentController controller = controllerWithSecret("");
 
         ResponseEntity<Void> resp = controller.yooKassaWebhook("anything", payload);
@@ -66,7 +66,7 @@ class PaymentControllerTest {
     }
 
     @Test
-    void rejectsMissingSecretHeader() {
+    void rejectsMissingToken() {
         PaymentController controller = controllerWithSecret("s3cret");
 
         ResponseEntity<Void> resp = controller.yooKassaWebhook(null, payload);

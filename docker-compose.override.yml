@@ -1,0 +1,11 @@
+
+services:
+  redis:
+    # База уже без пароля (dev по умолчанию) — здесь только проброс порта.
+    ports:
+      - "6379:6379"
+
+  browserless:
+    ports:
+      - "${BROWSERLESS_PORT:-3000}:3000"
+

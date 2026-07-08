@@ -34,6 +34,14 @@ public class InMemoryRateLimitService implements RateLimitService {
         consumeOrThrow("ip:" + ipAddress, properties.rateLimit().guestScansPerIpPerHour());
     }
 
+    @Override
+    public void checkAuthAttemptAllowed(String ipAddress) {
+        if (!bucket("auth:" + ipAddress, properties.rateLimit().authAttemptsPerIpPerHour())
+                .tryConsume(1)) {
+            throw new ComplianceRateLimitException("Слишком много попыток входа, попробуйте позже");
+        }
+    }
+
     private void consumeOrThrow(String key, int limitPerHour) {
         if (!bucket(key, limitPerHour).tryConsume(1)) {
             throw new ComplianceRateLimitException("Превышен лимит сканов, попробуйте позже");

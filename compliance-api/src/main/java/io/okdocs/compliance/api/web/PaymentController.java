@@ -16,8 +16,8 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.nio.charset.StandardCharsets;
@@ -39,8 +39,6 @@ import java.util.UUID;
 @RequestMapping("/api/payments")
 @RequiredArgsConstructor
 public class PaymentController {
-
-    private static final String SECRET_HEADER = "X-Webhook-Secret";
 
     private final PaymentService paymentService;
     private final ComplianceApiProperties properties;
@@ -75,16 +73,18 @@ public class PaymentController {
 
     /**
      * Webhook YooKassa (публичный — у провайдера нет JWT). Защита двухуровневая: (1) fail-closed
-     * shared-secret из header {@code X-Webhook-Secret}; (2) сервис перепроверяет факт оплаты у
+     * shared-secret в query-параметре {@code token} webhook-URL — YooKassa не умеет слать кастомные
+     * header'ы, поэтому секрет зашивается в URL при регистрации webhook'а в личном кабинете
+     * ({@code .../webhooks/yookassa?token=<secret>}); (2) сервис перепроверяет факт оплаты у
      * провайдера ({@code fetchStatus}) перед пополнением. Обработка идемпотентна; всегда отвечаем
      * {@code 200} на принятый запрос, чтобы провайдер не зацикливал доставку.
      */
     @PostMapping("/webhooks/yookassa")
     public ResponseEntity<Void> yooKassaWebhook(
-            @RequestHeader(value = SECRET_HEADER, required = false) String secret,
+            @RequestParam(value = "token", required = false) String token,
             @RequestBody YooKassaWebhookPayload payload) {
-        if (!secretMatches(secret)) {
-            log.warn("YooKassa webhook отклонён: неверный/отсутствующий {}", SECRET_HEADER);
+        if (!secretMatches(token)) {
+            log.warn("YooKassa webhook отклонён: неверный/отсутствующий token");
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
         paymentService.handleYooKassaWebhook(payload);
