@@ -9,6 +9,7 @@ import io.okdocs.compliance.contracts.enums.UserStatus;
 import io.okdocs.compliance.contracts.exception.ComplianceValidationException;
 import io.okdocs.compliance.persistence.auth.AppUser;
 import io.okdocs.compliance.persistence.auth.AppUserRepository;
+import io.okdocs.compliance.persistence.auth.RefreshToken;
 import io.okdocs.compliance.persistence.auth.RefreshTokenRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,8 +18,11 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
@@ -46,13 +50,15 @@ class AuthServiceTest {
     private ComplianceApiProperties properties;
     @Mock
     private OAuthLoginCodeService oauthLoginCodeService;
+    @Mock
+    private RateLimitService rateLimitService;
 
     private AuthService service;
 
     @BeforeEach
     void setUp() {
         service = new AuthService(userRepository, refreshTokenRepository, balanceService,
-                jwtService, passwordEncoder, properties, oauthLoginCodeService);
+                jwtService, passwordEncoder, properties, oauthLoginCodeService, rateLimitService);
     }
 
     @Test
@@ -95,6 +101,48 @@ class AuthServiceTest {
                 .hasMessageContaining("недоступна");
 
         verify(jwtService, never()).issueUserToken(any(), any());
+    }
+
+    @Test
+    void refreshReuseOfRevokedTokenRevokesAllUserSessions() {
+        // Повтор УЖЕ отозванного refresh-токена = сигнал кражи → отзываем все активные сессии юзера.
+        RefreshToken revoked = new RefreshToken();
+        revoked.setUserId(1L);
+        revoked.setRevoked(true);
+        revoked.setExpiresAt(Instant.now().plusSeconds(3600));
+        RefreshToken activeSession = new RefreshToken();
+        activeSession.setUserId(1L);
+        activeSession.setRevoked(false);
+        when(refreshTokenRepository.findByTokenHash(any())).thenReturn(Optional.of(revoked));
+        when(refreshTokenRepository.findByUserIdAndRevokedFalse(1L)).thenReturn(List.of(activeSession));
+
+        assertThatThrownBy(() -> service.refresh("stolen-token", null, null))
+                .isInstanceOf(ComplianceValidationException.class)
+                .hasMessageContaining("Невалидный refresh-токен");
+
+        assertThat(activeSession.isRevoked()).isTrue();
+        verify(refreshTokenRepository).save(activeSession);
+        verify(jwtService, never()).issueUserToken(any(), any());
+    }
+
+    @Test
+    void refreshWithValidTokenStillRotates() {
+        // Валидный (не отозванный, не просроченный) токен по-прежнему ротируется без revoke-all.
+        RefreshToken valid = new RefreshToken();
+        valid.setUserId(1L);
+        valid.setRevoked(false);
+        valid.setExpiresAt(Instant.now().plusSeconds(3600));
+        AppUser user = oauthOnlyUser();
+        when(refreshTokenRepository.findByTokenHash(any())).thenReturn(Optional.of(valid));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(user));
+        when(properties.auth()).thenReturn(new ComplianceApiProperties.Auth(
+                "secret", null, null, null));
+
+        service.refresh("valid-token", null, null);
+
+        assertThat(valid.isRevoked()).isTrue(); // старый отозван (ротация)
+        verify(refreshTokenRepository, never()).findByUserIdAndRevokedFalse(any());
+        verify(jwtService).issueUserToken(1L, UserRole.USER);
     }
 
     private AppUser oauthOnlyUser() {

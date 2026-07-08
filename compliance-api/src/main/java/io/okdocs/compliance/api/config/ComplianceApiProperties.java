@@ -58,9 +58,12 @@ public record ComplianceApiProperties(
     /**
      * Настройки платежей (F.4/F.16).
      *
-     * @param webhookSecret общий секрет для аутентификации webhook'а оплаты (header
-     *                      {@code X-Webhook-Secret}) — минимальная защита MVP-каркаса от подделки
-     *                      запроса из интернета, пока нет штатной проверки подписи провайдера (F.16).
+     * @param webhookSecret общий секрет для аутентификации webhook'а оплаты — передаётся
+     *                      query-параметром {@code token} webhook-URL (YooKassa не умеет кастомные
+     *                      header'ы, секрет зашивается в URL при регистрации webhook'а в кабинете).
+     *                      Минимальная защита MVP-каркаса от подделки запроса из интернета, пока нет
+     *                      штатной проверки подписи провайдера (F.16); факт оплаты дополнительно
+     *                      перепроверяется у провайдера ({@code fetchStatus}).
      *                      Если {@code null}/пусто — webhook отвергает ВСЕ запросы (fail-closed),
      *                      чтобы незаданный секрет не открывал бесплатный premium.
      */
@@ -90,14 +93,27 @@ public record ComplianceApiProperties(
         }
     }
 
-    /** Анти-абьюз лимиты по частоте (§4.2). */
-    public record RateLimit(Integer guestScansPerIpPerHour, Integer userScansPerHour) {
+    /**
+     * Анти-абьюз лимиты по частоте (§4.2).
+     *
+     * @param authAttemptsPerIpPerHour лимит попыток аутентификации (login/register/oauth-exchange)
+     *                                 с одного IP в час — анти-brute-force поверх стоимости bcrypt.
+     *                                 Refresh намеренно не лимитируется: значение токена — 256 бит
+     *                                 случайности (перебор невозможен), а кража ловится
+     *                                 reuse-detection'ом в {@code AuthService#refresh}; лимит по IP
+     *                                 лишь ломал бы офисы за NAT с множеством активных сессий.
+     */
+    public record RateLimit(Integer guestScansPerIpPerHour, Integer userScansPerHour,
+                            Integer authAttemptsPerIpPerHour) {
         public RateLimit {
             if (guestScansPerIpPerHour == null) {
                 guestScansPerIpPerHour = 5;
             }
             if (userScansPerHour == null) {
                 userScansPerHour = 20;
+            }
+            if (authAttemptsPerIpPerHour == null) {
+                authAttemptsPerIpPerHour = 30;
             }
         }
     }

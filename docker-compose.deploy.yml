@@ -1,0 +1,106 @@
+# DEPLOY-оверлей: контейнеры приложений (api + worker) из GHCR поверх базового
+# runtime (redis + browserless из docker-compose.yml + docker-compose.prod.yml).
+#
+# Запуск на app-сервере (из каталога деплоя, .env лежит рядом):
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.deploy.yml up -d
+#
+# Файл используется GitHub Actions деплоем (.github/workflows/deploy.yml):
+# при изменениях только в compliance-api перекатывается контейнер api,
+# только в compliance-worker — worker, в общих модулях — оба.
+#
+# Образы:
+#   ghcr.io/egor51/okdocs-compliance-api:${API_IMAGE_TAG:-latest}
+#   ghcr.io/egor51/okdocs-compliance-worker:${WORKER_IMAGE_TAG:-latest}
+# Откат: API_IMAGE_TAG=sha-<commit> docker compose ... up -d api
+#
+# Postgres и Kafka — внешние (инфра-сервер), подключение через env (.env).
+# Kafka truststore кладётся в ./secrets/compliance-kafka.truststore.jks.
+
+services:
+  api:
+    image: ghcr.io/egor51/okdocs-compliance-api:${API_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      # Наружу только на localhost — снаружи трафик заводит nginx (reverse proxy).
+      - "${API_BIND:-127.0.0.1}:${API_PORT:-8080}:8080"
+    environment:
+      DB_URL: ${DB_URL:?}
+      DB_USERNAME: ${DB_USERNAME:?}
+      DB_PASSWORD: ${DB_PASSWORD:?}
+      DB_MAX_LIFETIME_MS: ${DB_MAX_LIFETIME_MS:-}
+      DB_KEEPALIVE_MS: ${DB_KEEPALIVE_MS:-}
+
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:?}
+      KAFKA_SECURITY_PROTOCOL: ${KAFKA_SECURITY_PROTOCOL:-SASL_SSL}
+      KAFKA_SASL_MECHANISM: ${KAFKA_SASL_MECHANISM:-SCRAM-SHA-512}
+      KAFKA_SASL_JAAS_CONFIG: ${KAFKA_SASL_JAAS_CONFIG:-}
+      KAFKA_SSL_TRUSTSTORE_LOCATION: ${KAFKA_SSL_TRUSTSTORE_LOCATION:-/etc/compliance/kafka.truststore.jks}
+      KAFKA_SSL_TRUSTSTORE_PASSWORD: ${KAFKA_SSL_TRUSTSTORE_PASSWORD:-}
+      KAFKA_CONSUMER_GROUP: ${KAFKA_CONSUMER_GROUP:-}
+
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_USERNAME: ${REDIS_USERNAME:-}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?}
+      REDIS_SSL_ENABLED: ${REDIS_SSL_ENABLED:-false}
+
+      JWT_SECRET: ${JWT_SECRET:?}
+      AUTH_ATTEMPTS_PER_IP_PER_HOUR: ${AUTH_ATTEMPTS_PER_IP_PER_HOUR:-}
+      TRUST_FORWARDED_HEADER: ${TRUST_FORWARDED_HEADER:-true}
+
+      OAUTH_SUCCESS_REDIRECT_URL: ${OAUTH_SUCCESS_REDIRECT_URL:-}
+      OAUTH_GOOGLE_CLIENT_ID: ${OAUTH_GOOGLE_CLIENT_ID:-}
+      OAUTH_GOOGLE_CLIENT_SECRET: ${OAUTH_GOOGLE_CLIENT_SECRET:-}
+      OAUTH_GITHUB_CLIENT_ID: ${OAUTH_GITHUB_CLIENT_ID:-}
+      OAUTH_GITHUB_CLIENT_SECRET: ${OAUTH_GITHUB_CLIENT_SECRET:-}
+      OAUTH_YANDEX_CLIENT_ID: ${OAUTH_YANDEX_CLIENT_ID:-}
+      OAUTH_YANDEX_CLIENT_SECRET: ${OAUTH_YANDEX_CLIENT_SECRET:-}
+      OAUTH_VK_CLIENT_ID: ${OAUTH_VK_CLIENT_ID:-}
+      OAUTH_VK_CLIENT_SECRET: ${OAUTH_VK_CLIENT_SECRET:-}
+
+      YOOKASSA_SHOP_ID: ${YOOKASSA_SHOP_ID:-}
+      YOOKASSA_SECRET_KEY: ${YOOKASSA_SECRET_KEY:-}
+      YOOKASSA_API_BASE_URL: ${YOOKASSA_API_BASE_URL:-}
+      YOOKASSA_RETURN_URL: ${YOOKASSA_RETURN_URL:-}
+      YOOKASSA_ALLOWED_RETURN_HOSTS: ${YOOKASSA_ALLOWED_RETURN_HOSTS:-}
+      YOOKASSA_TEST_MODE: ${YOOKASSA_TEST_MODE:-false}
+      YOOKASSA_VAT_CODE: ${YOOKASSA_VAT_CODE:-}
+      PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-}
+
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./secrets/compliance-kafka.truststore.jks:/etc/compliance/kafka.truststore.jks:ro
+
+  worker:
+    image: ghcr.io/egor51/okdocs-compliance-worker:${WORKER_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      browserless:
+        condition: service_healthy
+    environment:
+      DB_URL: ${DB_URL:?}
+      DB_USERNAME: ${DB_USERNAME:?}
+      DB_PASSWORD: ${DB_PASSWORD:?}
+      DB_MAX_LIFETIME_MS: ${DB_MAX_LIFETIME_MS:-}
+      DB_KEEPALIVE_MS: ${DB_KEEPALIVE_MS:-}
+
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:?}
+      KAFKA_SECURITY_PROTOCOL: ${KAFKA_SECURITY_PROTOCOL:-SASL_SSL}
+      KAFKA_SASL_MECHANISM: ${KAFKA_SASL_MECHANISM:-SCRAM-SHA-512}
+      KAFKA_SASL_JAAS_CONFIG: ${KAFKA_SASL_JAAS_CONFIG:-}
+      KAFKA_SSL_TRUSTSTORE_LOCATION: ${KAFKA_SSL_TRUSTSTORE_LOCATION:-/etc/compliance/kafka.truststore.jks}
+      KAFKA_SSL_TRUSTSTORE_PASSWORD: ${KAFKA_SSL_TRUSTSTORE_PASSWORD:-}
+      KAFKA_LISTENER_CONCURRENCY: ${KAFKA_LISTENER_CONCURRENCY:-}
+
+      CDP_ENABLED: ${CDP_ENABLED:-true}
+      CDP_BASE_URL: http://browserless:3000
+      CDP_AUTH_TOKEN: ${CDP_AUTH_TOKEN:?}
+      CDP_PREMIUM_ENABLED: ${CDP_PREMIUM_ENABLED:-true}
+
+      INSTANCE_ID: ${INSTANCE_ID:-}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./secrets/compliance-kafka.truststore.jks:/etc/compliance/kafka.truststore.jks:ro

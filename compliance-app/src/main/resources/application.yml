@@ -105,6 +105,9 @@ compliance:
   rate-limit:
     guest-scans-per-ip-per-hour: 5
     user-scans-per-hour: 20
+    # Анти-brute-force: попытки login/register/oauth-exchange с одного IP в час.
+    # Refresh не лимитируется (256-бит токен + reuse-detection в AuthService).
+    auth-attempts-per-ip-per-hour: ${AUTH_ATTEMPTS_PER_IP_PER_HOUR:30}
   scan:
     # api-флоу: лимиты страниц по принципалу + TTL короткоживущих сканов
     free-marketing-max-pages: 1

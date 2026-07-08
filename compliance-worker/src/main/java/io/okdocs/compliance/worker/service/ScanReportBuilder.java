@@ -86,6 +86,7 @@ public class ScanReportBuilder {
                 scan.getId(),
                 scan.getSiteUrl(),
                 scan.getSiteDomain(),
+                scan.getJurisdiction(),
                 scan.getStatus(),
                 scan.getScore(),
                 tier,

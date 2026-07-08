@@ -4,23 +4,27 @@ import io.okdocs.compliance.api.config.ComplianceApiProperties;
 import io.okdocs.compliance.contracts.catalog.JurisdictionDto;
 import io.okdocs.compliance.contracts.catalog.JurisdictionListResponse;
 import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
-import jakarta.annotation.PostConstruct;
+import io.okdocs.compliance.persistence.jurisdiction.JurisdictionCatalog;
+import io.okdocs.compliance.persistence.jurisdiction.JurisdictionCatalogLaw;
+import io.okdocs.compliance.persistence.jurisdiction.JurisdictionCatalogRepository;
+import io.okdocs.compliance.persistence.jurisdiction.JurisdictionCatalogTranslation;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Comparator;
-import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
 /**
  * Публичный каталог юрисдикций, которые реально доступны для запуска scan.
  * <p>
- * Источник доступности — {@code compliance.scan.enabled-jurisdictions}. Каталог не отдаёт все enum-значения:
- * deprecated/неподготовленные юрисдикции не должны попадать на фронт и создавать «пустые» проверки.
+ * Тексты (H1/H2, SEO, название страны, список законов) хранятся в БД по locale, чтобы менять их без релиза.
+ * Доступность юрисдикции определяется двумя условиями: {@code active} в таблице каталога И присутствие в
+ * {@code compliance.scan.enabled-jurisdictions}. Второе — тот же список, по которому валидируется scan/checkout,
+ * поэтому фронт не показывает юрисдикцию, для которой скан вернёт 400.
  */
 @Service
 @RequiredArgsConstructor
@@ -28,46 +32,30 @@ public class JurisdictionCatalogService {
 
     private static final String DEFAULT_LOCALE = "ru";
     private static final String FALLBACK_LOCALE = "en";
-    private static final Map<ScanJurisdiction, JurisdictionMetadata> CATALOG = buildCatalog();
 
+    private final JurisdictionCatalogRepository repository;
     private final ComplianceApiProperties properties;
 
-    @PostConstruct
-    void validateEnabledJurisdictionsHaveCatalogMetadata() {
-        List<ScanJurisdiction> missing = enabledJurisdictions().stream()
-                .filter(jurisdiction -> !CATALOG.containsKey(jurisdiction))
-                .toList();
-
-        if (!missing.isEmpty()) {
-            throw new IllegalStateException("Enabled jurisdictions are missing catalog metadata: " + missing);
-        }
-    }
-
+    @Transactional(readOnly = true)
     public JurisdictionListResponse list(String locale) {
         String normalizedLocale = normalizeLocale(locale);
         Set<ScanJurisdiction> enabled = enabledJurisdictions();
-        List<JurisdictionDto> items = CATALOG.entrySet().stream()
-                .filter(entry -> enabled.contains(entry.getKey()))
-                .map(entry -> toDto(entry.getKey(), entry.getValue(), normalizedLocale))
-                .sorted(Comparator.comparingInt(JurisdictionDto::sortOrder)
-                        .thenComparing(dto -> dto.code().name()))
+        List<JurisdictionDto> items = repository.findByActiveTrueOrderBySortOrderAsc().stream()
+                .filter(entity -> enabled.contains(entity.getCode()))
+                .map(entity -> toDto(entity, normalizedLocale))
                 .toList();
-
         return new JurisdictionListResponse(items);
     }
 
+    @Transactional(readOnly = true)
     public Optional<JurisdictionDto> find(String rawCode, String locale) {
         Optional<ScanJurisdiction> code = parseCode(rawCode);
         if (code.isEmpty() || !enabledJurisdictions().contains(code.get())) {
             return Optional.empty();
         }
 
-        JurisdictionMetadata metadata = CATALOG.get(code.get());
-        if (metadata == null) {
-            return Optional.empty();
-        }
-
-        return Optional.of(toDto(code.get(), metadata, normalizeLocale(locale)));
+        return repository.findByCodeAndActiveTrue(code.get())
+                .map(entity -> toDto(entity, normalizeLocale(locale)));
     }
 
     private Set<ScanJurisdiction> enabledJurisdictions() {
@@ -90,20 +78,38 @@ public class JurisdictionCatalogService {
         }
     }
 
-    private static JurisdictionDto toDto(ScanJurisdiction code, JurisdictionMetadata metadata, String locale) {
-        LocalizedJurisdiction localized = metadata.localized().getOrDefault(locale,
-                metadata.localized().get(FALLBACK_LOCALE));
+    private static JurisdictionDto toDto(JurisdictionCatalog entity, String locale) {
+        JurisdictionCatalogTranslation t = resolveTranslation(entity, locale);
+        List<String> laws = entity.getLaws().stream()
+                .sorted(Comparator.comparingInt(JurisdictionCatalogLaw::getSortOrder))
+                .map(JurisdictionCatalogLaw::getText)
+                .toList();
 
         return new JurisdictionDto(
-                code,
-                metadata.slug(),
-                localized.displayName(),
-                localized.description(),
-                metadata.laws(),
-                metadata.contentLanguage(),
-                metadata.defaultJurisdiction(),
-                metadata.sortOrder()
+                entity.getCode(),
+                entity.getSlug(),
+                t.getDisplayName(),
+                t.getDescription(),
+                t.getSeoTitle(),
+                t.getSeoDescription(),
+                t.getCountryName(),
+                laws,
+                entity.getContentLanguage(),
+                entity.isDefaultJurisdiction(),
+                entity.getSortOrder()
         );
+    }
+
+    private static JurisdictionCatalogTranslation resolveTranslation(JurisdictionCatalog entity, String locale) {
+        return entity.getTranslations().stream()
+                .filter(translation -> translation.getLocale().equals(locale))
+                .findFirst()
+                .or(() -> entity.getTranslations().stream()
+                        .filter(translation -> translation.getLocale().equals(FALLBACK_LOCALE))
+                        .findFirst())
+                .or(() -> entity.getTranslations().stream().findFirst())
+                .orElseThrow(() -> new IllegalStateException(
+                        "Jurisdiction " + entity.getCode() + " has no translations"));
     }
 
     private static String normalizeLocale(String rawLocale) {
@@ -116,111 +122,5 @@ public class JurisdictionCatalogService {
             return "ru";
         }
         return FALLBACK_LOCALE;
-    }
-
-    private static Map<ScanJurisdiction, JurisdictionMetadata> buildCatalog() {
-        EnumMap<ScanJurisdiction, JurisdictionMetadata> catalog = new EnumMap<>(ScanJurisdiction.class);
-        catalog.put(ScanJurisdiction.RU, new JurisdictionMetadata(
-                "152-fz",
-                localized(
-                        "Россия",
-                        "Проверка сайта по требованиям 152-ФЗ и связанным требованиям обработки персональных данных.",
-                        "Russia",
-                        "Website compliance scan for Russian personal data requirements under 152-FZ."
-                ),
-                List.of("152-ФЗ"),
-                "ru",
-                true,
-                10
-        ));
-        catalog.put(ScanJurisdiction.EU, new JurisdictionMetadata(
-                "gdpr",
-                localized(
-                        "Европейский союз",
-                        "Проверка по GDPR и базовым требованиям ePrivacy для сайтов, работающих с пользователями ЕС.",
-                        "European Union",
-                        "Compliance scan for GDPR and baseline ePrivacy requirements for websites serving EU users."
-                ),
-                List.of("GDPR", "ePrivacy Directive"),
-                "en",
-                false,
-                20
-        ));
-        catalog.put(ScanJurisdiction.UK, new JurisdictionMetadata(
-                "uk-gdpr",
-                localized(
-                        "Великобритания",
-                        "Проверка по UK GDPR и PECR для сайтов, работающих с пользователями Великобритании.",
-                        "United Kingdom",
-                        "Compliance scan for UK GDPR and PECR requirements for websites serving UK users."
-                ),
-                List.of("UK GDPR", "PECR"),
-                "en",
-                false,
-                30
-        ));
-        catalog.put(ScanJurisdiction.DE, new JurisdictionMetadata(
-                "bdsg",
-                localized(
-                        "Германия",
-                        "Проверка по GDPR с немецким overlay: BDSG и TTDSG.",
-                        "Germany",
-                        "Compliance scan for GDPR with Germany-specific BDSG and TTDSG overlay requirements."
-                ),
-                List.of("GDPR", "BDSG", "TTDSG"),
-                "en",
-                false,
-                40
-        ));
-        catalog.put(ScanJurisdiction.FR, new JurisdictionMetadata(
-                "cnil",
-                localized(
-                        "Франция",
-                        "Проверка по GDPR с французским overlay и требованиями CNIL.",
-                        "France",
-                        "Compliance scan for GDPR with France-specific CNIL and local data protection requirements."
-                ),
-                List.of("GDPR", "Loi Informatique et Libertés", "CNIL guidance"),
-                "en",
-                false,
-                50
-        ));
-        catalog.put(ScanJurisdiction.ES, new JurisdictionMetadata(
-                "lopdgdd",
-                localized(
-                        "Испания",
-                        "Проверка по GDPR с испанским overlay: LOPDGDD и требования AEPD.",
-                        "Spain",
-                        "Compliance scan for GDPR with Spain-specific LOPDGDD and AEPD requirements."
-                ),
-                List.of("GDPR", "LOPDGDD", "AEPD guidance"),
-                "en",
-                false,
-                60
-        ));
-        return Map.copyOf(catalog);
-    }
-
-    private static Map<String, LocalizedJurisdiction> localized(String ruDisplayName,
-                                                               String ruDescription,
-                                                               String enDisplayName,
-                                                               String enDescription) {
-        return Map.of(
-                "ru", new LocalizedJurisdiction(ruDisplayName, ruDescription),
-                "en", new LocalizedJurisdiction(enDisplayName, enDescription)
-        );
-    }
-
-    private record JurisdictionMetadata(
-            String slug,
-            Map<String, LocalizedJurisdiction> localized,
-            List<String> laws,
-            String contentLanguage,
-            boolean defaultJurisdiction,
-            int sortOrder
-    ) {
-    }
-
-    private record LocalizedJurisdiction(String displayName, String description) {
     }
 }

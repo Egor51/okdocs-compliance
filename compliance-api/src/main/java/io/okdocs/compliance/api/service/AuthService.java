@@ -17,6 +17,7 @@ import io.okdocs.compliance.persistence.auth.AppUserRepository;
 import io.okdocs.compliance.persistence.auth.RefreshToken;
 import io.okdocs.compliance.persistence.auth.RefreshTokenRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,12 +28,25 @@ import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.UUID;
 
 /**
  * Аутентификация (§4.2): guest-токены, регистрация/логин/refresh/logout, смена пароля.
  * Refresh-токен хранится как hash (не plain). Гостевые сканы при регистрации НЕ привязываются (§2.2).
+ * <p>
+ * Анти-brute-force: login/register/oauth-exchange лимитированы по IP
+ * ({@link RateLimitService#checkAuthAttemptAllowed}); refresh защищён reuse-detection'ом (повтор
+ * отозванного токена отзывает все сессии юзера), лимит по IP ему не нужен — см. {@link #refresh}.
+ * <p>
+ * <b>User enumeration — осознанный trade-off (F.2):</b> register честно говорит «email уже
+ * существует», а login для OAuth-only аккаунта подсказывает «войдите через соц-сеть». Оба ответа
+ * раскрывают существование аккаунта, но это продуктовое решение: без первого регистрация выглядит
+ * сломанной, без второго владелец OAuth-аккаунта не понимает, как войти. Стоимость перебора email'ов
+ * ограничивает IP-лимит попыток; менять на непрозрачные ответы — только вместе с UX-флоу
+ * восстановления (магические ссылки на email).
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class AuthService {
@@ -46,6 +60,7 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final ComplianceApiProperties properties;
     private final OAuthLoginCodeService oauthLoginCodeService;
+    private final RateLimitService rateLimitService;
 
     private final SecureRandom secureRandom = new SecureRandom();
 
@@ -58,7 +73,10 @@ public class AuthService {
 
     /** Регистрация: создаёт юзера (роль USER, план FREE) + баланс с месячной квотой. */
     @Transactional
-    public AuthResponse register(RegisterRequest request) {
+    public AuthResponse register(RegisterRequest request, String ipAddress) {
+        rateLimitService.checkAuthAttemptAllowed(ipAddress);
+        // Открытый ответ «email существует» — осознанный enumeration trade-off (см. javadoc класса);
+        // скорость перебора ограничивает IP-лимит выше.
         if (userRepository.existsByEmailIgnoreCase(request.email())) {
             throw new ComplianceValidationException("Пользователь с таким email уже существует");
         }
@@ -83,9 +101,10 @@ public class AuthService {
         return issueTokensFor(user, null, null);
     }
 
-    /** Логин по email/паролю. */
+    /** Логин по email/паролю. Анти-brute-force: лимит попыток по IP ДО обращения к БД/bcrypt. */
     @Transactional
     public AuthResponse login(LoginRequest request, String userAgent, String ipAddress) {
+        rateLimitService.checkAuthAttemptAllowed(ipAddress);
         AppUser user = userRepository.findByEmailIgnoreCase(request.email())
                 .orElseThrow(() -> new ComplianceValidationException("Неверный email или пароль"));
         // OAuth-only аккаунт (F.2): пароля нет → password-login невозможен. Осмысленный ответ,
@@ -112,18 +131,35 @@ public class AuthService {
      */
     @Transactional
     public AuthResponse exchangeOAuthCode(String code, String userAgent, String ipAddress) {
+        // Лимит по IP: one-time код короткий по TTL, но перебор всё равно не должен быть бесплатным.
+        rateLimitService.checkAuthAttemptAllowed(ipAddress);
         Long userId = oauthLoginCodeService.redeem(code);
         AppUser user = userRepository.findById(userId)
                 .orElseThrow(() -> new ComplianceValidationException("Пользователь не найден"));
         return issueTokensForUser(user, userAgent, ipAddress);
     }
 
-    /** Обновить access-токен по refresh-токену (с ротацией: старый отзывается). */
+    /**
+     * Обновить access-токен по refresh-токену (с ротацией: старый отзывается).
+     * <p>
+     * <b>Reuse-detection:</b> предъявление УЖЕ отозванного токена — классический сигнал кражи
+     * (легитимный клиент после ротации старым токеном не пользуется; второе предъявление значит,
+     * что значение утекло и им пользуются двое). В этом случае отзываем ВСЕ активные refresh-токены
+     * юзера: и вор, и жертва разлогинены, жертва перелогинится паролем/OAuth, вор — нет. Наружу —
+     * тот же «Невалидный refresh-токен», без подсказки атакующему, что он обнаружен.
+     */
     @Transactional
     public AuthResponse refresh(String refreshTokenValue, String userAgent, String ipAddress) {
         String hash = hash(refreshTokenValue);
-        RefreshToken stored = refreshTokenRepository.findByTokenHashAndRevokedFalse(hash)
+        RefreshToken stored = refreshTokenRepository.findByTokenHash(hash)
                 .orElseThrow(() -> new ComplianceValidationException("Невалидный refresh-токен"));
+        if (stored.isRevoked()) {
+            List<RefreshToken> active = refreshTokenRepository.findByUserIdAndRevokedFalse(stored.getUserId());
+            active.forEach(this::revoke);
+            log.warn("Reuse отозванного refresh-токена (userId={}, tokenId={}, ip={}) — отозвано {} "
+                    + "активных сессий", stored.getUserId(), stored.getId(), ipAddress, active.size());
+            throw new ComplianceValidationException("Невалидный refresh-токен");
+        }
         if (stored.getExpiresAt().isBefore(Instant.now())) {
             throw new ComplianceValidationException("Refresh-токен просрочен");
         }

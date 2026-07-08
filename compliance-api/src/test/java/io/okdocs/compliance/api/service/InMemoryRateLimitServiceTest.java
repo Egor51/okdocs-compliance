@@ -24,6 +24,20 @@ class InMemoryRateLimitServiceTest {
     }
 
     @Test
+    void authAttemptsUseSeparatePerIpBucket() {
+        InMemoryRateLimitService service = service(10, 10, 2);
+        String ip = "203.0.113.10";
+
+        service.checkAuthAttemptAllowed(ip);
+        service.checkAuthAttemptAllowed(ip);
+        assertThatThrownBy(() -> service.checkAuthAttemptAllowed(ip))
+                .isInstanceOf(ComplianceRateLimitException.class);
+
+        // Scan-бакет того же IP не задет auth-попытками (разные ключи).
+        service.checkScanAllowed(CompliancePrincipal.guest(UUID.randomUUID()), ip);
+    }
+
+    @Test
     void userUsesOnlyUserBucket_notSharedIpBucket() {
         InMemoryRateLimitService service = service(1, 2);
         CompliancePrincipal guest = CompliancePrincipal.guest(UUID.randomUUID());
@@ -41,9 +55,13 @@ class InMemoryRateLimitServiceTest {
     }
 
     private static InMemoryRateLimitService service(int guestPerIp, int userPerHour) {
+        return service(guestPerIp, userPerHour, 30);
+    }
+
+    private static InMemoryRateLimitService service(int guestPerIp, int userPerHour, int authPerIp) {
         var props = new ComplianceApiProperties(
                 null,
-                new ComplianceApiProperties.RateLimit(guestPerIp, userPerHour),
+                new ComplianceApiProperties.RateLimit(guestPerIp, userPerHour, authPerIp),
                 null, null, null, null, null, null, null);
         return new InMemoryRateLimitService(props);
     }

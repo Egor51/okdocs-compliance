@@ -41,6 +41,7 @@ services:
       - "host.docker.internal:host-gateway"
     networks:
       - worker-browser
+      - compliance-net
 
   browserless:
     image: ghcr.io/browserless/chromium:v2.38.1
@@ -115,6 +116,8 @@ services:
 networks:
   worker-browser:
     driver: bridge
+  compliance-net:
+    external: true
 
 volumes:
   alloy-data:

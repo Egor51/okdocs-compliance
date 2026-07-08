@@ -35,7 +35,7 @@ public record YooKassaProperties(
             apiBaseUrl = "https://api.yookassa.ru/v3";
         }
         if (returnUrl == null || returnUrl.isBlank()) {
-            returnUrl = "http://localhost:3000/payment/success";
+            returnUrl = "http://localhost:3000/ru/dashboard";
         }
         allowedReturnHosts = allowedReturnHosts == null ? List.of() : List.copyOf(allowedReturnHosts);
         if (testMode == null) {

@@ -12,10 +12,10 @@ COPY compliance-rules/pom.xml compliance-rules/
 COPY compliance-api/pom.xml compliance-api/
 COPY compliance-worker/pom.xml compliance-worker/
 COPY compliance-app/pom.xml compliance-app/
-RUN mvn -B -ntp -pl compliance-worker -am -DskipTests dependency:go-offline || true
+RUN mvn -B -ntp -pl compliance-api -am -DskipTests dependency:go-offline || true
 
 COPY . .
-RUN mvn -B -ntp -pl compliance-worker -am -DskipTests package
+RUN mvn -B -ntp -pl compliance-api -am -DskipTests package
 
 FROM eclipse-temurin:21-jre-jammy
 
@@ -24,9 +24,11 @@ WORKDIR /app
 RUN groupadd --system compliance \
     && useradd --system --gid compliance --home-dir /app --shell /usr/sbin/nologin compliance
 
-COPY --from=build /workspace/compliance-worker/target/compliance-worker-*-exec.jar /app/app.jar
+COPY --from=build /workspace/compliance-api/target/compliance-api-*-exec.jar /app/app.jar
 
 USER compliance
+
+EXPOSE 8080
 
 ENV JAVA_OPTS="-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"
 
