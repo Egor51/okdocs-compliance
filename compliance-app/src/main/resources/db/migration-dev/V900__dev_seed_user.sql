@@ -21,7 +21,9 @@ VALUES (
     now() AT TIME ZONE 'UTC',
     now() AT TIME ZONE 'UTC'
 )
-ON CONFLICT (email) DO NOTHING;
+-- V021 заменил column-level UNIQUE(email) на регистронезависимый partial index
+-- uq_app_users_email_ci (lower(email)) WHERE email IS NOT NULL — конфликт матчим на него же.
+ON CONFLICT (lower(email)) WHERE email IS NOT NULL DO NOTHING;
 
 -- 2) Баланс: 10 сканов в месячной квоте. period_reset_at — через месяц от старта.
 INSERT INTO scan_balances (
