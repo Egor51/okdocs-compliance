@@ -2,8 +2,11 @@ package io.okdocs.compliance.worker.it;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.okdocs.compliance.messaging.OutboxEventFactory;
 import io.okdocs.compliance.worker.config.ComplianceWorkerProperties;
+import io.okdocs.compliance.worker.config.WorkerMetrics;
 import io.okdocs.compliance.worker.service.ScanLifecycleService;
 import io.okdocs.compliance.worker.service.ScanProgressService;
 import io.okdocs.compliance.worker.service.ScanReportBuilder;
@@ -20,21 +23,29 @@ import org.springframework.transaction.support.TransactionTemplate;
 /**
  * Минимальный Spring-контекст для transactional persistence-IT: JPA-репозитории + entity persistence,
  * {@link ScanLifecycleService}/{@link ScanProgressService} и их зависимости ({@link OutboxEventFactory},
- * {@link ObjectMapper}, properties). Намеренно НЕ поднимает worker-app целиком — без Kafka/CDP/GeoIP,
- * чтобы IT были быстрыми и не требовали этих бинов. Datasource даёт {@link AbstractPostgresIT}.
+ * {@link ObjectMapper}, properties, {@link WorkerMetrics}). Намеренно НЕ поднимает worker-app целиком —
+ * без Kafka/CDP/GeoIP, чтобы IT были быстрыми и не требовали этих бинов. Datasource даёт
+ * {@link AbstractPostgresIT}.
  */
 @SpringBootConfiguration
 @EnableAutoConfiguration
 @EnableJpaRepositories(basePackages = "io.okdocs.compliance.persistence")
 @EntityScan(basePackages = "io.okdocs.compliance.persistence")
 @EnableConfigurationProperties(ComplianceWorkerProperties.class)
-@Import({ScanLifecycleService.class, ScanProgressService.class, ScanReportBuilder.class, OutboxEventFactory.class})
+@Import({ScanLifecycleService.class, ScanProgressService.class, ScanReportBuilder.class,
+        OutboxEventFactory.class, WorkerMetrics.class})
 public class PersistenceItConfig {
 
     /** ObjectMapper с jsr310 — как в проде (Boot-автоконфиг); иначе Instant в payload не сериализуется. */
     @Bean
     ObjectMapper objectMapper() {
         return new ObjectMapper().registerModule(new JavaTimeModule());
+    }
+
+    /** In-memory registry — метрики в IT не проверяются, важно лишь наличие бина для DI. */
+    @Bean
+    MeterRegistry meterRegistry() {
+        return new SimpleMeterRegistry();
     }
 
     /** Ручной контроль границ транзакций (claimBatch SKIP LOCKED надо вызывать в открытой tx). */
