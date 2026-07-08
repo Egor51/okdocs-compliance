@@ -73,6 +73,9 @@ services:
       TZ: ${TZ:-UTC}
     volumes:
       - ./secrets/compliance-kafka.truststore.jks:/etc/compliance/kafka.truststore.jks:ro
+    networks:
+      - default
+      - compliance-net
 
   worker:
     image: ghcr.io/egor51/okdocs-compliance-worker:${WORKER_IMAGE_TAG:-latest}
@@ -104,3 +107,14 @@ services:
       TZ: ${TZ:-UTC}
     volumes:
       - ./secrets/compliance-kafka.truststore.jks:/etc/compliance/kafka.truststore.jks:ro
+    networks:
+      - default
+      - compliance-net
+
+networks:
+  # External: сеть должна существовать заранее (создаётся инфра-стеком
+  # docker-compose.infra.prod.yml или вручную `docker network create compliance-net`).
+  # Этот файл её не создаёт, только подключается — даёт api/worker резолвить
+  # hostname "postgres"/"kafka" по имени контейнера, если инфра поднята на этом же хосте.
+  compliance-net:
+    external: true
