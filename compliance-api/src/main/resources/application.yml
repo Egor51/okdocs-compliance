@@ -57,6 +57,11 @@ spring:
 
 server:
   port: 8080
+  # За nginx-проксированием (X-Forwarded-Proto/Host/For уже шлёт nginx, см. deploy/nginx
+  # конфиг): без этого Spring строит абсолютные URL (в т.ч. OAuth2 authorization redirect)
+  # из внутреннего server.port/host — получалось http://api:8080/oauth2/... вместо
+  # https://okdocs.io/api/oauth2/..., недоступного браузеру снаружи docker-сети.
+  forward-headers-strategy: framework
 
 management:
   endpoints:
