@@ -1,6 +1,13 @@
 spring:
   application:
     name: compliance-api
+  profiles:
+    # application-oauth.yml (compliance.oauth.client.providers.*) должен применяться ВСЕГДА,
+    # не только при явной активации профиля oauth — иначе OAuthClientRegistrationConfig не видит
+    # OAUTH_*_CLIENT_ID/SECRET из env, OAuthProvidersConfiguredCondition не срабатывает,
+    # oauthSecurityFilterChain не создаётся, и /oauth2/authorization/{id} отвечает 401 из
+    # основной JWT-цепочки вместо редиректа к провайдеру.
+    include: oauth
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/compliance}
     username: ${DB_USERNAME:compliance}
