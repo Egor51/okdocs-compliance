@@ -11,6 +11,7 @@ import io.okdocs.compliance.persistence.auth.AppUser;
 import io.okdocs.compliance.persistence.auth.AppUserRepository;
 import io.okdocs.compliance.persistence.auth.OAuthIdentity;
 import io.okdocs.compliance.persistence.auth.OAuthIdentityRepository;
+import io.okdocs.compliance.mail.notification.MailNotificationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -38,6 +39,8 @@ class OAuthAccountServiceTest {
     private OAuthIdentityRepository identityRepository;
     @Mock
     private ScanBalanceService balanceService;
+    @Mock
+    private MailNotificationService mailNotificationService;
 
     private OAuthAccountService service;
 
@@ -46,7 +49,8 @@ class OAuthAccountServiceTest {
         // Реальные дефолты properties: quotaFor(FREE)=0 после F.1.
         ComplianceApiProperties props = new ComplianceApiProperties(
                 null, null, null, new ComplianceApiProperties.Plan(null), null, null, null, null, null);
-        service = new OAuthAccountService(userRepository, identityRepository, balanceService, props);
+        service = new OAuthAccountService(userRepository, identityRepository, balanceService, props,
+                mailNotificationService);
     }
 
     /** Стаб save() для тестов, создающих нового юзера: возвращает его с проставленным id=42. */

@@ -4,6 +4,10 @@ import io.okdocs.compliance.api.service.ScanCommandService;
 import io.okdocs.compliance.api.service.RateLimitService;
 import io.okdocs.compliance.api.web.ComplianceScanController;
 import io.okdocs.compliance.messaging.OutboxPublisher;
+import io.okdocs.compliance.mail.queue.MailOutboxDispatcher;
+import io.okdocs.compliance.mail.notification.MailNotificationService;
+import io.okdocs.compliance.persistence.mail.MailOutboxRepository;
+import io.okdocs.compliance.persistence.mail.MailOutboxStatus;
 import io.okdocs.compliance.persistence.auth.AppUser;
 import io.okdocs.compliance.persistence.auth.AppUserRepository;
 import io.okdocs.compliance.persistence.billing.ScanBalance;
@@ -71,6 +75,12 @@ class CombinedContextIT {
     ScanBalanceRepository balanceRepository;
     @Autowired
     PasswordEncoder passwordEncoder;
+    @Autowired
+    MailNotificationService mailNotificationService;
+    @Autowired
+    MailOutboxDispatcher mailOutboxDispatcher;
+    @Autowired
+    MailOutboxRepository mailOutboxRepository;
 
     @Test
     void apiAndWorkerBeansCoexistInOneContext() {
@@ -84,6 +94,10 @@ class CombinedContextIT {
 
         // shared messaging: ровно один OutboxPublisher на процесс (§6) обслуживает обе половины
         assertThat(ctx.getBeansOfType(OutboxPublisher.class)).hasSize(1);
+        // email-модуль подключён только через api dependency и auto-configuration;
+        // в combined-контексте должен быть ровно один durable dispatcher.
+        assertThat(ctx.getBeansOfType(MailOutboxDispatcher.class)).hasSize(1);
+        assertThat(ctx.getBean(MailNotificationService.class)).isNotNull();
     }
 
     @Test
@@ -107,5 +121,19 @@ class CombinedContextIT {
 
         ScanBalance balance = balanceRepository.findByUserId(user.getId()).orElseThrow();
         assertThat(balance.available()).isEqualTo(10);
+    }
+
+    @Test
+    void mailOutboxPersistsEncryptedPayloadAndDisabledTransportSimulatesDelivery() {
+        mailNotificationService.enqueueWelcome(999L, "mail-it@example.com", "Mail IT", "en");
+        var pending = mailOutboxRepository.findByIdempotencyKey("WELCOME:999").orElseThrow();
+        assertThat(pending.getStatus()).isEqualTo(MailOutboxStatus.PENDING);
+        assertThat(pending.getModelPayload()).doesNotContain("Mail IT");
+
+        mailOutboxDispatcher.dispatchPending();
+
+        var processed = mailOutboxRepository.findByIdempotencyKey("WELCOME:999").orElseThrow();
+        assertThat(processed.getStatus()).isEqualTo(MailOutboxStatus.SIMULATED);
+        assertThat(processed.getSentAt()).isNotNull();
     }
 }

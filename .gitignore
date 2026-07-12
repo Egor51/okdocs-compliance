@@ -18,3 +18,5 @@ compliance-app/.env.app
 compliance-api/.env.api
 compliance-worker/.env.worker
 *.env.local
+compliance-local.env
+prod-infra.env

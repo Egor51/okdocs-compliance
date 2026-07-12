@@ -1,6 +1,7 @@
 package io.okdocs.compliance.api.messaging;
 
 import io.okdocs.compliance.api.service.ScanBalanceService;
+import io.okdocs.compliance.api.service.ReportMailCoordinator;
 import io.okdocs.compliance.contracts.event.ScanCompletedEvent;
 import io.okdocs.compliance.contracts.event.ScanFailedEvent;
 import lombok.RequiredArgsConstructor;
@@ -23,6 +24,7 @@ import org.springframework.stereotype.Component;
 public class ScanResultListener {
 
     private final ScanBalanceService balanceService;
+    private final ReportMailCoordinator reportMailCoordinator;
 
     @KafkaListener(
             topics = "${compliance.kafka.topic.scan-failed}",
@@ -45,9 +47,15 @@ public class ScanResultListener {
             topics = "${compliance.kafka.topic.scan-completed}",
             groupId = "${spring.kafka.consumer.group-id}")
     public void onScanCompleted(ScanCompletedEvent event, Acknowledgment acknowledgment) {
-        log.debug("Получен ScanCompletedEvent для скана {} (status={}, score={})",
-                event.scanId(), event.status(), event.score());
-        // Возврата нет: результат сформирован (COMPLETED/PARTIAL).
-        acknowledgment.acknowledge();
+        try {
+            log.debug("Получен ScanCompletedEvent для скана {} (status={}, score={})",
+                    event.scanId(), event.status(), event.score());
+            reportMailCoordinator.enqueueIfReady(event.scanId());
+            acknowledgment.acknowledge();
+        } catch (RuntimeException e) {
+            log.warn("Не удалось поставить report email в очередь для скана {} — offset не подтверждён: {}",
+                    event.scanId(), e.getMessage());
+            throw e;
+        }
     }
 }

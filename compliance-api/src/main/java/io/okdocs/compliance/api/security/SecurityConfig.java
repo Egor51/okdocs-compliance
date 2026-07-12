@@ -78,10 +78,13 @@ public class SecurityConfig {
                                 "/api/auth/guest",
                                 "/api/auth/login",
                                 "/api/auth/register",
+                                "/api/auth/password/forgot",
+                                "/api/auth/password/reset",
                                 "/api/auth/refresh",
                                 "/api/auth/logout",
                                 "/api/auth/oauth/exchange").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/auth/me").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/mail/unsubscribe").permitAll()
                         // публичный продуктовый каталог для маркетинга и формы запуска scan
                         .requestMatchers(HttpMethod.GET,
                                 "/api/jurisdictions",

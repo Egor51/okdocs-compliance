@@ -33,6 +33,12 @@
             <artifactId>compliance-messaging</artifactId>
         </dependency>
 
+        <!-- Durable SMTP email delivery: welcome/reset/report-ready/promo -->
+        <dependency>
+            <groupId>io.okdocs</groupId>
+            <artifactId>compliance-mail</artifactId>
+        </dependency>
+
         <!-- Web -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

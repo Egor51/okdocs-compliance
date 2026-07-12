@@ -28,6 +28,9 @@ outbox и отдаёт статус/отчёт, сформированный wor
 |---|---|
 | `POST /api/auth/guest` | открыт |
 | `POST /api/auth/register` | открыт |
+| `POST /api/auth/password/forgot` | открыт |
+| `POST /api/auth/password/reset` | открыт |
+| `POST /api/mail/unsubscribe` | открыт |
 | `POST /api/auth/login` | открыт |
 | `POST /api/auth/refresh` | открыт |
 | `POST /api/auth/logout` | открыт |
@@ -310,6 +313,38 @@ compliance:
 ```
 
 Гостевые сканы при регистрации не привязываются к новому пользователю.
+После commit регистрации welcome-письмо асинхронно записывается в durable mail outbox. Ошибка SMTP
+не откатывает созданного пользователя.
+
+### POST /api/auth/password/forgot
+
+Создаёт одноразовую ссылку восстановления/первичной установки пароля и ставит письмо в durable
+mail outbox. Доступ: открыт.
+
+```json
+{
+  "email": "user@example.com",
+  "locale": "ru"
+}
+```
+
+Всегда отвечает `202 Accepted` без тела — как для существующего, так и для неизвестного email.
+Это не позволяет использовать endpoint для проверки существования аккаунта. Ссылка действует 30
+минут; в БД хранится только SHA-256 hash токена.
+
+### POST /api/auth/password/reset
+
+Устанавливает новый пароль по одноразовому reset token. Подходит и OAuth-only аккаунту без пароля.
+
+```json
+{
+  "token": "opaque-token-from-email",
+  "newPassword": "new-password-123"
+}
+```
+
+Ответ `204`. При успехе token помечается использованным, а все активные refresh-токены пользователя
+отзываются. Невалидная, использованная или просроченная ссылка возвращает `400`.
 
 ### POST /api/auth/login
 
@@ -662,8 +697,9 @@ Premium-отчёт:
 
 ### POST /api/compliance-scans/{id}/email
 
-Сохраняет email и согласия для отчёта. Отправка email/PDF в текущем API не реализована этим
-endpoint'ом; метод только сохраняет данные согласия и `buyerEmail` у скана.
+Сохраняет email и согласия для отчёта. После готовности JSON-снапшота асинхронно отправляет
+`REPORT_READY` со ссылкой на Next.js-страницу отчёта. PDF-вложения нет: PDF при необходимости
+формирует frontend из JSON.
 
 Доступ: владелец скана.
 
@@ -686,6 +722,42 @@ endpoint'ом; метод только сохраняет данные согл�
 | `consentToMarketing` | boolean |
 
 Ответ `204`, тело отсутствует.
+
+Если `consentToMarketing=true`, адрес создаёт или реактивирует маркетинговую подписку. Значение
+`false` не считается глобальной отпиской; для неё используется отдельный unsubscribe flow.
+
+### POST /api/mail/unsubscribe
+
+Публичная идемпотентная отписка по подписанному opaque token. Frontend получает token из ссылки
+письма и выполняет POST:
+
+```json
+{
+  "token": "subscription-id.signature"
+}
+```
+
+Ответ всегда `204`, включая невалидный/устаревший token, чтобы не раскрывать наличие подписки.
+
+### POST /api/admin/mail/promo
+
+Ставит одиночное promo-письмо в очередь. Доступ: только `ADMIN`. Адрес должен иметь активную
+маркетинговую подписку.
+
+```json
+{
+  "campaignId": "b569af42-da0f-4d87-814f-a3f63229bc47",
+  "email": "subscriber@example.com",
+  "subject": "Новые возможности OKDOCS",
+  "title": "Проверяйте сайты быстрее",
+  "body": "Мы обновили отчёты и правила.",
+  "actionUrl": "https://okdocs.io/updates",
+  "locale": "ru"
+}
+```
+
+Ответ `202`. Повтор той же пары `campaignId + subscriptionId` идемпотентен. Перед фактической
+SMTP-отправкой подписка проверяется повторно; отписанное письмо получает статус `CANCELLED`.
 
 Если `consentToProcessing=false`, вернётся `400`.
 

@@ -28,6 +28,7 @@ import io.okdocs.compliance.persistence.scan.ComplianceScanReportRepository;
 import io.okdocs.compliance.persistence.scan.ComplianceScanRepository;
 import io.okdocs.compliance.persistence.scan.ScanEmail;
 import io.okdocs.compliance.persistence.scan.ScanEmailRepository;
+import io.okdocs.compliance.mail.subscription.EmailSubscriptionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -56,6 +57,8 @@ public class ScanCommandService {
     private final ScanMapper scanMapper;
     private final ComplianceApiProperties properties;
     private final ObjectMapper objectMapper;
+    private final ReportMailCoordinator reportMailCoordinator;
+    private final EmailSubscriptionService emailSubscriptionService;
 
     /**
      * Бесплатный маркетинговый скан ({@code POST /api/free-scans}): {@code FREE_MARKETING}, 1 страница,
@@ -236,6 +239,11 @@ public class ScanCommandService {
 
         scan.setBuyerEmail(request.email());
         scanRepository.save(scan);
+        if (request.consentToMarketing()) {
+            emailSubscriptionService.subscribe(scan.getUserId(), request.email(), scan.getLocale(),
+                    "SCAN", ipAddress);
+        }
+        reportMailCoordinator.enqueueIfReady(scanId);
     }
 
     /**

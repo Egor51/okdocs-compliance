@@ -22,6 +22,7 @@
         <module>compliance-contracts</module>
         <module>compliance-persistence</module>
         <module>compliance-messaging</module>
+        <module>compliance-mail</module>
         <module>compliance-rules</module>
         <module>compliance-api</module>
         <module>compliance-worker</module>
@@ -56,6 +57,11 @@
             <dependency>
                 <groupId>io.okdocs</groupId>
                 <artifactId>compliance-messaging</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.okdocs</groupId>
+                <artifactId>compliance-mail</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
