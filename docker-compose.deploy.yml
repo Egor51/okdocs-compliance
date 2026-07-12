@@ -70,6 +70,20 @@ services:
       YOOKASSA_VAT_CODE: ${YOOKASSA_VAT_CODE:-}
       PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-}
 
+      MAIL_ENABLED: ${MAIL_ENABLED:-false}
+      MAIL_FROM: ${MAIL_FROM:-no-reply@okdocs.io}
+      MAIL_REPLY_TO: ${MAIL_REPLY_TO:-}
+      MAIL_PAYLOAD_ENCRYPTION_KEY: ${MAIL_PAYLOAD_ENCRYPTION_KEY:-}
+      MAIL_UNSUBSCRIBE_SECRET: ${MAIL_UNSUBSCRIBE_SECRET:-}
+      FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-https://okdocs.io}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_AUTH: ${SMTP_AUTH:-true}
+      SMTP_SSL: ${SMTP_SSL:-true}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-false}
+
       TZ: ${TZ:-UTC}
     volumes:
       - ./secrets/compliance-kafka.truststore.jks:/etc/compliance/kafka.truststore.jks:ro

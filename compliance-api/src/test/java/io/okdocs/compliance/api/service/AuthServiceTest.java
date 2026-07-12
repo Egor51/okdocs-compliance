@@ -11,6 +11,7 @@ import io.okdocs.compliance.persistence.auth.AppUser;
 import io.okdocs.compliance.persistence.auth.AppUserRepository;
 import io.okdocs.compliance.persistence.auth.RefreshToken;
 import io.okdocs.compliance.persistence.auth.RefreshTokenRepository;
+import io.okdocs.compliance.mail.notification.MailNotificationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -52,13 +53,16 @@ class AuthServiceTest {
     private OAuthLoginCodeService oauthLoginCodeService;
     @Mock
     private RateLimitService rateLimitService;
+    @Mock
+    private MailNotificationService mailNotificationService;
 
     private AuthService service;
 
     @BeforeEach
     void setUp() {
         service = new AuthService(userRepository, refreshTokenRepository, balanceService,
-                jwtService, passwordEncoder, properties, oauthLoginCodeService, rateLimitService);
+                jwtService, passwordEncoder, properties, oauthLoginCodeService, rateLimitService,
+                mailNotificationService);
     }
 
     @Test

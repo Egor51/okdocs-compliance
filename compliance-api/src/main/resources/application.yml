@@ -61,6 +61,18 @@ spring:
       password: ${REDIS_PASSWORD:}
       ssl:
         enabled: ${REDIS_SSL_ENABLED:false}
+  mail:
+    host: ${SMTP_HOST:}
+    port: ${SMTP_PORT:465}
+    username: ${SMTP_USERNAME:}
+    password: ${SMTP_PASSWORD:}
+    properties:
+      mail.smtp.auth: ${SMTP_AUTH:true}
+      mail.smtp.ssl.enable: ${SMTP_SSL:true}
+      mail.smtp.starttls.enable: ${SMTP_STARTTLS:false}
+      mail.smtp.connectiontimeout: 15000
+      mail.smtp.timeout: 15000
+      mail.smtp.writetimeout: 15000
 
 server:
   port: 8080
@@ -121,6 +133,19 @@ compliance:
     poll-interval-ms: 5000
     backoff-base: 10s
     backoff-max: 10m
+  mail:
+    enabled: ${MAIL_ENABLED:false}
+    from: ${MAIL_FROM:no-reply@okdocs.io}
+    reply-to: ${MAIL_REPLY_TO:}
+    frontend-base-url: ${FRONTEND_BASE_URL:http://localhost:3000}
+    payload-encryption-key: ${MAIL_PAYLOAD_ENCRYPTION_KEY:}
+    unsubscribe-secret: ${MAIL_UNSUBSCRIBE_SECRET:}
+    poll-interval-ms: ${MAIL_POLL_INTERVAL_MS:5000}
+    batch-size: ${MAIL_BATCH_SIZE:50}
+    max-attempts: ${MAIL_MAX_ATTEMPTS:6}
+    backoff-base: 30s
+    backoff-max: 1h
+    payload-retention: 48h
   auth:
     jwt-secret: ${JWT_SECRET:change-me-in-production-this-must-be-at-least-256-bits-long-secret-key}
     access-token-ttl: 30m

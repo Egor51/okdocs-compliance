@@ -67,6 +67,18 @@ spring:
       # (дефолт combined-app) подключения к Redis нет.
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+  mail:
+    host: ${SMTP_HOST:smtp.mail.ru}
+    port: ${SMTP_PORT:465}
+    username: ${SMTP_USER:support@okdocs.io}
+    password: ${SMTP_PASS:}
+    properties:
+      mail.smtp.auth: ${SMTP_AUTH:true}
+      mail.smtp.ssl.enable: ${SMTP_SSL:true}
+      mail.smtp.starttls.enable: ${SMTP_STARTTLS:false}
+      mail.smtp.connectiontimeout: 15000
+      mail.smtp.timeout: 15000
+      mail.smtp.writetimeout: 15000
 
 server:
   port: 8080
@@ -125,6 +137,21 @@ compliance:
     title: "Откройте полный отчёт"
     text: "Получите доказательства, ссылки на закон, рекомендации и PDF-отчёт"
     action-url: "/payment"
+  mail:
+    enabled: ${EMAIL_ENABLED:false}
+    from: ${SMTP_FROM:support@okdocs.io}
+    # The current mail module has no separate admin-recipient field; use it as Reply-To.
+    reply-to: ${ADMIN_EMAIL:${MAIL_REPLY_TO:support@okdocs.io}}
+    frontend-base-url: ${FRONTEND_BASE_URL:http://localhost:3000}
+    payload-encryption-key: ${MAIL_PAYLOAD_ENCRYPTION_KEY:}
+    unsubscribe-secret: ${MAIL_UNSUBSCRIBE_SECRET:}
+    poll-interval-ms: ${MAIL_POLL_INTERVAL_MS:5000}
+    batch-size: ${MAIL_BATCH_SIZE:50}
+    max-attempts: ${MAIL_MAX_ATTEMPTS:6}
+    backoff-base: 30s
+    backoff-max: 1h
+    payload-retention: 48h
+
   auth:
     jwt-secret: ${JWT_SECRET:change-me-in-production-this-must-be-at-least-256-bits-long-secret-key}
     access-token-ttl: 30m
@@ -148,5 +175,3 @@ compliance:
       # property-инвариант (isPremiumRequiresCdp) роняет старт без base-url, а CdpAvailabilityChecker
       # — если CDP-эндпоинт мёртв. Дефолтный профиль local (application-local.yml) ставит false.
       premium-enabled: ${CDP_PREMIUM_ENABLED:true}
-
-

@@ -10,6 +10,7 @@ import io.okdocs.compliance.persistence.auth.AppUser;
 import io.okdocs.compliance.persistence.auth.AppUserRepository;
 import io.okdocs.compliance.persistence.auth.OAuthIdentity;
 import io.okdocs.compliance.persistence.auth.OAuthIdentityRepository;
+import io.okdocs.compliance.mail.notification.MailNotificationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -40,10 +41,16 @@ public class OAuthAccountService {
     private final OAuthIdentityRepository identityRepository;
     private final ScanBalanceService balanceService;
     private final ComplianceApiProperties properties;
+    private final MailNotificationService mailNotificationService;
 
     /** Найти/создать аккаунт по OAuth-профилю. Возвращает локального юзера для выдачи токенов. */
     @Transactional
     public AppUser resolveOrCreate(OAuthUserInfo info) {
+        return resolveOrCreate(info, "ru");
+    }
+
+    @Transactional
+    public AppUser resolveOrCreate(OAuthUserInfo info, String locale) {
         // 1. Уже видели эту внешнюю личность — просто логиним её юзера.
         var existing = identityRepository.findByProviderAndProviderUserId(
                 info.provider(), info.providerUserId());
@@ -65,13 +72,13 @@ public class OAuthAccountService {
         }
 
         // 3. Новый OAuth-only аккаунт (без пароля) + баланс + связка.
-        AppUser user = createOAuthUser(info);
+        AppUser user = createOAuthUser(info, locale);
         linkIdentity(user.getId(), info);
         log.info("OAuth новый аккаунт userId={} provider={}", user.getId(), info.provider());
         return user;
     }
 
-    private AppUser createOAuthUser(OAuthUserInfo info) {
+    private AppUser createOAuthUser(OAuthUserInfo info, String locale) {
         AppUser user = new AppUser();
         // app_users.email получает email ТОЛЬКО при emailVerified (P2): иначе атакующий с
         // неподтверждённым чужим email завёл бы локальный аккаунт с заявленным чужим адресом
@@ -91,6 +98,7 @@ public class OAuthAccountService {
 
         int quota = properties.plan().quotaFor(UserPlan.FREE);
         balanceService.createForNewUser(user.getId(), quota);
+        mailNotificationService.enqueueWelcome(user.getId(), user.getEmail(), user.getName(), locale);
         return user;
     }
 

@@ -59,7 +59,8 @@ class OAuthLoginSuccessHandlerTest {
         OAuth2AuthenticationToken token = googleToken();
         AppUser user = new AppUser();
         user.setId(55L);
-        when(accountService.resolveOrCreate(any(OAuthUserInfo.class))).thenReturn(user);
+        when(accountService.resolveOrCreate(any(OAuthUserInfo.class), org.mockito.ArgumentMatchers.eq("en")))
+                .thenReturn(user);
         when(loginCodeService.issue(55L)).thenReturn("one-time-code");
         // state с locale-суффиксом, как его зашивает LocaleAwareAuthorizationRequestResolver.
         when(request.getParameter("state")).thenReturn("csrf-abc__en");
@@ -68,7 +69,7 @@ class OAuthLoginSuccessHandlerTest {
 
         // Профиль смаплен и передан в resolveOrCreate с правильным провайдером/verified.
         ArgumentCaptor<OAuthUserInfo> info = ArgumentCaptor.forClass(OAuthUserInfo.class);
-        verify(accountService).resolveOrCreate(info.capture());
+        verify(accountService).resolveOrCreate(info.capture(), org.mockito.ArgumentMatchers.eq("en"));
         assertThat(info.getValue().provider()).isEqualTo(OAuthProvider.GOOGLE);
         assertThat(info.getValue().emailVerified()).isTrue();
 
@@ -86,7 +87,8 @@ class OAuthLoginSuccessHandlerTest {
         OAuth2AuthenticationToken token = googleToken();
         AppUser user = new AppUser();
         user.setId(7L);
-        when(accountService.resolveOrCreate(any(OAuthUserInfo.class))).thenReturn(user);
+        when(accountService.resolveOrCreate(any(OAuthUserInfo.class), org.mockito.ArgumentMatchers.eq("ru")))
+                .thenReturn(user);
         when(loginCodeService.issue(7L)).thenReturn("c");
         when(request.getParameter("state")).thenReturn("csrf-only");
 
@@ -105,7 +107,8 @@ class OAuthLoginSuccessHandlerTest {
         OAuth2AuthenticationToken token = googleToken();
         AppUser user = new AppUser();
         user.setId(8L);
-        when(accountService.resolveOrCreate(any(OAuthUserInfo.class))).thenReturn(user);
+        when(accountService.resolveOrCreate(any(OAuthUserInfo.class), org.mockito.ArgumentMatchers.eq("ru")))
+                .thenReturn(user);
         when(loginCodeService.issue(8L)).thenReturn("c");
         when(request.getParameter("state")).thenReturn("csrf__de");
 

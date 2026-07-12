@@ -6,9 +6,11 @@ import io.okdocs.compliance.api.service.AuthService;
 import io.okdocs.compliance.contracts.auth.AuthMeResponse;
 import io.okdocs.compliance.contracts.auth.AuthResponse;
 import io.okdocs.compliance.contracts.auth.GuestAuthResponse;
+import io.okdocs.compliance.contracts.auth.ForgotPasswordRequest;
 import io.okdocs.compliance.contracts.auth.LoginRequest;
 import io.okdocs.compliance.contracts.auth.OAuthExchangeRequest;
 import io.okdocs.compliance.contracts.auth.RefreshTokenRequest;
+import io.okdocs.compliance.contracts.auth.ResetPasswordRequest;
 import io.okdocs.compliance.contracts.auth.RegisterRequest;
 import io.okdocs.compliance.contracts.auth.UserProfileDto;
 import io.okdocs.compliance.contracts.enums.PrincipalType;
@@ -34,6 +36,7 @@ public class AuthController {
     private final AuthService authService;
     private final AppUserRepository userRepository;
     private final ClientIpResolver clientIpResolver;
+    private final io.okdocs.compliance.api.service.PasswordResetService passwordResetService;
 
     @PostMapping("/guest")
     public GuestAuthResponse guest() {
@@ -44,7 +47,21 @@ public class AuthController {
     public ResponseEntity<AuthResponse> register(@Valid @RequestBody RegisterRequest request,
                                                  HttpServletRequest http) {
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(authService.register(request, clientIpResolver.resolve(http)));
+                .body(authService.register(request, clientIpResolver.resolve(http),
+                        http.getHeader(HttpHeaders.ACCEPT_LANGUAGE)));
+    }
+
+    @PostMapping("/password/forgot")
+    public ResponseEntity<Void> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request,
+                                               HttpServletRequest http) {
+        passwordResetService.requestReset(request, clientIpResolver.resolve(http));
+        return ResponseEntity.accepted().build();
+    }
+
+    @PostMapping("/password/reset")
+    public ResponseEntity<Void> resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
+        passwordResetService.reset(request);
+        return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/login")

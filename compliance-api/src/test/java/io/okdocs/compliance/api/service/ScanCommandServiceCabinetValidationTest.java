@@ -12,6 +12,7 @@ import io.okdocs.compliance.persistence.outbox.OutboxEventRepository;
 import io.okdocs.compliance.persistence.scan.ComplianceScanReportRepository;
 import io.okdocs.compliance.persistence.scan.ComplianceScanRepository;
 import io.okdocs.compliance.persistence.scan.ScanEmailRepository;
+import io.okdocs.compliance.mail.subscription.EmailSubscriptionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -46,6 +47,8 @@ class ScanCommandServiceCabinetValidationTest {
     @Mock private ScanMapper scanMapper;
     @Mock private ComplianceApiProperties properties;
     @Mock private ObjectMapper objectMapper;
+    @Mock private ReportMailCoordinator reportMailCoordinator;
+    @Mock private EmailSubscriptionService emailSubscriptionService;
 
     private ScanCommandService service;
 
@@ -55,7 +58,7 @@ class ScanCommandServiceCabinetValidationTest {
     void setUp() {
         service = new ScanCommandService(scanRepository, scanReportRepository, scanEmailRepository,
                 outboxRepository, outboxEventFactory, balanceService, rateLimitService, urlValidator,
-                scanMapper, properties, objectMapper);
+                scanMapper, properties, objectMapper, reportMailCoordinator, emailSubscriptionService);
     }
 
     @Test

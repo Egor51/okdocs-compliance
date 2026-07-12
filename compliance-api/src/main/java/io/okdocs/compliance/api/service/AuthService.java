@@ -16,6 +16,7 @@ import io.okdocs.compliance.persistence.auth.AppUser;
 import io.okdocs.compliance.persistence.auth.AppUserRepository;
 import io.okdocs.compliance.persistence.auth.RefreshToken;
 import io.okdocs.compliance.persistence.auth.RefreshTokenRepository;
+import io.okdocs.compliance.mail.notification.MailNotificationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -61,6 +62,7 @@ public class AuthService {
     private final ComplianceApiProperties properties;
     private final OAuthLoginCodeService oauthLoginCodeService;
     private final RateLimitService rateLimitService;
+    private final MailNotificationService mailNotificationService;
 
     private final SecureRandom secureRandom = new SecureRandom();
 
@@ -74,6 +76,11 @@ public class AuthService {
     /** Регистрация: создаёт юзера (роль USER, план FREE) + баланс с месячной квотой. */
     @Transactional
     public AuthResponse register(RegisterRequest request, String ipAddress) {
+        return register(request, ipAddress, "ru");
+    }
+
+    @Transactional
+    public AuthResponse register(RegisterRequest request, String ipAddress, String locale) {
         rateLimitService.checkAuthAttemptAllowed(ipAddress);
         // Открытый ответ «email существует» — осознанный enumeration trade-off (см. javadoc класса);
         // скорость перебора ограничивает IP-лимит выше.
@@ -97,6 +104,7 @@ public class AuthService {
 
         int quota = properties.plan().quotaFor(UserPlan.FREE);
         balanceService.createForNewUser(user.getId(), quota);
+        mailNotificationService.enqueueWelcome(user.getId(), user.getEmail(), user.getName(), locale);
 
         return issueTokensFor(user, null, null);
     }

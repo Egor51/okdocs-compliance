@@ -55,10 +55,10 @@ public class OAuthLoginSuccessHandler implements AuthenticationSuccessHandler {
         OAuth2User principal = token.getPrincipal();
 
         OAuthUserInfo info = OAuthUserInfoFactory.from(registrationId, principal.getAttributes());
-        AppUser user = accountService.resolveOrCreate(info);
+        String locale = localeFromState(request.getParameter("state"));
+        AppUser user = accountService.resolveOrCreate(info, locale);
         String code = loginCodeService.issue(user.getId());
 
-        String locale = localeFromState(request.getParameter("state"));
         // Подставляем locale ДО парсинга URI: иначе '{'/'}' плейсхолдера ломают UriComponentsBuilder.
         String template = properties.oauth().successRedirectUrl().replace(LOCALE_PLACEHOLDER, locale);
         String redirect = UriComponentsBuilder.fromUriString(template)

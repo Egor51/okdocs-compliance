@@ -111,6 +111,9 @@ compliance-persistence
 compliance-messaging
   transactional outbox relay shared by API and worker
 
+compliance-mail
+  durable email outbox, Handlebars templates and SMTP transport used by API
+
 compliance-rules
   compliance rule engine and rule implementations
 ```
@@ -124,11 +127,13 @@ flowchart LR
     api --> contracts["compliance-contracts"]
     api --> persistence["compliance-persistence"]
     api --> messaging["compliance-messaging"]
+    api --> mail["compliance-mail"]
     worker --> contracts
     worker --> persistence
     worker --> messaging
     worker --> rules["compliance-rules"]
     messaging --> persistence
+    mail --> persistence
     persistence --> contracts
     rules --> contracts
 ```
@@ -140,6 +145,7 @@ flowchart LR
 | `compliance-contracts` | Public DTOs, enums, Kafka events, crawler records. No Spring or JPA dependency. |
 | `compliance-persistence` | Database model, Spring Data repositories, Flyway migrations. |
 | `compliance-messaging` | Transactional outbox publisher used by both API and worker. |
+| `compliance-mail` | Welcome/reset/report-ready/promo email queue and SMTP transport. |
 | `compliance-rules` | Rule engine and compliance rule implementations. |
 | `compliance-api` | REST API, JWT auth, rate limiting, scan commands, cabinet and admin endpoints. |
 | `compliance-worker` | Kafka worker, static crawler, CDP dynamic crawler, enrichment, scoring and report snapshots. |
@@ -411,6 +417,9 @@ All scan resources are owner-scoped. A scan can be read only by the user who own
 | `GET` | `/api/compliance-scans/{id}` | Owner token | Get scan status and progress. |
 | `GET` | `/api/compliance-scans/{id}/report` | Owner token | Get the report snapshot. |
 | `POST` | `/api/compliance-scans/{id}/email` | Owner token | Store report email and consent flags. |
+| `POST` | `/api/auth/password/forgot` | Public | Queue a password-reset link with opaque response. |
+| `POST` | `/api/auth/password/reset` | Public | Set a new password using a one-time token. |
+| `POST` | `/api/mail/unsubscribe` | Public | Unsubscribe using a signed token. |
 
 ### Cabinet
 
