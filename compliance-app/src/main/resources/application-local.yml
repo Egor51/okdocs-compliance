@@ -6,5 +6,8 @@
 compliance:
   crawler:
     dynamic:
-      enabled: false
-      premium-enabled: false
+      # Профильный YAML имеет приоритет над application.yml, поэтому literal false здесь
+      # блокировал CDP_ENABLED/CDP_PREMIUM_ENABLED из базового файла. Оставляем безопасный
+      # local-default false, но разрешаем явное включение Browserless через env.
+      enabled: ${CDP_ENABLED:false}
+      premium-enabled: ${CDP_PREMIUM_ENABLED:false}
