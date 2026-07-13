@@ -3,12 +3,27 @@ package io.okdocs.compliance.api.service;
 import io.okdocs.compliance.contracts.exception.ComplianceValidationException;
 import org.junit.jupiter.api.Test;
 
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class UrlValidatorServiceTest {
 
-    private final UrlValidatorService validator = new UrlValidatorService();
+    private final UrlValidatorService validator = new UrlValidatorService(
+            UrlValidatorServiceTest::resolveFixture);
+
+    private static InetAddress[] resolveFixture(String host) throws UnknownHostException {
+        return switch (host) {
+            case "example.com" -> new InetAddress[]{InetAddress.getByAddress(
+                    "example.com", new byte[]{93, (byte) 184, (byte) 216, 34})};
+            case "localhost" -> new InetAddress[]{InetAddress.getLoopbackAddress()};
+            case "192.168.0.1" -> new InetAddress[]{InetAddress.getByAddress(
+                    new byte[]{(byte) 192, (byte) 168, 0, 1})};
+            default -> throw new UnknownHostException(host);
+        };
+    }
 
     @Test
     void extractsDomainAndNormalizesScheme() {

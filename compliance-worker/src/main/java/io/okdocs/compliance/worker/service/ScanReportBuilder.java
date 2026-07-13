@@ -14,6 +14,7 @@ import io.okdocs.compliance.contracts.scan.RuleOutcomeDto;
 import io.okdocs.compliance.contracts.scan.ScanReportResponse;
 import io.okdocs.compliance.contracts.scan.ScanSummaryDto;
 import io.okdocs.compliance.contracts.scan.SanctionExposureDto;
+import io.okdocs.compliance.contracts.scan.UnverifiedRuleDto;
 import io.okdocs.compliance.persistence.scan.ComplianceFinding;
 import io.okdocs.compliance.persistence.scan.ComplianceScan;
 import lombok.RequiredArgsConstructor;
@@ -52,7 +53,7 @@ public class ScanReportBuilder {
                 .toList();
         ScanSummaryDto summary = summarize(scan.getJurisdiction(), representativeFindings);
         DiagnosticsDto diagnostics = diagnostics(scan);
-        ReportQualityDto quality = quality(diagnostics);
+        ReportQualityDto quality = quality(diagnostics, representativeFindings);
 
         ScanReportResponse premium = response(scan, ScanTier.PREMIUM, groupedFindings, summary, diagnostics, quality, true);
         ScanReportResponse free = response(scan, ScanTier.FREE, groupedFindings, summary, diagnostics, quality, false);
@@ -89,7 +90,7 @@ public class ScanReportBuilder {
                 premium ? summary : marketingSummary(summary),
                 findingDtos,
                 diagnostics,
-                quality,
+                premium ? quality : marketingQuality(quality),
                 null, // paywallCta дописывает API при выдаче FREE (product-shell, не compliance-данные)
                 durationMs(scan),
                 scan.getCreatedAt(),
@@ -256,6 +257,14 @@ public class ScanReportBuilder {
                 summary.totalPotentialFine(), exposure == null ? null : exposure.headlineOnly());
     }
 
+    private static ReportQualityDto marketingQuality(ReportQualityDto quality) {
+        List<UnverifiedRuleDto> maskedRules = quality.unverifiedRules().stream()
+                .map(rule -> new UnverifiedRuleDto(rule.code(), rule.title(), rule.category(), null))
+                .toList();
+        return new ReportQualityDto(quality.passed(), quality.failed(), quality.notEvaluated(),
+                quality.positiveChecks(), quality.coveragePercent(), maskedRules);
+    }
+
     private static boolean isObservedRisk(ComplianceFinding finding) {
         VerificationStatus status = finding.getVerificationStatus();
         return status == VerificationStatus.CONFIRMED || status == VerificationStatus.DETECTED;
@@ -285,9 +294,19 @@ public class ScanReportBuilder {
     private static final Map<String, String> POSITIVE_PRECONDITION = Map.of(
             "WEAK_CSP", "MISSING_CSP");
 
-    private static ReportQualityDto quality(DiagnosticsDto diagnostics) {
+    private static ReportQualityDto quality(DiagnosticsDto diagnostics,
+                                            List<ComplianceFinding> representativeFindings) {
         if (diagnostics == null || diagnostics.ruleOutcomes() == null || diagnostics.ruleOutcomes().isEmpty()) {
             return new ReportQualityDto(0, 0, 0, List.of());
+        }
+        Map<String, ComplianceFinding> unverifiedFindings = new LinkedHashMap<>();
+        if (representativeFindings != null) {
+            for (ComplianceFinding finding : representativeFindings) {
+                if (finding != null && finding.getCode() != null
+                        && finding.getVerificationStatus() == VerificationStatus.UNVERIFIED) {
+                    unverifiedFindings.putIfAbsent(finding.getCode(), finding);
+                }
+            }
         }
         // Коды проваленных правил — для подавления зависимых positive-проверок.
         Set<String> failedCodes = new HashSet<>();
@@ -301,6 +320,7 @@ public class ScanReportBuilder {
         int failed = 0;
         int notEvaluated = 0;
         List<PositiveCheckDto> positiveChecks = new ArrayList<>();
+        Map<String, UnverifiedRuleDto> unverifiedRules = new LinkedHashMap<>();
         for (RuleOutcomeDto outcome : diagnostics.ruleOutcomes()) {
             if (outcome == null || outcome.status() == null) {
                 continue;
@@ -310,6 +330,7 @@ public class ScanReportBuilder {
                     if (isSuppressedByPrecondition(outcome.code(), failedCodes)) {
                         // Предпосылка провалена → positive вводит в заблуждение. Не зелёный.
                         notEvaluated++;
+                        unverifiedRules.putIfAbsent(outcome.code(), unverifiedRule(outcome, null));
                     } else {
                         passed++;
                         PositiveCheckDto positive = positiveCheck(outcome);
@@ -318,14 +339,38 @@ public class ScanReportBuilder {
                         }
                     }
                 }
-                case "FAILED" -> failed++;
-                case "NOT_EVALUATED" -> notEvaluated++;
+                case "FAILED" -> {
+                    ComplianceFinding unverified = unverifiedFindings.get(outcome.code());
+                    if (unverified == null) {
+                        failed++;
+                    } else {
+                        // RuleEngine возвращает FAILED при любом fact, но UNVERIFIED-fact не является
+                        // установленным нарушением и уменьшает coverage, а не индекс риска.
+                        notEvaluated++;
+                        unverifiedRules.putIfAbsent(outcome.code(), unverifiedRule(
+                                outcome, firstNonBlank(unverified.getEvidence(), unverified.getExplanation())));
+                    }
+                }
+                case "NOT_EVALUATED" -> {
+                    notEvaluated++;
+                    unverifiedRules.putIfAbsent(outcome.code(), unverifiedRule(outcome, outcome.message()));
+                }
                 default -> {
                     // unknown future status: keep report readable, don't count it as green
                 }
             }
         }
-        return new ReportQualityDto(passed, failed, notEvaluated, List.copyOf(positiveChecks));
+        int total = passed + failed + notEvaluated;
+        Integer coveragePercent = total == 0
+                ? null
+                : (int) Math.round((passed + failed) * 100.0 / total);
+        return new ReportQualityDto(passed, failed, notEvaluated, List.copyOf(positiveChecks),
+                coveragePercent, List.copyOf(unverifiedRules.values()));
+    }
+
+    private static UnverifiedRuleDto unverifiedRule(RuleOutcomeDto outcome, String reason) {
+        return new UnverifiedRuleDto(
+                outcome.code(), outcome.title(), outcome.category(), hasText(reason) ? reason : null);
     }
 
     /** PASSED-правило подавлено, если его предпосылка (по карте) есть среди проваленных. */

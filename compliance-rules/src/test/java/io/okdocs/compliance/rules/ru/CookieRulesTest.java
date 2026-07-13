@@ -180,6 +180,13 @@ class CookieRulesTest {
         }
 
         @Test
+        void ignoresLocaleCookieWithBrowserSessionLifetime() {
+            var page = TestFixtures.dynamicPageWithCookies("https://site.ru/",
+                    List.of(TestFixtures.sessionCookie("NEXT_LOCALE", true, false)), List.of());
+            assertThat(rule.evaluate(TestFixtures.ctx(page))).isEmpty();
+        }
+
+        @Test
         void silentWhenSessionCookieHasHttpOnly() {
             var page = TestFixtures.dynamicPageWithCookies("https://site.ru/",
                     List.of(TestFixtures.sessionCookie("connect.sid", true, true)), List.of());

@@ -3,6 +3,7 @@ package io.okdocs.compliance.worker.crawler;
 import io.okdocs.compliance.contracts.crawler.FormInfo;
 import io.okdocs.compliance.contracts.crawler.PageAnalysisResult;
 import io.okdocs.compliance.contracts.enums.RenderMode;
+import io.okdocs.compliance.contracts.enums.FormPurpose;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.junit.jupiter.api.Test;
@@ -53,6 +54,43 @@ class PageExtractorTest {
         FormInfo form = page.forms().get(0);
         assertThat(form.hasPasswordField()).isTrue();
         assertThat(form.hasFileUpload()).isTrue();
+    }
+
+    @Test
+    void classifiesCurrentPasswordFormAsLogin() {
+        Document doc = Jsoup.parse("<form><input type='email' autocomplete='email'>"
+                + "<input type='password' autocomplete='current-password'></form>",
+                "https://site.ru/login");
+        var page = PageExtractor.extract("https://site.ru/login", doc, "site.ru");
+
+        assertThat(page.forms().get(0).purpose()).isEqualTo(FormPurpose.AUTH_LOGIN);
+    }
+
+    @Test
+    void classifiesEmailFirstFormOnLoginPageAsLogin() {
+        Document doc = Jsoup.parse("<form><input type='email' autocomplete='email'></form>",
+                "https://site.ru/login");
+        var page = PageExtractor.extract("https://site.ru/login", doc, "site.ru");
+
+        assertThat(page.forms().get(0).purpose()).isEqualTo(FormPurpose.AUTH_LOGIN);
+    }
+
+    @Test
+    void classifiesNewPasswordFormAsRegistration() {
+        Document doc = Jsoup.parse("<form><input type='email'><input type='password' "
+                + "autocomplete='new-password'></form>", "https://site.ru/register");
+        var page = PageExtractor.extract("https://site.ru/register", doc, "site.ru");
+
+        assertThat(page.forms().get(0).purpose()).isEqualTo(FormPurpose.AUTH_REGISTER);
+    }
+
+    @Test
+    void classifiesResetPasswordBeforeNewPasswordRegistrationHeuristic() {
+        Document doc = Jsoup.parse("<form><input type='password' autocomplete='new-password'></form>",
+                "https://site.ru/reset-password");
+        var page = PageExtractor.extract("https://site.ru/reset-password", doc, "site.ru");
+
+        assertThat(page.forms().get(0).purpose()).isEqualTo(FormPurpose.PASSWORD_RECOVERY);
     }
 
     @Test

@@ -2,6 +2,7 @@ package io.okdocs.compliance.worker.crawler;
 
 import io.okdocs.compliance.contracts.crawler.FormInfo;
 import io.okdocs.compliance.contracts.crawler.PageAnalysisResult;
+import io.okdocs.compliance.contracts.enums.FormPurpose;
 import io.okdocs.compliance.contracts.enums.RenderMode;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -158,7 +159,7 @@ final class PageExtractor {
 
         List<FormInfo> forms = new ArrayList<>();
         for (Element form : doc.select("form")) {
-            forms.add(extractForm(form));
+            forms.add(extractForm(form, url));
         }
 
         boolean cookiePresent = COOKIE_FLAG_PATTERN.matcher(html).find();
@@ -182,7 +183,7 @@ final class PageExtractor {
                 consentScenario);
     }
 
-    private static FormInfo extractForm(Element form) {
+    private static FormInfo extractForm(Element form, String pageUrl) {
         String action = form.absUrl("action");
         if (action.isBlank()) {
             action = form.attr("action");
@@ -195,6 +196,8 @@ final class PageExtractor {
         boolean hasCheckbox = false;
         boolean hasPdField = false;
         boolean hasDefaultCheckedConsent = false;
+        boolean hasCurrentPassword = false;
+        boolean hasNewPassword = false;
 
         // Чекбокс согласия может быть снаружи <form> — расширяем поиск на родительский контейнер.
         Element scope = form.parent() != null ? form.parent() : form;
@@ -202,6 +205,7 @@ final class PageExtractor {
 
         for (Element input : form.select("input, textarea, select")) {
             String type = input.attr("type").toLowerCase(Locale.ROOT);
+            String autocomplete = input.attr("autocomplete").toLowerCase(Locale.ROOT);
             String name = input.attr("name");
             if (!name.isBlank()) {
                 inputNames.add(name);
@@ -210,7 +214,11 @@ final class PageExtractor {
                 case "hidden", "submit", "button", "image", "reset", "search" -> {
                     continue;
                 }
-                case "password" -> hasPassword = true;
+                case "password" -> {
+                    hasPassword = true;
+                    hasCurrentPassword |= autocomplete.contains("current-password");
+                    hasNewPassword |= autocomplete.contains("new-password");
+                }
                 case "file" -> hasFileUpload = true;
                 default -> { /* fall through to PD-field check */ }
             }
@@ -242,6 +250,9 @@ final class PageExtractor {
             }
         }
 
+        FormPurpose purpose = classifyPurpose(pageUrl, action, method, scopeText,
+                hasFileUpload, hasCurrentPassword, hasNewPassword);
+
         return new FormInfo(
                 action,
                 method,
@@ -252,7 +263,66 @@ final class PageExtractor {
                 hasConsentText,
                 hasPrivacyPolicyLink,
                 hasDefaultCheckedConsent,
-                hasPdField);
+                hasPdField,
+                purpose);
+    }
+
+    private static FormPurpose classifyPurpose(String pageUrl, String action, String method,
+                                               String scopeText, boolean hasFileUpload, boolean hasCurrentPassword,
+                                               boolean hasNewPassword) {
+        String path = "";
+        try {
+            String parsed = URI.create(pageUrl == null ? "" : pageUrl).getPath();
+            path = parsed == null ? "" : parsed.toLowerCase(Locale.ROOT);
+        } catch (IllegalArgumentException ignored) {
+            // Остаётся пустой path; назначение попробуем определить по форме.
+        }
+        String hay = (path + " " + safeLower(action) + " " + safeLower(scopeText));
+
+        if (containsAny(path, "/forgot", "/reset", "/recover")
+                || hay.contains("восстанов") || hay.contains("сброс") || hay.contains("forgot password")) {
+            return FormPurpose.PASSWORD_RECOVERY;
+        }
+        if (hasNewPassword || containsAny(path, "/register", "/signup", "/sign-up", "/regist")) {
+            return FormPurpose.AUTH_REGISTER;
+        }
+        if (hasCurrentPassword || containsAny(path,
+                "/login", "/signin", "/sign-in", "/auth", "/vhod")) {
+            return FormPurpose.AUTH_LOGIN;
+        }
+        if ("get".equalsIgnoreCase(method)
+                && (containsAny(path, "/search", "/poisk") || hay.contains("поиск") || hay.contains("search"))) {
+            return FormPurpose.SEARCH;
+        }
+        if (hasFileUpload) {
+            return FormPurpose.FILE_UPLOAD;
+        }
+        if (containsAny(hay, "подпис", "рассыл", "newsletter", "subscribe")) {
+            return FormPurpose.SUBSCRIPTION;
+        }
+        if (containsAny(hay, "checkout", "payment", "оплат", "заказ", "order")) {
+            return FormPurpose.ORDER;
+        }
+        if (containsAny(hay, "contact", "support", "контакт", "обратн", "сообщение")) {
+            return FormPurpose.CONTACT;
+        }
+        if (containsAny(hay, "заявк", "консультац", "request", "application", "lead")) {
+            return FormPurpose.LEAD;
+        }
+        return FormPurpose.UNKNOWN;
+    }
+
+    private static boolean containsAny(String value, String... markers) {
+        for (String marker : markers) {
+            if (value.contains(marker)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String safeLower(String value) {
+        return value == null ? "" : value.toLowerCase(Locale.ROOT);
     }
 
     static String extractDomain(String url) {

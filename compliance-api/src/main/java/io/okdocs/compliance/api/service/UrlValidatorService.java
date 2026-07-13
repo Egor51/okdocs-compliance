@@ -20,6 +20,21 @@ import java.util.Locale;
 @Service
 public class UrlValidatorService {
 
+    @FunctionalInterface
+    interface HostResolver {
+        InetAddress[] resolve(String host) throws UnknownHostException;
+    }
+
+    private final HostResolver hostResolver;
+
+    public UrlValidatorService() {
+        this(InetAddress::getAllByName);
+    }
+
+    UrlValidatorService(HostResolver hostResolver) {
+        this.hostResolver = hostResolver;
+    }
+
     public record ValidatedUrl(String normalizedUrl, String domain) {
     }
 
@@ -60,7 +75,7 @@ public class UrlValidatorService {
     private void assertResolvesToPublicAddress(String host) {
         InetAddress[] addresses;
         try {
-            addresses = InetAddress.getAllByName(host);
+            addresses = hostResolver.resolve(host);
         } catch (UnknownHostException e) {
             throw new ComplianceValidationException("Домен не резолвится: " + host);
         }

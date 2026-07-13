@@ -234,10 +234,32 @@ class HttpSecurityRulesTest {
         private final SensitivePageCacheableRule rule = new SensitivePageCacheableRule();
 
         @Test
-        void flagsLoginPageWithoutNoStore() {
+        void flagsAccountPageWithoutNoStore() {
+            var ctx = TestFixtures.ctxWithResponses(
+                    TestFixtures.response("https://site.ru/account", Map.of()));
+            assertThat(single(rule.evaluate(ctx)).code()).isEqualTo("SENSITIVE_PAGE_CACHEABLE");
+        }
+
+        @Test
+        void ignoresPublicLoginEntryPage() {
             var ctx = TestFixtures.ctxWithResponses(
                     TestFixtures.response("https://site.ru/login", Map.of()));
-            assertThat(single(rule.evaluate(ctx)).code()).isEqualTo("SENSITIVE_PAGE_CACHEABLE");
+            assertThat(rule.evaluate(ctx)).isEmpty();
+        }
+
+        @Test
+        void ignoresPublicArticleContainingPersonalInSlug() {
+            var ctx = TestFixtures.ctxWithResponses(
+                    TestFixtures.response("https://site.ru/ru/blog/personal-data-forms",
+                            Map.of("cache-control", "s-maxage=31536000")));
+            assertThat(rule.evaluate(ctx)).isEmpty();
+        }
+
+        @Test
+        void ignoresSensitiveWordInQuery() {
+            var ctx = TestFixtures.ctxWithResponses(
+                    TestFixtures.response("https://site.ru/blog?next=/account", Map.of()));
+            assertThat(rule.evaluate(ctx)).isEmpty();
         }
 
         @Test

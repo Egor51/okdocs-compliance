@@ -709,6 +709,8 @@ Path parameters:
     "passed": 8,
     "failed": 3,
     "notEvaluated": 0,
+    "coveragePercent": 100,
+    "unverifiedRules": [],
     "positiveChecks": [
       {
         "code": "HTTPS_ENABLED",
@@ -1523,6 +1525,20 @@ Query parameters:
 | `failed` | int |
 | `notEvaluated` | int |
 | `positiveChecks` | array of `PositiveCheckDto` |
+| `coveragePercent` | integer или `null`; доля правил с однозначным автоматическим результатом |
+| `unverifiedRules` | array of `UnverifiedRuleDto`; правила, требующие ручной проверки, и причины |
+
+`UNVERIFIED`-факт не увеличивает `failed`: соответствующее правило учитывается в `notEvaluated`
+и уменьшает `coveragePercent`. Процент считается как `(passed + failed) / общее число правил`.
+
+#### UnverifiedRuleDto
+
+| Поле | Тип |
+|---|---|
+| `code` | string |
+| `title` | string |
+| `category` | `FindingCategory` |
+| `reason` | string или `null` |
 
 #### PositiveCheckDto
 
