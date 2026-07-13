@@ -3,6 +3,7 @@ package io.okdocs.compliance.worker.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.okdocs.compliance.contracts.enums.ScanTier;
+import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.contracts.enums.VerificationStatus;
 import io.okdocs.compliance.contracts.scan.AffectedPageDto;
 import io.okdocs.compliance.contracts.scan.DiagnosticsDto;
@@ -12,6 +13,7 @@ import io.okdocs.compliance.contracts.scan.ReportQualityDto;
 import io.okdocs.compliance.contracts.scan.RuleOutcomeDto;
 import io.okdocs.compliance.contracts.scan.ScanReportResponse;
 import io.okdocs.compliance.contracts.scan.ScanSummaryDto;
+import io.okdocs.compliance.contracts.scan.SanctionExposureDto;
 import io.okdocs.compliance.persistence.scan.ComplianceFinding;
 import io.okdocs.compliance.persistence.scan.ComplianceScan;
 import lombok.RequiredArgsConstructor;
@@ -48,7 +50,7 @@ public class ScanReportBuilder {
         List<ComplianceFinding> representativeFindings = groupedFindings.values().stream()
                 .map(ScanReportBuilder::representative)
                 .toList();
-        ScanSummaryDto summary = summarize(representativeFindings);
+        ScanSummaryDto summary = summarize(scan.getJurisdiction(), representativeFindings);
         DiagnosticsDto diagnostics = diagnostics(scan);
         ReportQualityDto quality = quality(diagnostics);
 
@@ -84,7 +86,7 @@ public class ScanReportBuilder {
                 scan.getScore(),
                 tier,
                 scan.getParentScanId(),
-                summary,
+                premium ? summary : marketingSummary(summary),
                 findingDtos,
                 diagnostics,
                 quality,
@@ -222,7 +224,7 @@ public class ScanReportBuilder {
         return Arrays.stream(raw.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList();
     }
 
-    private ScanSummaryDto summarize(List<ComplianceFinding> findings) {
+    private ScanSummaryDto summarize(ScanJurisdiction jurisdiction, List<ComplianceFinding> findings) {
         int critical = 0, high = 0, medium = 0, low = 0;
         for (ComplianceFinding f : findings) {
             // UNVERIFIED/FALSE_POSITIVE/null describe missing context or an excluded signal. They
@@ -240,7 +242,16 @@ public class ScanReportBuilder {
         // Free-text sanctions cannot be safely parsed or summed: strings mix article numbers,
         // subject types and first/repeated offences. Structured sanction scenarios will replace
         // this legacy field in report v2; keep it null during the backwards-compatible transition.
-        return new ScanSummaryDto(critical, high, medium, low, null);
+        SanctionExposureDto exposure = jurisdiction == ScanJurisdiction.RU
+                ? RuSanctionCatalog.exposure(findings)
+                : null;
+        return new ScanSummaryDto(critical, high, medium, low, null, exposure);
+    }
+
+    private static ScanSummaryDto marketingSummary(ScanSummaryDto summary) {
+        SanctionExposureDto exposure = summary.sanctionExposure();
+        return new ScanSummaryDto(summary.critical(), summary.high(), summary.medium(), summary.low(),
+                summary.totalPotentialFine(), exposure == null ? null : exposure.headlineOnly());
     }
 
     private static boolean isObservedRisk(ComplianceFinding finding) {

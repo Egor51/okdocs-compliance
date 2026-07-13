@@ -154,6 +154,25 @@ class ScanReportBuilderTest {
     }
 
     @Test
+    void freeShowsSanctionHeadlineWhilePremiumContainsScenarioDetails() throws Exception {
+        ComplianceScan scan = scan();
+        ComplianceFinding hosting = finding("HOSTING_OUTSIDE_RU_DETECTED", FindingSeverity.HIGH, 0.9,
+                "https://site.ru/", "public host outside RU", VerificationStatus.DETECTED);
+
+        ScanReportSnapshots snapshots = builder.build(scan, List.of(hosting));
+        ScanReportResponse premium = objectMapper.readValue(snapshots.premiumJson(), ScanReportResponse.class);
+        ScanReportResponse free = objectMapper.readValue(snapshots.freeJson(), ScanReportResponse.class);
+
+        assertThat(premium.summary().totalPotentialFine()).isNull();
+        assertThat(premium.summary().sanctionExposure().headline())
+                .isEqualTo("До 18 000 000 ₽ — повторное нарушение требования локализации баз данных");
+        assertThat(premium.summary().sanctionExposure().scenarios()).hasSize(2);
+        assertThat(free.summary().sanctionExposure().headline())
+                .isEqualTo(premium.summary().sanctionExposure().headline());
+        assertThat(free.summary().sanctionExposure().scenarios()).isEmpty();
+    }
+
+    @Test
     void allActiveRuPassedRulesHavePositiveChecks() throws Exception {
         ComplianceScan scan = scan();
         scan.setDiagnosticsJson("""

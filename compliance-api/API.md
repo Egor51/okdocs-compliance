@@ -621,7 +621,33 @@ Path parameters:
     "high": 1,
     "medium": 2,
     "low": 0,
-    "totalPotentialFine": null
+    "totalPotentialFine": null,
+    "sanctionExposure": {
+      "headline": "До 500 000 ₽ — повторная обработка без предусмотренного законом основания",
+      "maximumRelevantAmount": 500000,
+      "currency": "RUB",
+      "calculationMethod": "MAX_RELEVANT_SCENARIO",
+      "scenariosAreNotSummed": true,
+      "requiresLegalQualification": true,
+      "scenarios": [
+        {
+          "id": "KOAP_13_11_1_1_LEGAL_REPEAT",
+          "label": "повторная обработка без предусмотренного законом основания",
+          "relatedFindingCodes": ["THIRD_PARTY_TRACKERS"],
+          "law": "КоАП РФ",
+          "article": "13.11",
+          "part": "1.1",
+          "subjectType": "Юридическое лицо или ИП",
+          "recurrence": "REPEATED",
+          "minimumAmount": 300000,
+          "maximumAmount": 500000,
+          "currency": "RUB",
+          "applicability": "Только при подтверждении состава и юридически установленной повторности.",
+          "sourceUrl": "https://www.consultant.ru/document/cons_doc_LAW_34661/1f421640c6775ff67079ebde06a7d2f6d17b96db/",
+          "normVerifiedOn": "2026-07-13"
+        }
+      ]
+    }
   },
   "findings": [
     {
@@ -688,6 +714,11 @@ Path parameters:
 free-text findings не складываются, поскольку могут относиться к разным субъектам, составам и
 повторности. `fineAmount` отдельного finding является справочной формулировкой и для `UNVERIFIED`
 не выдаётся.
+
+`summary.sanctionExposure` сохраняет коммерчески заметную сумму, но использует метод
+`MAX_RELEVANT_SCENARIO`: выбирает максимальный размер одного релевантного сценария и не складывает
+разные findings. В FREE `scenarios` — пустой массив (headline используется как paywall pain), в
+PREMIUM возвращаются части КоАП, субъект, повторность и условия применимости.
 
 Если отчёт ещё не готов, возвращается `409 Conflict`.
 
@@ -1377,13 +1408,45 @@ Query parameters:
 
 #### ScanSummaryDto
 
+| Поле | Тип | Примечание |
+|---|---|---|
+| `critical` | int | Наблюдаемые риски |
+| `high` | int | Наблюдаемые риски |
+| `medium` | int | Наблюдаемые риски |
+| `low` | int | Наблюдаемые риски |
+| `totalPotentialFine` | `null` | Deprecated: арифметическое суммирование санкций отключено |
+| `sanctionExposure` | `SanctionExposureDto` или `null` | Максимальный релевантный сценарий, не сумма findings |
+
+#### SanctionExposureDto
+
+| Поле | Тип | Примечание |
+|---|---|---|
+| `headline` | string | Маркетинговый headline, например «До 18 000 000 ₽…» |
+| `maximumRelevantAmount` | Long | Максимум одного наиболее строгого сценария |
+| `currency` | string | `RUB` |
+| `calculationMethod` | string | `MAX_RELEVANT_SCENARIO` |
+| `scenariosAreNotSummed` | boolean | Всегда `true` |
+| `requiresLegalQualification` | boolean | Всегда `true` для текущего RU-каталога |
+| `scenarios` | array of `SanctionScenarioDto` | PREMIUM — детали; FREE — пустой массив |
+
+#### SanctionScenarioDto
+
 | Поле | Тип |
 |---|---|
-| `critical` | int |
-| `high` | int |
-| `medium` | int |
-| `low` | int |
-| `totalPotentialFine` | `null` | Deprecated: арифметическое суммирование санкций отключено |
+| `id` | string |
+| `label` | string |
+| `relatedFindingCodes` | array of string |
+| `law` | string |
+| `article` | string |
+| `part` | string |
+| `subjectType` | string |
+| `recurrence` | `FIRST` или `REPEATED` |
+| `minimumAmount` | long |
+| `maximumAmount` | long |
+| `currency` | string |
+| `applicability` | string |
+| `sourceUrl` | string |
+| `normVerifiedOn` | LocalDate |
 
 #### FindingDto
 
