@@ -239,13 +239,15 @@ public class ScanReportBuilder {
                 case LOW -> low++;
             }
         }
-        // Free-text sanctions cannot be safely parsed or summed: strings mix article numbers,
-        // subject types and first/repeated offences. Structured sanction scenarios will replace
-        // this legacy field in report v2; keep it null during the backwards-compatible transition.
+        // Free-text sanctions нельзя безопасно парсить или суммировать: строки смешивают номера
+        // статей, типы субъектов и повторность. Читаемый диапазон строим только из версионируемого
+        // структурированного каталога: складываем диапазоны независимых групп нарушений, но не
+        // складываем взаимоисключающие альтернативы внутри группы (субъект/повторность).
         SanctionExposureDto exposure = jurisdiction == ScanJurisdiction.RU
                 ? RuSanctionCatalog.exposure(findings)
                 : null;
-        return new ScanSummaryDto(critical, high, medium, low, null, exposure);
+        return new ScanSummaryDto(critical, high, medium, low,
+                RuSanctionCatalog.rangeLabel(exposure), exposure);
     }
 
     private static ScanSummaryDto marketingSummary(ScanSummaryDto summary) {

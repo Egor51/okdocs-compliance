@@ -101,7 +101,7 @@ class ScanReportBuilderTest {
         assertThat(premium.findings()).hasSize(2);
         assertThat(premium.summary().medium()).isEqualTo(1);
         assertThat(premium.summary().high()).isZero(); // UNVERIFIED не является наблюдаемым риском
-        assertThat(premium.summary().totalPotentialFine()).isNull();
+        assertThat(premium.summary().totalPotentialFine()).isEqualTo("от 150 000 до 500 000 ₽");
         assertThat(premium.quality().passed()).isEqualTo(1);
         assertThat(premium.quality().failed()).isEqualTo(1);
         assertThat(premium.quality().notEvaluated()).isEqualTo(1);
@@ -163,9 +163,10 @@ class ScanReportBuilderTest {
         ScanReportResponse premium = objectMapper.readValue(snapshots.premiumJson(), ScanReportResponse.class);
         ScanReportResponse free = objectMapper.readValue(snapshots.freeJson(), ScanReportResponse.class);
 
-        assertThat(premium.summary().totalPotentialFine()).isNull();
+        assertThat(premium.summary().totalPotentialFine()).isEqualTo("от 1 000 000 до 18 000 000 ₽");
+        assertThat(free.summary().totalPotentialFine()).isEqualTo(premium.summary().totalPotentialFine());
         assertThat(premium.summary().sanctionExposure().headline())
-                .isEqualTo("До 18 000 000 ₽ — повторное нарушение требования локализации баз данных");
+                .isEqualTo("От 1 000 000 до 18 000 000 ₽ — суммарно по потенциальным нарушениям");
         assertThat(premium.summary().sanctionExposure().scenarios()).hasSize(2);
         assertThat(free.summary().sanctionExposure().headline())
                 .isEqualTo(premium.summary().sanctionExposure().headline());

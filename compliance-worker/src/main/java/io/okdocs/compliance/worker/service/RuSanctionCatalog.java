@@ -13,7 +13,9 @@ import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Версионируемый RU-каталог санкционных сценариев для внешне наблюдаемых risks. Значения не
@@ -27,6 +29,10 @@ final class RuSanctionCatalog {
                     + "1f421640c6775ff67079ebde06a7d2f6d17b96db/";
     private static final LocalDate VERIFIED_ON = LocalDate.of(2026, 7, 13);
     private static final String RUB = "RUB";
+    private static final String GROUP_GENERAL_PROCESSING = "GENERAL_PROCESSING";
+    private static final String GROUP_PRIVACY_POLICY = "PRIVACY_POLICY_PUBLICATION";
+    private static final String GROUP_RKN_NOTICE = "RKN_OPERATOR_NOTICE";
+    private static final String GROUP_LOCALIZATION = "DATA_LOCALIZATION";
 
     private static final Set<String> GENERAL_PROCESSING_CODES = Set.of(
             "UNPROTECTED_DATA_FORMS",
@@ -51,6 +57,7 @@ final class RuSanctionCatalog {
         if (!generalCodes.isEmpty()) {
             scenarios.add(scenario(
                     "KOAP_13_11_1_LEGAL_FIRST",
+                    GROUP_GENERAL_PROCESSING,
                     "обработка без предусмотренного законом основания",
                     generalCodes, "13.11", "1", "Юридическое лицо", "FIRST",
                     150_000, 300_000,
@@ -58,6 +65,7 @@ final class RuSanctionCatalog {
                             + "несовместимость обработки с заявленной целью."));
             scenarios.add(scenario(
                     "KOAP_13_11_1_1_LEGAL_REPEAT",
+                    GROUP_GENERAL_PROCESSING,
                     "повторная обработка без предусмотренного законом основания",
                     generalCodes, "13.11", "1.1", "Юридическое лицо или ИП", "REPEATED",
                     300_000, 500_000,
@@ -67,12 +75,14 @@ final class RuSanctionCatalog {
         if (activeCodes.contains("NO_PRIVACY_POLICY")) {
             scenarios.add(scenario(
                     "KOAP_13_11_3_IP",
+                    GROUP_PRIVACY_POLICY,
                     "неопубликованная политика обработки ПДн для ИП",
                     List.of("NO_PRIVACY_POLICY"), "13.11", "3", "Индивидуальный предприниматель", "FIRST",
                     10_000, 20_000,
                     "Применимо, если обязанность публикации существует, а доступ к политике действительно не обеспечен."));
             scenarios.add(scenario(
                     "KOAP_13_11_3_LEGAL",
+                    GROUP_PRIVACY_POLICY,
                     "неопубликованная политика обработки ПДн для организации",
                     List.of("NO_PRIVACY_POLICY"), "13.11", "3", "Юридическое лицо", "FIRST",
                     30_000, 60_000,
@@ -82,6 +92,7 @@ final class RuSanctionCatalog {
         if (activeCodes.contains("RKN_REGISTRY_NOT_VERIFIED")) {
             scenarios.add(scenario(
                     "KOAP_13_11_10_NOTICE",
+                    GROUP_RKN_NOTICE,
                     "непредставление или несвоевременное представление уведомления Роскомнадзору",
                     List.of("RKN_REGISTRY_NOT_VERIFIED"), "13.11", "10", "Юридическое лицо или ИП", "FIRST",
                     100_000, 300_000,
@@ -92,6 +103,7 @@ final class RuSanctionCatalog {
         if (activeCodes.contains("HOSTING_OUTSIDE_RU_DETECTED")) {
             scenarios.add(scenario(
                     "KOAP_13_11_8_LOCALIZATION_FIRST",
+                    GROUP_LOCALIZATION,
                     "первое нарушение требования локализации баз данных",
                     List.of("HOSTING_OUTSIDE_RU_DETECTED"), "13.11", "8", "Юридическое лицо или ИП", "FIRST",
                     1_000_000, 6_000_000,
@@ -99,6 +111,7 @@ final class RuSanctionCatalog {
                             + "проверка подтвердит операции с ПДн граждан РФ в зарубежной базе данных."));
             scenarios.add(scenario(
                     "KOAP_13_11_9_LOCALIZATION_REPEAT",
+                    GROUP_LOCALIZATION,
                     "повторное нарушение требования локализации баз данных",
                     List.of("HOSTING_OUTSIDE_RU_DETECTED"), "13.11", "9", "Юридическое лицо или ИП", "REPEATED",
                     6_000_000, 18_000_000,
@@ -111,15 +124,39 @@ final class RuSanctionCatalog {
         }
         scenarios.sort(Comparator.comparingLong(SanctionScenarioDto::maximumAmount).reversed()
                 .thenComparing(SanctionScenarioDto::id));
-        SanctionScenarioDto maximum = scenarios.get(0);
+        Map<String, List<SanctionScenarioDto>> groups = scenarios.stream()
+                .collect(Collectors.groupingBy(SanctionScenarioDto::aggregationGroup));
+        long minimumAmount = groups.values().stream()
+                .mapToLong(group -> group.stream()
+                        .mapToLong(SanctionScenarioDto::minimumAmount)
+                        .min()
+                        .orElseThrow())
+                .sum();
+        long maximumAmount = groups.values().stream()
+                .mapToLong(group -> group.stream()
+                        .mapToLong(SanctionScenarioDto::maximumAmount)
+                        .max()
+                        .orElseThrow())
+                .sum();
         return new SanctionExposureDto(
-                "До " + formatRubles(maximum.maximumAmount()) + " ₽ — " + maximum.label(),
-                maximum.maximumAmount(),
+                "От " + formatRubles(minimumAmount) + " до " + formatRubles(maximumAmount)
+                        + " ₽ — суммарно по потенциальным нарушениям",
+                minimumAmount,
+                maximumAmount,
                 RUB,
-                "MAX_RELEVANT_SCENARIO",
-                true,
+                "SUM_DISTINCT_VIOLATION_GROUP_RANGES",
+                false,
                 true,
                 scenarios);
+    }
+
+    static String rangeLabel(SanctionExposureDto exposure) {
+        if (exposure == null || exposure.minimumRelevantAmount() == null
+                || exposure.maximumRelevantAmount() == null) {
+            return null;
+        }
+        return "от " + formatRubles(exposure.minimumRelevantAmount())
+                + " до " + formatRubles(exposure.maximumRelevantAmount()) + " ₽";
     }
 
     private static Set<String> observedCodes(List<ComplianceFinding> findings) {
@@ -144,9 +181,9 @@ final class RuSanctionCatalog {
     }
 
     private static SanctionScenarioDto scenario(
-            String id, String label, List<String> relatedCodes, String article, String part,
+            String id, String aggregationGroup, String label, List<String> relatedCodes, String article, String part,
             String subjectType, String recurrence, long min, long max, String applicability) {
-        return new SanctionScenarioDto(id, label, relatedCodes, "КоАП РФ", article, part,
+        return new SanctionScenarioDto(id, aggregationGroup, label, relatedCodes, "КоАП РФ", article, part,
                 subjectType, recurrence, min, max, RUB, applicability, SOURCE_URL, VERIFIED_ON);
     }
 

@@ -30,7 +30,7 @@ public class ComplianceScanReport {
     private UUID scanId;
 
     @Column(name = "report_schema_version", nullable = false)
-    private int reportSchemaVersion = 1;
+    private int reportSchemaVersion = 2;
 
     @Column(name = "premium_report_json", nullable = false, columnDefinition = "text")
     private String premiumReportJson;

@@ -12,21 +12,27 @@ import static org.assertj.core.api.Assertions.assertThat;
 class RuSanctionCatalogTest {
 
     @Test
-    void usesMaximumRelevantScenarioInsteadOfSummingFindings() {
+    void sumsDistinctViolationGroupsWithoutDoubleCountingAlternatives() {
         var exposure = RuSanctionCatalog.exposure(List.of(
                 finding("HOSTING_OUTSIDE_RU_DETECTED", VerificationStatus.DETECTED),
                 finding("NO_PRIVACY_POLICY", VerificationStatus.CONFIRMED)));
 
-        assertThat(exposure.maximumRelevantAmount()).isEqualTo(18_000_000);
+        assertThat(exposure.minimumRelevantAmount()).isEqualTo(1_010_000);
+        assertThat(exposure.maximumRelevantAmount()).isEqualTo(18_060_000);
+        assertThat(RuSanctionCatalog.rangeLabel(exposure))
+                .isEqualTo("от 1 010 000 до 18 060 000 ₽");
         assertThat(exposure.headline()).isEqualTo(
-                "До 18 000 000 ₽ — повторное нарушение требования локализации баз данных");
-        assertThat(exposure.calculationMethod()).isEqualTo("MAX_RELEVANT_SCENARIO");
-        assertThat(exposure.scenariosAreNotSummed()).isTrue();
+                "От 1 010 000 до 18 060 000 ₽ — суммарно по потенциальным нарушениям");
+        assertThat(exposure.calculationMethod()).isEqualTo("SUM_DISTINCT_VIOLATION_GROUP_RANGES");
+        assertThat(exposure.scenariosAreNotSummed()).isFalse();
         assertThat(exposure.scenarios())
                 .extracting(s -> s.maximumAmount())
                 .contains(18_000_000L, 6_000_000L, 60_000L, 20_000L);
         assertThat(exposure.maximumRelevantAmount()).isLessThan(
                 exposure.scenarios().stream().mapToLong(s -> s.maximumAmount()).sum());
+        assertThat(exposure.scenarios())
+                .extracting(s -> s.aggregationGroup())
+                .containsOnly("DATA_LOCALIZATION", "PRIVACY_POLICY_PUBLICATION");
     }
 
     @Test
@@ -35,7 +41,10 @@ class RuSanctionCatalogTest {
                 finding("POSSIBLE_TRACKERS_BEFORE_CONSENT", VerificationStatus.DETECTED),
                 finding("THIRD_PARTY_TRACKERS", VerificationStatus.DETECTED)));
 
+        assertThat(exposure.minimumRelevantAmount()).isEqualTo(150_000);
         assertThat(exposure.maximumRelevantAmount()).isEqualTo(500_000);
+        assertThat(RuSanctionCatalog.rangeLabel(exposure))
+                .isEqualTo("от 150 000 до 500 000 ₽");
         assertThat(exposure.scenarios()).hasSize(2);
         assertThat(exposure.scenarios().get(0).relatedFindingCodes())
                 .containsExactly("POSSIBLE_TRACKERS_BEFORE_CONSENT", "THIRD_PARTY_TRACKERS");
