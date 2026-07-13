@@ -18,19 +18,14 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.text.DecimalFormat;
-import java.text.DecimalFormatSymbols;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Сборка снапшотов {@link ScanReportResponse} из {@link ComplianceScan} + findings (§4.2).
@@ -45,8 +40,6 @@ import java.util.regex.Pattern;
 @Component
 @RequiredArgsConstructor
 public class ScanReportBuilder {
-
-    private static final Pattern FINE_NUMBER_PATTERN = Pattern.compile("(\\d[\\d\\s]*)");
 
     private final ObjectMapper objectMapper;
 
@@ -131,13 +124,13 @@ public class ScanReportBuilder {
     }
 
     private static ComplianceFinding betterRepresentative(ComplianceFinding a, ComplianceFinding b) {
-        int confidence = Double.compare(confidenceScore(b), confidenceScore(a));
-        if (confidence != 0) {
-            return confidence > 0 ? b : a;
-        }
         int verification = Integer.compare(verificationRank(b), verificationRank(a));
         if (verification != 0) {
             return verification > 0 ? b : a;
+        }
+        int confidence = Double.compare(confidenceScore(b), confidenceScore(a));
+        if (confidence != 0) {
+            return confidence > 0 ? b : a;
         }
         int evidence = Integer.compare(completenessRank(b), completenessRank(a));
         return evidence > 0 ? b : a;
@@ -185,7 +178,7 @@ public class ScanReportBuilder {
                 f.getSeverity(),
                 f.getCategory(),
                 f.getTitle(),
-                f.getFineAmount(),
+                isObservedRisk(f) ? f.getFineAmount() : null,
                 f.getLegalBasis(),
                 premium ? f.getExplanation() : null,
                 premium ? f.getRecommendation() : null,
@@ -195,8 +188,8 @@ public class ScanReportBuilder {
                 f.getConfidence(),
                 f.getVerificationStatus(),
                 f.getEvidenceType(),
-                premium ? splitSignals(f.getMatchedSignals()) : null
-//                premium ? affectedPages(group) : List.of()
+                premium ? splitSignals(f.getMatchedSignals()) : null,
+                premium ? affectedPages(group) : List.of()
         );
     }
 
@@ -214,6 +207,7 @@ public class ScanReportBuilder {
                         f.getVerificationStatus(),
                         f.getEvidenceType(),
                         splitSignals(f.getMatchedSignals())))
+                .distinct()
                 .toList();
     }
 
@@ -231,6 +225,11 @@ public class ScanReportBuilder {
     private ScanSummaryDto summarize(List<ComplianceFinding> findings) {
         int critical = 0, high = 0, medium = 0, low = 0;
         for (ComplianceFinding f : findings) {
+            // UNVERIFIED/FALSE_POSITIVE/null describe missing context or an excluded signal. They
+            // remain visible in findings/quality, but are not counted as observed legal risks.
+            if (!isObservedRisk(f)) {
+                continue;
+            }
             switch (f.getSeverity()) {
                 case CRITICAL -> critical++;
                 case HIGH -> high++;
@@ -238,53 +237,15 @@ public class ScanReportBuilder {
                 case LOW -> low++;
             }
         }
-        return new ScanSummaryDto(critical, high, medium, low, totalFine(findings));
+        // Free-text sanctions cannot be safely parsed or summed: strings mix article numbers,
+        // subject types and first/repeated offences. Structured sanction scenarios will replace
+        // this legacy field in report v2; keep it null during the backwards-compatible transition.
+        return new ScanSummaryDto(critical, high, medium, low, null);
     }
 
-    private String totalFine(List<ComplianceFinding> findings) {
-        long min = 0;
-        long max = 0;
-        for (ComplianceFinding finding : findings) {
-            long[] range = fineRange(finding.getFineAmount());
-            min += range[0];
-            max += range[1];
-        }
-        if (max == 0) {
-            return null;
-        }
-        DecimalFormatSymbols symbols = new DecimalFormatSymbols(Locale.ROOT);
-        symbols.setGroupingSeparator(' ');
-        DecimalFormat fmt = new DecimalFormat("#,##0", symbols);
-        return "от " + fmt.format(min) + " до " + fmt.format(max) + " ₽";
-    }
-
-    private static long[] fineRange(String fineAmount) {
-        if (fineAmount == null || fineAmount.isBlank()) {
-            return new long[]{0, 0};
-        }
-        Matcher matcher = FINE_NUMBER_PATTERN.matcher(fineAmount);
-        long min = Long.MAX_VALUE;
-        long max = 0;
-        while (matcher.find()) {
-            String raw = matcher.group(1).replaceAll("\\s", "");
-            if (raw.isEmpty()) {
-                continue;
-            }
-            try {
-                long value = Long.parseLong(raw);
-                if (value < 1000) {
-                    continue;
-                }
-                min = Math.min(min, value);
-                max = Math.max(max, value);
-            } catch (NumberFormatException ignored) {
-                // Fine text is free-form; non-parseable fragments are ignored.
-            }
-        }
-        if (min == Long.MAX_VALUE) {
-            return new long[]{0, 0};
-        }
-        return new long[]{min, max};
+    private static boolean isObservedRisk(ComplianceFinding finding) {
+        VerificationStatus status = finding.getVerificationStatus();
+        return status == VerificationStatus.CONFIRMED || status == VerificationStatus.DETECTED;
     }
 
     private DiagnosticsDto diagnostics(ComplianceScan scan) {

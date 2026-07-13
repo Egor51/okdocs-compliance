@@ -17,8 +17,11 @@ import java.util.stream.Collectors;
  * едина для worker и app. Дефолты подобраны так, чтобы три серьёзных CONFIRMED-нарушения
  * (HIGH + 2×MEDIUM) давали score ≈ 48, а не 62 — пользователь видит реальный риск.
  * <p>
- * Дедупликация по {@code code}: per-page findings одного правила считаются один раз
- * (репрезентативный — с наибольшей confidence, худший случай).
+ * Дедупликация по {@code code}: per-page findings одного правила считаются один раз. Сначала
+ * выбирается наиболее доказательный verification status, затем confidence. Поэтому вероятностный
+ * {@code UNVERIFIED} с высокой confidence не может вытеснить наблюдаемый {@code DETECTED}.
+ * {@code UNVERIFIED}, {@code FALSE_POSITIVE} и null не уменьшают score: это неполнота проверки или
+ * опровергнутый риск, а не нарушение.
  */
 @Component
 public class ScoreCalculator {
@@ -50,21 +53,40 @@ public class ScoreCalculator {
         return Math.max(config.getInitial() - totalDeduction, 0);
     }
 
-    /** Returns one finding per rule code, picking the highest-confidence instance. */
+    /** Returns one finding per rule code, preferring verified observations, then confidence. */
     public List<ComplianceFinding> deduplicate(List<ComplianceFinding> findings) {
         return findings.stream()
                 .collect(Collectors.toMap(
                         ComplianceFinding::getCode,
                         f -> f,
-                        (a, b) -> (b.getConfidence() != null && (a.getConfidence() == null
-                                || b.getConfidence() > a.getConfidence())) ? b : a))
+                        ScoreCalculator::betterRiskRepresentative))
                 .values().stream().toList();
+    }
+
+    private static ComplianceFinding betterRiskRepresentative(ComplianceFinding a, ComplianceFinding b) {
+        int statusComparison = Integer.compare(riskRank(b.getVerificationStatus()), riskRank(a.getVerificationStatus()));
+        if (statusComparison != 0) {
+            return statusComparison > 0 ? b : a;
+        }
+        double aConfidence = a.getConfidence() == null ? -1.0 : a.getConfidence();
+        double bConfidence = b.getConfidence() == null ? -1.0 : b.getConfidence();
+        return bConfidence > aConfidence ? b : a;
+    }
+
+    private static int riskRank(VerificationStatus status) {
+        if (status == VerificationStatus.CONFIRMED) {
+            return 2;
+        }
+        if (status == VerificationStatus.DETECTED) {
+            return 1;
+        }
+        return 0;
     }
 
     private int weighted(ComplianceFinding f) {
         int base = config.basePointsFor(f.getSeverity());
-        // CONFIRMED → 100%; DETECTED — техсигнал без юр-контекста → 65%; UNVERIFIED/null — паттерн-
-        // инференс → DEFAULT (80%). Ключ — имя статуса; null статус берёт DEFAULT.
+        // CONFIRMED → 100%; DETECTED — наблюдаемый техсигнал без полного юр-контекста → 65%;
+        // UNVERIFIED/FALSE_POSITIVE/null → 0%. Ключ — имя статуса; неизвестный/null берёт DEFAULT.
         VerificationStatus status = f.getVerificationStatus();
         double weight = config.weightFor(status == null ? null : status.name());
         return (int) Math.round(base * weight);

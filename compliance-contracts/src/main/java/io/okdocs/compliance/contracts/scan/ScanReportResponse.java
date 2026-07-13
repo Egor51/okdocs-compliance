@@ -9,7 +9,8 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Полный отчёт скана. {@code paywallCta} присутствует только в FREE.
+ * Полный отчёт скана. {@code paywallCta} присутствует только в FREE. {@code score} — индекс
+ * наблюдаемого риска внешнего контура, а не процент полного соответствия требованиям юрисдикции.
  * <p>
  * {@code jurisdiction} API всегда подставляет из живой сущности скана при выдаче (старые снапшоты
  * в БД поля не содержат) — см. {@code ScanCommandService#fromSnapshot}.

@@ -20,6 +20,7 @@ import io.okdocs.compliance.rules.uk.UkPecrNoRejectOptionRule;
 import io.okdocs.compliance.rules.uk.UkPecrTrackersBeforeConsentRule;
 import io.okdocs.compliance.rules.uk.UkPrivacyNoticeMissingRule;
 import io.okdocs.compliance.rules.ru.ConsentDefaultCheckedRule;
+import io.okdocs.compliance.rules.ru.ConsentChoiceNotEffectiveRule;
 import io.okdocs.compliance.rules.common.CookieWithoutSecureFlagRule;
 import io.okdocs.compliance.rules.ru.CrossBorderTransferRule;
 import io.okdocs.compliance.rules.ru.DnsCnameToForeignCloudRule;
@@ -89,6 +90,7 @@ public class RulesConfiguration {
 //                new NotInRknRegistryRule(),
                 new NonRuHostingRule(),
                 new TrackersBeforeConsentRule(),
+                new ConsentChoiceNotEffectiveRule(),
                 // RU-специфичные security/transport/DNS (привязаны к 152-ФЗ-формулировкам/хостингу).
                 new MissingReferrerPolicyRule(),
                 new MissingXContentTypeOptionsRule(),

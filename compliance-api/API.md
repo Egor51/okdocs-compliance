@@ -621,7 +621,7 @@ Path parameters:
     "high": 1,
     "medium": 2,
     "low": 0,
-    "totalPotentialFine": "60 000 — 220 000 ₽"
+    "totalPotentialFine": null
   },
   "findings": [
     {
@@ -679,6 +679,15 @@ Path parameters:
   "finishedAt": "2026-06-17T12:01:30Z"
 }
 ```
+
+`score` — индекс наблюдаемого риска внешнего контура, а не процент полного соответствия 152-ФЗ.
+`UNVERIFIED`, `FALSE_POSITIVE` и findings без verification status не уменьшают `score` и не входят
+в severity-сводку. Неполнота проверки отражается в `diagnostics` и `quality`.
+
+`summary.totalPotentialFine` — deprecated legacy-поле и для новых отчётов всегда `null`: суммы из
+free-text findings не складываются, поскольку могут относиться к разным субъектам, составам и
+повторности. `fineAmount` отдельного finding является справочной формулировкой и для `UNVERIFIED`
+не выдаётся.
 
 Если отчёт ещё не готов, возвращается `409 Conflict`.
 
@@ -1374,7 +1383,7 @@ Query parameters:
 | `high` | int |
 | `medium` | int |
 | `low` | int |
-| `totalPotentialFine` | string |
+| `totalPotentialFine` | `null` | Deprecated: арифметическое суммирование санкций отключено |
 
 #### FindingDto
 
@@ -1395,7 +1404,7 @@ Query parameters:
 | `verificationStatus` | `VerificationStatus` или `null` |
 | `evidenceType` | `EvidenceType` или `null` |
 | `matchedSignals` | array of string или `null` |
-| `affectedPages` | array of `AffectedPageDto` или `null` |
+| `affectedPages` | array of `AffectedPageDto` | В PREMIUM — все страницы finding; в FREE — пустой массив. В старых snapshots может быть `null` |
 
 #### AffectedPageDto
 

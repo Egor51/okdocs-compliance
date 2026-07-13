@@ -93,11 +93,13 @@ compliance:
       MEDIUM: 12
       LOW: 5
     verification-weight:
-      # CONFIRMED — подтверждено → 100%; DETECTED — техсигнал без юр-контекста → 65%;
-      # DEFAULT — фолбэк для UNVERIFIED и null (паттерн-инференс) → 80%.
+      # CONFIRMED — подтверждено → 100%; DETECTED — наблюдаемый техсигнал без полного
+      # юр-контекста → 65%; UNVERIFIED/FALSE_POSITIVE/null не являются нарушениями → 0%.
       CONFIRMED: 1.00
       DETECTED: 0.65
-      DEFAULT: 0.80
+      UNVERIFIED: 0.00
+      FALSE_POSITIVE: 0.00
+      DEFAULT: 0.00
   outbox:
     # Outbox relay (общий для api и worker). max-retries/batch-size/backoff читает
     # OutboxProperties (compliance-messaging); poll-interval-ms — @Scheduled в

@@ -283,8 +283,8 @@ public class ComplianceWorkerProperties {
         private Map<FindingSeverity, Integer> basePoints = defaultBasePoints();
         /**
          * Вес по verification-статусу (ключи — имена {@code VerificationStatus} + {@code DEFAULT}).
-         * {@code DEFAULT} — фолбэк для UNVERIFIED и null. Строкой, а не enum: нужен синтетический
-         * ключ DEFAULT, которого нет в enum'е.
+         * {@code DEFAULT} — безопасный фолбэк для UNVERIFIED, FALSE_POSITIVE, null и будущих
+         * неизвестных статусов. Они не являются подтверждённым риском и не уменьшают score.
          */
         private Map<String, Double> verificationWeight = defaultVerificationWeight();
         /**
@@ -308,7 +308,9 @@ public class ComplianceWorkerProperties {
             Map<String, Double> m = new java.util.LinkedHashMap<>();
             m.put("CONFIRMED", 1.00);
             m.put("DETECTED", 0.65);
-            m.put("DEFAULT", 0.80);
+            m.put("UNVERIFIED", 0.00);
+            m.put("FALSE_POSITIVE", 0.00);
+            m.put("DEFAULT", 0.00);
             return m;
         }
 

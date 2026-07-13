@@ -20,8 +20,9 @@ import java.util.Set;
 /**
  * Сторонние трекеры (включая российские) загружаются на сайте. Метаданные перенесены из MVP
  * (okdocks {@code THIRD_PARTY_TRACKERS}). Детекция: домены из {@link RuTrackerDomains#ALL} в
- * external script/style доменах. Если трекеры упомянуты в политике — DETECTED/0.70, иначе
- * UNVERIFIED/0.90.
+ * external script/style доменах. Finding создаётся только для сервиса, который не удалось найти в
+ * тексте политики: сам сетевой сервис наблюдаем, а отсутствие раскрытия проверяется в доступном
+ * документе. Полнота и юридическое качество раскрытия остаются отдельной задачей.
  */
 public final class ThirdPartyTrackersRule implements Rule {
 
@@ -30,16 +31,16 @@ public final class ThirdPartyTrackersRule implements Rule {
             ScanJurisdiction.RU,
             FindingSeverity.MEDIUM,
             FindingCategory.TRACKERS,
-            "Используются сторонние трекеры без раскрытия в политике",
-            "150 000 – 300 000 ₽ для юрлиц; при повторном нарушении 300 000 – 500 000 ₽ для юрлиц",
-            "ст. 13.11 ч. 1 и ч. 1.1 КоАП РФ, ст. 6, ст. 18.1 152-ФЗ",
+            "Сторонний аналитический сервис не раскрыт в доступной политике",
+            null,
+            "ст. 6 и ст. 18.1 152-ФЗ",
             "Если сайт использует Яндекс.Метрику, Google Analytics, рекламные пиксели, виджеты "
                     + "соцсетей, карты, онлайн-чаты или иные сторонние сервисы, такая обработка должна быть "
                     + "раскрыта в политике обработки ПДн с указанием категорий данных, целей и правового "
                     + "основания обработки.",
             "1. Проведите инвентаризацию всех сторонних скриптов и трекеров. 2. Перечислите их в "
                     + "политике обработки ПДн. 3. Укажите цели обработки и категории данных. 4. Для "
-                    + "необязательной аналитики получайте согласие до загрузки трекеров. 5. Проверьте, "
+                    + "аналитики определите применимое правовое основание. 5. Проверьте, "
                     + "не создают ли сервисы трансграничную передачу ПДн.",
             "Нераскрытые сторонние трекеры не обнаружены",
             "Сканер не выявил сторонние трекеры, не раскрытые в политике обработки ПДн.");
@@ -61,19 +62,22 @@ public final class ThirdPartyTrackersRule implements Rule {
             if (found.isEmpty()) {
                 continue;
             }
-            // Считаем локально по доменам именно этой страницы (P2): иначе одно упоминание в
-            // политике пометило бы DETECTED последующие, не упомянутые домены.
-            boolean mentioned = RuPatterns.trackersMentionedInPolicy(ctx, found);
+            // Фильтруем каждый домен отдельно: раскрытие Yandex не должно скрыть нераскрытый
+            // HubSpot на той же странице.
+            found.removeIf(domain -> RuPatterns.trackersMentionedInPolicy(ctx, Set.of(domain)));
+            if (found.isEmpty()) {
+                continue;
+            }
             facts.add(new RuleFact(
                     DEFINITION.code(),
-                    "Загружаются сторонние трекеры: " + String.join(", ", found)
-                            + (mentioned ? ". Упомянуты в политике — проверьте полноту раскрытия." : ""),
+                    "Наблюдается сторонний сервис, не найденный в доступном тексте политики: "
+                            + String.join(", ", found) + ".",
                     p.url(),
                     SourceType.HTML,
                     RuleSupport.evidenceType(ctx),
-                    mentioned ? 0.70 : 0.90,
+                    0.85,
                     String.join(",", found),
-                    mentioned ? VerificationStatus.DETECTED : VerificationStatus.UNVERIFIED));
+                    VerificationStatus.DETECTED));
         }
         return facts;
     }
