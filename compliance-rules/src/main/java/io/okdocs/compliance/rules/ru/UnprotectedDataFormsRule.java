@@ -6,6 +6,7 @@ import io.okdocs.compliance.contracts.crawler.ScanAnalysisContext;
 import io.okdocs.compliance.contracts.enums.EvidenceType;
 import io.okdocs.compliance.contracts.enums.FindingCategory;
 import io.okdocs.compliance.contracts.enums.FindingSeverity;
+import io.okdocs.compliance.contracts.enums.FormPurpose;
 import io.okdocs.compliance.contracts.enums.RenderMode;
 import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.contracts.enums.SourceType;
@@ -44,8 +45,10 @@ public final class UnprotectedDataFormsRule implements Rule {
                     + "должен быть отмечен по умолчанию. 3. Разместите рядом ссылку на отдельный текст "
                     + "согласия. 4. Блокируйте отправку формы до активного действия пользователя. "
                     + "5. Логируйте факт получения согласия: дату, время, версию текста, IP и источник формы.",
-            "Небезопасные формы с персональными данными не обнаружены",
-            "Сканер не нашёл формы с персональными данными, отправляемые по незащищённому HTTP.");
+            "Формы без видимого механизма согласия не обнаружены в проверяемом scope",
+            "Среди обследованных контактных, lead-, subscription- и нераспознанных форм с ПДн-полями "
+                    + "сканер не обнаружил форму без видимого механизма согласия. Auth/order/search-формы "
+                    + "этим правилом не оцениваются.");
 
     @Override
     public RuleDefinition definition() {
@@ -60,7 +63,7 @@ public final class UnprotectedDataFormsRule implements Rule {
             if (page.forms() == null) {
                 continue;
             }
-            boolean pageHasPdForm = page.forms().stream().anyMatch(RuleSupport::collectsData);
+            boolean pageHasPdForm = page.forms().stream().anyMatch(UnprotectedDataFormsRule::isConsentRelevant);
             if (!pageHasPdForm || RuPatterns.pageHasConsent(page)) {
                 continue;
             }
@@ -82,11 +85,24 @@ public final class UnprotectedDataFormsRule implements Rule {
     private static String describeForms(PageAnalysisResult page) {
         List<String> names = new ArrayList<>();
         for (FormInfo form : page.forms()) {
-            if (RuleSupport.collectsData(form)) {
+            if (isConsentRelevant(form)) {
                 String action = form.action();
-                names.add(action == null || action.isBlank() ? "(без action)" : action);
+                String target = action == null || action.isBlank() ? "JavaScript handler" : action;
+                names.add("purpose=" + form.purpose() + ", target=" + target);
             }
         }
         return names.isEmpty() ? "не удалось определить" : String.join("; ", names);
+    }
+
+    private static boolean isConsentRelevant(FormInfo form) {
+        if (!RuleSupport.collectsData(form)) {
+            return false;
+        }
+        FormPurpose purpose = form.purpose();
+        return purpose == FormPurpose.CONTACT
+                || purpose == FormPurpose.LEAD
+                || purpose == FormPurpose.SUBSCRIPTION
+                || purpose == FormPurpose.FILE_UPLOAD
+                || purpose == FormPurpose.UNKNOWN;
     }
 }

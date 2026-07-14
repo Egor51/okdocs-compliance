@@ -53,28 +53,28 @@ class TrackersBeforeConsentRuleTest {
     }
 
     @Test
-    void confirmsWhenTrackerRequestObservedBeforeConsent() {
-        // DYNAMIC: CDP-таймлайн зафиксировал запрос трекера до баннера → CONFIRMED 0.95.
+    void detectsWhenTrackerRequestObservedBeforeChoice() {
+        // DYNAMIC подтверждает технический факт; юридический контекст остаётся отдельным → DETECTED.
         List<RuleFact> facts = rule.evaluate(TestFixtures.ctx(
                 TestFixtures.dynamicPageWithPreConsent("https://site.ru",
                         List.of("mc.yandex.ru"), List.of("mc.yandex.ru"))));
 
         assertThat(facts).singleElement().satisfies(f -> {
-            assertThat(f.verificationStatus()).isEqualTo(VerificationStatus.CONFIRMED);
+            assertThat(f.verificationStatus()).isEqualTo(VerificationStatus.DETECTED);
             assertThat(f.confidence()).isEqualTo(0.95);
             assertThat(f.evidence()).contains("mc.yandex.ru");
         });
     }
 
     @Test
-    void confirmsWhenCookieBannerPresentButTrackerRequestObservedBeforeIt() {
+    void detectsWhenCookieBannerPresentButTrackerRequestObservedBeforeIt() {
         // Итоговый DOM уже содержит баннер, но CDP-таймлайн доказал, что трекер ушёл раньше.
         List<RuleFact> facts = rule.evaluate(TestFixtures.ctx(
                 TestFixtures.dynamicPageWithPreConsent("https://site.ru",
                         List.of("mc.yandex.ru"), List.of("mc.yandex.ru"), true)));
 
         assertThat(facts).singleElement().satisfies(f -> {
-            assertThat(f.verificationStatus()).isEqualTo(VerificationStatus.CONFIRMED);
+            assertThat(f.verificationStatus()).isEqualTo(VerificationStatus.DETECTED);
             assertThat(f.confidence()).isEqualTo(0.95);
         });
     }
@@ -96,13 +96,13 @@ class TrackersBeforeConsentRuleTest {
     @Test
     void preConsentHostMatchesTrackerBySubdomain() {
         // Наблюдённый хост — поддомен/конкретный хост, в справочнике запись по корню: matchTracker
-        // должен свести его к трекеру и дать CONFIRMED.
+        // должен свести его к трекеру и дать DETECTED.
         List<RuleFact> facts = rule.evaluate(TestFixtures.ctx(
                 TestFixtures.dynamicPageWithPreConsent("https://site.ru",
                         List.of("www.google-analytics.com"),
                         List.of("www.google-analytics.com"))));
 
         assertThat(facts).singleElement().satisfies(f ->
-                assertThat(f.verificationStatus()).isEqualTo(VerificationStatus.CONFIRMED));
+                assertThat(f.verificationStatus()).isEqualTo(VerificationStatus.DETECTED));
     }
 }

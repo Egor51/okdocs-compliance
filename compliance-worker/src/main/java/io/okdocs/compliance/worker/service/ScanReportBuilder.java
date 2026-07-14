@@ -3,6 +3,7 @@ package io.okdocs.compliance.worker.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.okdocs.compliance.contracts.enums.ScanTier;
+import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.contracts.enums.VerificationStatus;
 import io.okdocs.compliance.contracts.scan.AffectedPageDto;
 import io.okdocs.compliance.contracts.scan.DiagnosticsDto;
@@ -12,25 +13,22 @@ import io.okdocs.compliance.contracts.scan.ReportQualityDto;
 import io.okdocs.compliance.contracts.scan.RuleOutcomeDto;
 import io.okdocs.compliance.contracts.scan.ScanReportResponse;
 import io.okdocs.compliance.contracts.scan.ScanSummaryDto;
+import io.okdocs.compliance.contracts.scan.SanctionExposureDto;
+import io.okdocs.compliance.contracts.scan.UnverifiedRuleDto;
 import io.okdocs.compliance.persistence.scan.ComplianceFinding;
 import io.okdocs.compliance.persistence.scan.ComplianceScan;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.text.DecimalFormat;
-import java.text.DecimalFormatSymbols;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Сборка снапшотов {@link ScanReportResponse} из {@link ComplianceScan} + findings (§4.2).
@@ -46,8 +44,6 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 public class ScanReportBuilder {
 
-    private static final Pattern FINE_NUMBER_PATTERN = Pattern.compile("(\\d[\\d\\s]*)");
-
     private final ObjectMapper objectMapper;
 
     public ScanReportSnapshots build(ComplianceScan scan, List<ComplianceFinding> findings) {
@@ -55,9 +51,9 @@ public class ScanReportBuilder {
         List<ComplianceFinding> representativeFindings = groupedFindings.values().stream()
                 .map(ScanReportBuilder::representative)
                 .toList();
-        ScanSummaryDto summary = summarize(representativeFindings);
+        ScanSummaryDto summary = summarize(scan.getJurisdiction(), representativeFindings);
         DiagnosticsDto diagnostics = diagnostics(scan);
-        ReportQualityDto quality = quality(diagnostics);
+        ReportQualityDto quality = quality(diagnostics, representativeFindings);
 
         ScanReportResponse premium = response(scan, ScanTier.PREMIUM, groupedFindings, summary, diagnostics, quality, true);
         ScanReportResponse free = response(scan, ScanTier.FREE, groupedFindings, summary, diagnostics, quality, false);
@@ -91,10 +87,10 @@ public class ScanReportBuilder {
                 scan.getScore(),
                 tier,
                 scan.getParentScanId(),
-                summary,
+                premium ? summary : marketingSummary(summary),
                 findingDtos,
                 diagnostics,
-                quality,
+                premium ? quality : marketingQuality(quality),
                 null, // paywallCta дописывает API при выдаче FREE (product-shell, не compliance-данные)
                 durationMs(scan),
                 scan.getCreatedAt(),
@@ -131,13 +127,13 @@ public class ScanReportBuilder {
     }
 
     private static ComplianceFinding betterRepresentative(ComplianceFinding a, ComplianceFinding b) {
-        int confidence = Double.compare(confidenceScore(b), confidenceScore(a));
-        if (confidence != 0) {
-            return confidence > 0 ? b : a;
-        }
         int verification = Integer.compare(verificationRank(b), verificationRank(a));
         if (verification != 0) {
             return verification > 0 ? b : a;
+        }
+        int confidence = Double.compare(confidenceScore(b), confidenceScore(a));
+        if (confidence != 0) {
+            return confidence > 0 ? b : a;
         }
         int evidence = Integer.compare(completenessRank(b), completenessRank(a));
         return evidence > 0 ? b : a;
@@ -185,7 +181,7 @@ public class ScanReportBuilder {
                 f.getSeverity(),
                 f.getCategory(),
                 f.getTitle(),
-                f.getFineAmount(),
+                isObservedRisk(f) ? f.getFineAmount() : null,
                 f.getLegalBasis(),
                 premium ? f.getExplanation() : null,
                 premium ? f.getRecommendation() : null,
@@ -195,8 +191,8 @@ public class ScanReportBuilder {
                 f.getConfidence(),
                 f.getVerificationStatus(),
                 f.getEvidenceType(),
-                premium ? splitSignals(f.getMatchedSignals()) : null
-//                premium ? affectedPages(group) : List.of()
+                premium ? splitSignals(f.getMatchedSignals()) : null,
+                premium ? affectedPages(group) : List.of()
         );
     }
 
@@ -214,6 +210,7 @@ public class ScanReportBuilder {
                         f.getVerificationStatus(),
                         f.getEvidenceType(),
                         splitSignals(f.getMatchedSignals())))
+                .distinct()
                 .toList();
     }
 
@@ -228,9 +225,14 @@ public class ScanReportBuilder {
         return Arrays.stream(raw.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList();
     }
 
-    private ScanSummaryDto summarize(List<ComplianceFinding> findings) {
+    private ScanSummaryDto summarize(ScanJurisdiction jurisdiction, List<ComplianceFinding> findings) {
         int critical = 0, high = 0, medium = 0, low = 0;
         for (ComplianceFinding f : findings) {
+            // UNVERIFIED/FALSE_POSITIVE/null describe missing context or an excluded signal. They
+            // remain visible in findings/quality, but are not counted as observed legal risks.
+            if (!isObservedRisk(f)) {
+                continue;
+            }
             switch (f.getSeverity()) {
                 case CRITICAL -> critical++;
                 case HIGH -> high++;
@@ -238,53 +240,34 @@ public class ScanReportBuilder {
                 case LOW -> low++;
             }
         }
-        return new ScanSummaryDto(critical, high, medium, low, totalFine(findings));
+        // Free-text sanctions нельзя безопасно парсить или суммировать: строки смешивают номера
+        // статей, типы субъектов и повторность. Читаемый диапазон строим только из версионируемого
+        // структурированного каталога: складываем диапазоны независимых групп нарушений, но не
+        // складываем взаимоисключающие альтернативы внутри группы (субъект/повторность).
+        SanctionExposureDto exposure = jurisdiction == ScanJurisdiction.RU
+                ? RuSanctionCatalog.exposure(findings)
+                : null;
+        return new ScanSummaryDto(critical, high, medium, low,
+                RuSanctionCatalog.rangeLabel(exposure), exposure);
     }
 
-    private String totalFine(List<ComplianceFinding> findings) {
-        long min = 0;
-        long max = 0;
-        for (ComplianceFinding finding : findings) {
-            long[] range = fineRange(finding.getFineAmount());
-            min += range[0];
-            max += range[1];
-        }
-        if (max == 0) {
-            return null;
-        }
-        DecimalFormatSymbols symbols = new DecimalFormatSymbols(Locale.ROOT);
-        symbols.setGroupingSeparator(' ');
-        DecimalFormat fmt = new DecimalFormat("#,##0", symbols);
-        return "от " + fmt.format(min) + " до " + fmt.format(max) + " ₽";
+    private static ScanSummaryDto marketingSummary(ScanSummaryDto summary) {
+        SanctionExposureDto exposure = summary.sanctionExposure();
+        return new ScanSummaryDto(summary.critical(), summary.high(), summary.medium(), summary.low(),
+                summary.totalPotentialFine(), exposure == null ? null : exposure.headlineOnly());
     }
 
-    private static long[] fineRange(String fineAmount) {
-        if (fineAmount == null || fineAmount.isBlank()) {
-            return new long[]{0, 0};
-        }
-        Matcher matcher = FINE_NUMBER_PATTERN.matcher(fineAmount);
-        long min = Long.MAX_VALUE;
-        long max = 0;
-        while (matcher.find()) {
-            String raw = matcher.group(1).replaceAll("\\s", "");
-            if (raw.isEmpty()) {
-                continue;
-            }
-            try {
-                long value = Long.parseLong(raw);
-                if (value < 1000) {
-                    continue;
-                }
-                min = Math.min(min, value);
-                max = Math.max(max, value);
-            } catch (NumberFormatException ignored) {
-                // Fine text is free-form; non-parseable fragments are ignored.
-            }
-        }
-        if (min == Long.MAX_VALUE) {
-            return new long[]{0, 0};
-        }
-        return new long[]{min, max};
+    private static ReportQualityDto marketingQuality(ReportQualityDto quality) {
+        List<UnverifiedRuleDto> maskedRules = quality.unverifiedRules().stream()
+                .map(rule -> new UnverifiedRuleDto(rule.code(), rule.title(), rule.category(), null))
+                .toList();
+        return new ReportQualityDto(quality.passed(), quality.failed(), quality.notEvaluated(),
+                quality.positiveChecks(), quality.coveragePercent(), maskedRules);
+    }
+
+    private static boolean isObservedRisk(ComplianceFinding finding) {
+        VerificationStatus status = finding.getVerificationStatus();
+        return status == VerificationStatus.CONFIRMED || status == VerificationStatus.DETECTED;
     }
 
     private DiagnosticsDto diagnostics(ComplianceScan scan) {
@@ -311,9 +294,19 @@ public class ScanReportBuilder {
     private static final Map<String, String> POSITIVE_PRECONDITION = Map.of(
             "WEAK_CSP", "MISSING_CSP");
 
-    private static ReportQualityDto quality(DiagnosticsDto diagnostics) {
+    private static ReportQualityDto quality(DiagnosticsDto diagnostics,
+                                            List<ComplianceFinding> representativeFindings) {
         if (diagnostics == null || diagnostics.ruleOutcomes() == null || diagnostics.ruleOutcomes().isEmpty()) {
             return new ReportQualityDto(0, 0, 0, List.of());
+        }
+        Map<String, ComplianceFinding> unverifiedFindings = new LinkedHashMap<>();
+        if (representativeFindings != null) {
+            for (ComplianceFinding finding : representativeFindings) {
+                if (finding != null && finding.getCode() != null
+                        && finding.getVerificationStatus() == VerificationStatus.UNVERIFIED) {
+                    unverifiedFindings.putIfAbsent(finding.getCode(), finding);
+                }
+            }
         }
         // Коды проваленных правил — для подавления зависимых positive-проверок.
         Set<String> failedCodes = new HashSet<>();
@@ -327,6 +320,7 @@ public class ScanReportBuilder {
         int failed = 0;
         int notEvaluated = 0;
         List<PositiveCheckDto> positiveChecks = new ArrayList<>();
+        Map<String, UnverifiedRuleDto> unverifiedRules = new LinkedHashMap<>();
         for (RuleOutcomeDto outcome : diagnostics.ruleOutcomes()) {
             if (outcome == null || outcome.status() == null) {
                 continue;
@@ -336,6 +330,7 @@ public class ScanReportBuilder {
                     if (isSuppressedByPrecondition(outcome.code(), failedCodes)) {
                         // Предпосылка провалена → positive вводит в заблуждение. Не зелёный.
                         notEvaluated++;
+                        unverifiedRules.putIfAbsent(outcome.code(), unverifiedRule(outcome, null));
                     } else {
                         passed++;
                         PositiveCheckDto positive = positiveCheck(outcome);
@@ -344,14 +339,38 @@ public class ScanReportBuilder {
                         }
                     }
                 }
-                case "FAILED" -> failed++;
-                case "NOT_EVALUATED" -> notEvaluated++;
+                case "FAILED" -> {
+                    ComplianceFinding unverified = unverifiedFindings.get(outcome.code());
+                    if (unverified == null) {
+                        failed++;
+                    } else {
+                        // RuleEngine возвращает FAILED при любом fact, но UNVERIFIED-fact не является
+                        // установленным нарушением и уменьшает coverage, а не индекс риска.
+                        notEvaluated++;
+                        unverifiedRules.putIfAbsent(outcome.code(), unverifiedRule(
+                                outcome, firstNonBlank(unverified.getEvidence(), unverified.getExplanation())));
+                    }
+                }
+                case "NOT_EVALUATED" -> {
+                    notEvaluated++;
+                    unverifiedRules.putIfAbsent(outcome.code(), unverifiedRule(outcome, outcome.message()));
+                }
                 default -> {
                     // unknown future status: keep report readable, don't count it as green
                 }
             }
         }
-        return new ReportQualityDto(passed, failed, notEvaluated, List.copyOf(positiveChecks));
+        int total = passed + failed + notEvaluated;
+        Integer coveragePercent = total == 0
+                ? null
+                : (int) Math.round((passed + failed) * 100.0 / total);
+        return new ReportQualityDto(passed, failed, notEvaluated, List.copyOf(positiveChecks),
+                coveragePercent, List.copyOf(unverifiedRules.values()));
+    }
+
+    private static UnverifiedRuleDto unverifiedRule(RuleOutcomeDto outcome, String reason) {
+        return new UnverifiedRuleDto(
+                outcome.code(), outcome.title(), outcome.category(), hasText(reason) ? reason : null);
     }
 
     /** PASSED-правило подавлено, если его предпосылка (по карте) есть среди проваленных. */

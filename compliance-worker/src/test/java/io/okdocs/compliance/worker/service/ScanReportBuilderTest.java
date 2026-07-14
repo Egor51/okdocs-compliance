@@ -45,13 +45,13 @@ class ScanReportBuilderTest {
         assertThat(premium.findings()).hasSize(1);
         assertThat(premium.findings().get(0).explanation()).isEqualTo("because reasons");
         assertThat(premium.findings().get(0).evidence()).isEqualTo("found cookie");
-//        assertThat(premium.findings().get(0).affectedPages()).hasSize(1);
+        assertThat(premium.findings().get(0).affectedPages()).hasSize(1);
         assertThat(premium.paywallCta()).isNull();
 
         assertThat(free.tier()).isEqualTo(ScanTier.FREE);
         assertThat(free.findings().get(0).explanation()).isNull();
         assertThat(free.findings().get(0).evidence()).isNull();
-//        assertThat(free.findings().get(0).affectedPages()).isEmpty();
+        assertThat(free.findings().get(0).affectedPages()).isEmpty();
         assertThat(free.paywallCta()).isNull(); // API дописывает CTA, не worker
         // Не-premium summary одинаков в обоих
         assertThat(free.summary().critical()).isEqualTo(premium.summary().critical());
@@ -100,11 +100,16 @@ class ScanReportBuilderTest {
 
         assertThat(premium.findings()).hasSize(2);
         assertThat(premium.summary().medium()).isEqualTo(1);
-        assertThat(premium.summary().high()).isEqualTo(1);
-        assertThat(premium.summary().totalPotentialFine()).isEqualTo("от 250 000 до 800 000 ₽");
+        assertThat(premium.summary().high()).isZero(); // UNVERIFIED не является наблюдаемым риском
+        assertThat(premium.summary().totalPotentialFine()).isEqualTo("от 150 000 до 500 000 ₽");
         assertThat(premium.quality().passed()).isEqualTo(1);
         assertThat(premium.quality().failed()).isEqualTo(1);
         assertThat(premium.quality().notEvaluated()).isEqualTo(1);
+        assertThat(premium.quality().coveragePercent()).isEqualTo(67);
+        assertThat(premium.quality().unverifiedRules()).singleElement().satisfies(rule -> {
+            assertThat(rule.code()).isEqualTo("RKN_REGISTRY_NOT_VERIFIED");
+            assertThat(rule.title()).isEqualTo("rkn");
+        });
         assertThat(premium.quality().positiveChecks()).singleElement().satisfies(p -> {
             assertThat(p.code()).isEqualTo("NO_PRIVACY_POLICY");
             assertThat(p.title()).isEqualTo("Политика обработки персональных данных найдена");
@@ -112,15 +117,106 @@ class ScanReportBuilderTest {
 
         var tracker = premium.findings().get(0);
         assertThat(tracker.code()).isEqualTo("THIRD_PARTY_TRACKERS");
-        assertThat(tracker.sourceUrl()).isEqualTo("https://site.ru/b");
-        assertThat(tracker.evidence()).isEqualTo("evidence tracker-b");
-        assertThat(tracker.matchedSignals()).containsExactly("tracker-b");
-//        assertThat(tracker.affectedPages()).hasSize(2);
-//        assertThat(tracker.affectedPages())
-//                .extracting(p -> p.url())
-//                .containsExactly("https://site.ru/a", "https://site.ru/b");
-//        assertThat(tracker.affectedPages().get(0).evidence()).isEqualTo("evidence tracker-a");
-//        assertThat(tracker.affectedPages().get(0).matchedSignals()).containsExactly("tracker-a");
+        assertThat(tracker.sourceUrl()).isEqualTo("https://site.ru/a");
+        assertThat(tracker.evidence()).isEqualTo("evidence tracker-a");
+        assertThat(tracker.matchedSignals()).containsExactly("tracker-a");
+        assertThat(tracker.affectedPages()).hasSize(2);
+        assertThat(tracker.affectedPages())
+                .extracting(p -> p.url())
+                .containsExactly("https://site.ru/a", "https://site.ru/b");
+        assertThat(tracker.affectedPages().get(0).evidence()).isEqualTo("evidence tracker-a");
+        assertThat(tracker.affectedPages().get(0).matchedSignals()).containsExactly("tracker-a");
+    }
+
+    @Test
+    void doesNotExposeFineOrCountSeverityForUnverifiedFinding() throws Exception {
+        ComplianceScan scan = scan();
+        ScanReportSnapshots snapshots = builder.build(scan, List.of(
+                finding("RKN_REGISTRY_NOT_VERIFIED", FindingSeverity.CRITICAL, 0.95,
+                        "https://site.ru/", "lookup failed", VerificationStatus.UNVERIFIED)));
+
+        ScanReportResponse premium = objectMapper.readValue(snapshots.premiumJson(), ScanReportResponse.class);
+
+        assertThat(premium.summary().critical()).isZero();
+        assertThat(premium.summary().totalPotentialFine()).isNull();
+        assertThat(premium.findings()).singleElement().satisfies(f -> {
+            assertThat(f.verificationStatus()).isEqualTo(VerificationStatus.UNVERIFIED);
+            assertThat(f.fineAmount()).isNull();
+        });
+    }
+
+    @Test
+    void movesUnverifiedFactFromFailedToCoverageGapAndExposesReason() throws Exception {
+        ComplianceScan scan = scan();
+        scan.setDiagnosticsJson("""
+                {
+                  "pagesAttempted": 1,
+                  "pagesFetched": 1,
+                  "pagesFailed": 0,
+                  "crawlerTimedOut": false,
+                  "ruleErrors": [],
+                  "ruleOutcomes": [
+                    {"code": "NO_PRIVACY_POLICY", "status": "FAILED", "title": "Не найдена политика",
+                     "severity": "HIGH", "category": "DOCUMENTS"}
+                  ]
+                }
+                """);
+
+        ScanReportResponse premium = objectMapper.readValue(builder.build(scan, List.of(
+                finding("NO_PRIVACY_POLICY", FindingSeverity.HIGH, 0.8,
+                        "https://site.ru/", "privacy-policy-link-absent", VerificationStatus.UNVERIFIED)
+        )).premiumJson(), ScanReportResponse.class);
+
+        assertThat(premium.quality().passed()).isZero();
+        assertThat(premium.quality().failed()).isZero();
+        assertThat(premium.quality().notEvaluated()).isEqualTo(1);
+        assertThat(premium.quality().coveragePercent()).isZero();
+        assertThat(premium.quality().unverifiedRules()).singleElement().satisfies(rule -> {
+            assertThat(rule.code()).isEqualTo("NO_PRIVACY_POLICY");
+            assertThat(rule.reason()).isEqualTo("evidence privacy-policy-link-absent");
+        });
+
+        ScanReportResponse free = objectMapper.readValue(builder.build(scan, List.of(
+                finding("NO_PRIVACY_POLICY", FindingSeverity.HIGH, 0.8,
+                        "https://site.ru/", "privacy-policy-link-absent", VerificationStatus.UNVERIFIED)
+        )).freeJson(), ScanReportResponse.class);
+        assertThat(free.quality().coveragePercent()).isZero();
+        assertThat(free.quality().unverifiedRules()).singleElement()
+                .satisfies(rule -> assertThat(rule.reason()).isNull());
+    }
+
+    @Test
+    void neverParsesArticleNumbersAsPotentialFine() throws Exception {
+        ComplianceScan scan = scan();
+        ComplianceFinding finding = finding("MISSING_HSTS", FindingSeverity.MEDIUM, 0.9,
+                "https://site.ru/", "header absent", VerificationStatus.DETECTED);
+        finding.setFineAmount("Без прямого штрафа: мера защиты по ст. 19 152-ФЗ");
+
+        ScanReportResponse premium = objectMapper.readValue(
+                builder.build(scan, List.of(finding)).premiumJson(), ScanReportResponse.class);
+
+        assertThat(premium.summary().totalPotentialFine()).isNull();
+    }
+
+    @Test
+    void freeShowsSanctionHeadlineWhilePremiumContainsScenarioDetails() throws Exception {
+        ComplianceScan scan = scan();
+        ComplianceFinding hosting = finding("HOSTING_OUTSIDE_RU_DETECTED", FindingSeverity.HIGH, 0.9,
+                "https://site.ru/", "public host outside RU", VerificationStatus.DETECTED);
+
+        ScanReportSnapshots snapshots = builder.build(scan, List.of(hosting));
+        ScanReportResponse premium = objectMapper.readValue(snapshots.premiumJson(), ScanReportResponse.class);
+        ScanReportResponse free = objectMapper.readValue(snapshots.freeJson(), ScanReportResponse.class);
+
+        assertThat(premium.summary().totalPotentialFine()).isEqualTo("от 1 000 000 до 18 000 000 ₽");
+        assertThat(free.summary().totalPotentialFine()).isEqualTo(premium.summary().totalPotentialFine());
+        assertThat(premium.summary().sanctionExposure().headline())
+                .isEqualTo("От 1 000 000 до 18 000 000 ₽ — суммарно по потенциальным нарушениям");
+        assertThat(premium.summary().sanctionExposure().scenariosAreNotSummed()).isFalse();
+        assertThat(premium.summary().sanctionExposure().scenarios()).hasSize(2);
+        assertThat(free.summary().sanctionExposure().headline())
+                .isEqualTo(premium.summary().sanctionExposure().headline());
+        assertThat(free.summary().sanctionExposure().scenarios()).isEmpty();
     }
 
     @Test

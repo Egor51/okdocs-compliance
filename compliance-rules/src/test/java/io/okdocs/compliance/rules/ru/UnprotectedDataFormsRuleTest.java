@@ -1,8 +1,10 @@
 package io.okdocs.compliance.rules.ru;
 
 import io.okdocs.compliance.contracts.crawler.ScanAnalysisContext;
+import io.okdocs.compliance.contracts.crawler.FormInfo;
 import io.okdocs.compliance.contracts.enums.EvidenceType;
 import io.okdocs.compliance.contracts.enums.FindingSeverity;
+import io.okdocs.compliance.contracts.enums.FormPurpose;
 import io.okdocs.compliance.rules.RuleFact;
 import io.okdocs.compliance.rules.TestFixtures;
 import org.junit.jupiter.api.Test;
@@ -60,5 +62,28 @@ class UnprotectedDataFormsRuleTest {
                         TestFixtures.dataFormNoConsent("/b")));
 
         assertThat(rule.evaluate(ctx)).hasSize(1);
+    }
+
+    @Test
+    void ignoresLoginFormWithoutConsentCheckbox() {
+        FormInfo login = new FormInfo("", "POST", List.of("email", "password"),
+                true, false, false, false, false, false, true, FormPurpose.AUTH_LOGIN);
+        ScanAnalysisContext ctx = TestFixtures.ctx(
+                TestFixtures.simplePage("https://site.ru/login", login));
+
+        assertThat(rule.evaluate(ctx)).isEmpty();
+    }
+
+    @Test
+    void keepsUnknownDataFormAsUnverifiedManualCheck() {
+        FormInfo unknown = new FormInfo("", "POST", List.of("email"),
+                false, false, false, false, false, false, true, FormPurpose.UNKNOWN);
+        ScanAnalysisContext ctx = TestFixtures.ctx(
+                TestFixtures.simplePage("https://site.ru/custom", unknown));
+
+        assertThat(rule.evaluate(ctx)).singleElement().satisfies(f -> {
+            assertThat(f.verificationStatus().name()).isEqualTo("UNVERIFIED");
+            assertThat(f.evidence()).contains("purpose=UNKNOWN", "JavaScript handler");
+        });
     }
 }

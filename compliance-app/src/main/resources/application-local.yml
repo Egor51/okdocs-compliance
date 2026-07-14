@@ -3,8 +3,17 @@
 # выключаем, а enabled=false убирает саму зависимость от browserless (бин-заглушка
 # NoopDynamicCrawler, см. CombinedContextIT). Включить локально: запустить browserless
 # и поднять enabled + premium-enabled + CDP_* env.
+spring:
+  flyway:
+    # Combined-app уже применил локальный dev-seed V900. Последующие продуктовые V0XX
+    # закономерно ниже него, поэтому только в local разрешаем их out-of-order применение.
+    out-of-order: true
+
 compliance:
   crawler:
     dynamic:
-      enabled: false
-      premium-enabled: false
+      # Профильный YAML имеет приоритет над application.yml, поэтому literal false здесь
+      # блокировал CDP_ENABLED/CDP_PREMIUM_ENABLED из базового файла. Оставляем безопасный
+      # local-default false, но разрешаем явное включение Browserless через env.
+      enabled: ${CDP_ENABLED:false}
+      premium-enabled: ${CDP_PREMIUM_ENABLED:false}

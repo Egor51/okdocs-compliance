@@ -144,7 +144,9 @@ class ComplianceWorkerPropertiesTest {
         assertThat(props.getScore().basePointsFor(
                 io.okdocs.compliance.contracts.enums.FindingSeverity.CRITICAL)).isEqualTo(30);
         assertThat(props.getScore().weightFor("DETECTED")).isEqualTo(0.65);
-        assertThat(props.getScore().weightFor(null)).isEqualTo(0.80); // DEFAULT-фолбэк
+        assertThat(props.getScore().weightFor("UNVERIFIED")).isZero();
+        assertThat(props.getScore().weightFor("FALSE_POSITIVE")).isZero();
+        assertThat(props.getScore().weightFor(null)).isZero(); // безопасный DEFAULT-фолбэк
     }
 
     @Test

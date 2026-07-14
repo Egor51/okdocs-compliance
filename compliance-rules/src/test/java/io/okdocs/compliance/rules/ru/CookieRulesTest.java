@@ -97,7 +97,7 @@ class CookieRulesTest {
                     List.of(TestFixtures.cookie("_ga", true, false)), List.of());
             assertThat(rule.evaluate(TestFixtures.ctx(page))).singleElement().satisfies(f -> {
                 assertThat(f.code()).isEqualTo("TRACKING_COOKIES_BEFORE_CONSENT");
-                assertThat(f.verificationStatus()).isEqualTo(VerificationStatus.CONFIRMED);
+                assertThat(f.verificationStatus()).isEqualTo(VerificationStatus.DETECTED);
                 assertThat(f.matchedSignals()).contains("_ga");
             });
         }
@@ -176,6 +176,13 @@ class CookieRulesTest {
         void silentForNonSessionWithoutHttpOnly() {
             var page = TestFixtures.dynamicPageWithCookies("https://site.ru/",
                     List.of(TestFixtures.cookie("theme", true, false)), List.of());
+            assertThat(rule.evaluate(TestFixtures.ctx(page))).isEmpty();
+        }
+
+        @Test
+        void ignoresLocaleCookieWithBrowserSessionLifetime() {
+            var page = TestFixtures.dynamicPageWithCookies("https://site.ru/",
+                    List.of(TestFixtures.sessionCookie("NEXT_LOCALE", true, false)), List.of());
             assertThat(rule.evaluate(TestFixtures.ctx(page))).isEmpty();
         }
 

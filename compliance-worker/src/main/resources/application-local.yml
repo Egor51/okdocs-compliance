@@ -4,4 +4,6 @@
 compliance:
   crawler:
     dynamic:
-      premium-enabled: false
+      # Профильный YAML имеет приоритет над application.yml: значение должно само читать env,
+      # иначе CDP_PREMIUM_ENABLED не может включить fail-fast проверку в local-профиле.
+      premium-enabled: ${CDP_PREMIUM_ENABLED:false}

@@ -23,9 +23,10 @@ import java.util.regex.Pattern;
 
 /**
  * Сессионная cookie выставлена без флага {@code HttpOnly}: доступна из JavaScript, что при XSS даёт
- * угон сессии. «Сессионная» определяется как cookie без срока истечения ({@link ObservedCookie#session()})
- * ИЛИ с именем, похожим на идентификатор сессии (sessid/PHPSESSID/JSESSIONID/sid/auth/token). Только
- * DYNAMIC (атрибуты cookie). Категория COOKIES, основание — ст. 19 152-ФЗ + OWASP Session Management.
+ * угон сессии. Назначение определяется консервативно по имени, характерному для идентификатора
+ * сессии/авторизации (sessid/PHPSESSID/JSESSIONID/sid/auth/token). Сам по себе
+ * {@link ObservedCookie#session()} означает лишь срок жизни до закрытия браузера и не доказывает
+ * auth-назначение: locale/theme cookie часто имеют такой же срок. Только DYNAMIC (атрибуты cookie).
  */
 public final class SessionCookieWithoutHttpOnlyRule implements Rule {
 
@@ -49,7 +50,8 @@ public final class SessionCookieWithoutHttpOnlyRule implements Rule {
             "Установите HttpOnly для всех cookie сессии и аутентификации (а также Secure и SameSite). "
                     + "HttpOnly закрывает доступ к cookie из JavaScript.",
             "Сессионные cookie защищены HttpOnly",
-            "Среди наблюдённых cookie все сессионные помечены флагом HttpOnly.");
+            "Среди наблюдённых cookie с именами, характерными для сессии или авторизации, все "
+                    + "помечены флагом HttpOnly.");
 
     /**
      * Reusable technical-правило: детектор jurisdiction-neutral, поэтому работает в слоях RU/EU/UK.
@@ -104,11 +106,8 @@ public final class SessionCookieWithoutHttpOnlyRule implements Rule {
         return facts;
     }
 
-    /** Сессионная по флагу session (нет expires) или по имени, похожему на сессию/аутентификацию. */
+    /** Сессионная/auth-cookie только по сильному сигналу имени; browser-session lifetime недостаточно. */
     private static boolean isSessionLike(ObservedCookie c) {
-        if (c.session()) {
-            return true;
-        }
         String name = c.name() == null ? "" : c.name().toLowerCase(Locale.ROOT);
         return SESSION_NAME.matcher(name).find();
     }

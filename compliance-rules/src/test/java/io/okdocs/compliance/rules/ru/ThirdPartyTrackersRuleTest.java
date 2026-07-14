@@ -15,20 +15,20 @@ class ThirdPartyTrackersRuleTest {
     private final ThirdPartyTrackersRule rule = new ThirdPartyTrackersRule();
 
     @Test
-    void flagsKnownTrackerUnverifiedWhenNotInPolicy() {
+    void detectsKnownTrackerWhenNotDisclosedInPolicy() {
         List<RuleFact> facts = rule.evaluate(TestFixtures.ctx(
                 TestFixtures.pageWithScripts("https://site.ru", List.of("mc.yandex.ru"))));
 
         assertThat(facts).singleElement().satisfies(f -> {
             assertThat(f.code()).isEqualTo("THIRD_PARTY_TRACKERS");
-            assertThat(f.verificationStatus()).isEqualTo(VerificationStatus.UNVERIFIED);
-            assertThat(f.confidence()).isEqualTo(0.90);
+            assertThat(f.verificationStatus()).isEqualTo(VerificationStatus.DETECTED);
+            assertThat(f.confidence()).isEqualTo(0.85);
             assertThat(f.matchedSignals()).contains("mc.yandex.ru");
         });
     }
 
     @Test
-    void detectedWhenMentionedInPolicy() {
+    void silentWhenMentionedInPolicy() {
         PageAnalysisResult tracked = TestFixtures.pageWithScripts(
                 "https://site.ru", List.of("mc.yandex.ru"));
         PageAnalysisResult policy = TestFixtures.page("https://site.ru/privacy",
@@ -36,9 +36,7 @@ class ThirdPartyTrackersRuleTest {
 
         List<RuleFact> facts = rule.evaluate(TestFixtures.ctx(tracked, policy));
 
-        assertThat(facts).isNotEmpty();
-        assertThat(facts.get(0).verificationStatus()).isEqualTo(VerificationStatus.DETECTED);
-        assertThat(facts.get(0).confidence()).isEqualTo(0.70);
+        assertThat(facts).isEmpty();
     }
 
     @Test
@@ -52,8 +50,8 @@ class ThirdPartyTrackersRuleTest {
         List<RuleFact> facts = rule.evaluate(TestFixtures.ctx(tracked, policy));
 
         assertThat(facts).singleElement().satisfies(f -> {
-            assertThat(f.verificationStatus()).isEqualTo(VerificationStatus.UNVERIFIED);
-            assertThat(f.confidence()).isEqualTo(0.90);
+            assertThat(f.verificationStatus()).isEqualTo(VerificationStatus.DETECTED);
+            assertThat(f.confidence()).isEqualTo(0.85);
         });
     }
 
@@ -70,10 +68,23 @@ class ThirdPartyTrackersRuleTest {
 
         List<RuleFact> facts = rule.evaluate(TestFixtures.ctx(yandexPage, hubspotPage, policy));
 
-        RuleFact yandex = facts.stream().filter(f -> f.matchedSignals().contains("yandex")).findFirst().orElseThrow();
         RuleFact hubspot = facts.stream().filter(f -> f.matchedSignals().contains("hubspot")).findFirst().orElseThrow();
-        assertThat(yandex.verificationStatus()).isEqualTo(VerificationStatus.DETECTED);
-        assertThat(hubspot.verificationStatus()).isEqualTo(VerificationStatus.UNVERIFIED);
+        assertThat(facts).hasSize(1); // раскрытый Yandex не создаёт finding; HubSpot остаётся.
+        assertThat(hubspot.verificationStatus()).isEqualTo(VerificationStatus.DETECTED);
+    }
+
+    @Test
+    void disclosureOfOneProviderDoesNotHideUndisclosedProviderOnSamePage() {
+        PageAnalysisResult tracked = TestFixtures.pageWithScripts(
+                "https://site.ru", List.of("mc.yandex.ru", "hubspot.com"));
+        PageAnalysisResult policy = TestFixtures.page("https://site.ru/privacy",
+                "Для аналитики используем Яндекс Метрику и cookie.", false,
+                List.of(), List.of(), List.of(), "<html/>");
+
+        assertThat(rule.evaluate(TestFixtures.ctx(tracked, policy))).singleElement().satisfies(f -> {
+            assertThat(f.matchedSignals()).contains("hubspot.com");
+            assertThat(f.matchedSignals()).doesNotContain("mc.yandex.ru");
+        });
     }
 
     @Test

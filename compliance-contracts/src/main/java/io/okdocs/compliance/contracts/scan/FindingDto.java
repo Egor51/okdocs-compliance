@@ -9,8 +9,11 @@ import io.okdocs.compliance.contracts.enums.VerificationStatus;
 import java.util.List;
 
 /**
- * Найденное нарушение в отчёте. Поля {@code explanation}, {@code recommendation}, {@code evidence}
+ * Найденный риск/сигнал в отчёте; юридическое нарушение не считается автоматически установленным.
+ * Поля {@code explanation}, {@code recommendation}, {@code evidence}
  * заполнены только в PREMIUM-отчёте; в FREE — {@code null} (маскируются при чтении по tier'у скана).
+ * {@code affectedPages}: PREMIUM содержит обследованные страницы finding, FREE — пустой список;
+ * старые JSON-снапшоты до добавления поля десериализуются с {@code null}.
  */
 public record FindingDto(
         String code,
@@ -27,7 +30,7 @@ public record FindingDto(
         Double confidence,
         VerificationStatus verificationStatus,
         EvidenceType evidenceType,
-        List<String> matchedSignals
-//        , List<AffectedPageDto> affectedPages
+        List<String> matchedSignals,
+        List<AffectedPageDto> affectedPages
 ) {
 }

@@ -45,13 +45,17 @@ class ScoreCalculatorTest {
     }
 
     @Test
-    void unverifiedAndNullApplyEightyPercent() {
-        // MEDIUM=12 @ 80% = 9.6 → round 10 → 100-10 = 90
+    void unverifiedAndNullDoNotReduceRiskScore() {
         assertThat(calculator.calculate(List.of(
-                finding("A", FindingSeverity.MEDIUM, VerificationStatus.UNVERIFIED, 0.7)))).isEqualTo(90);
-        // null verification трактуется как UNVERIFIED (80%)
+                finding("A", FindingSeverity.MEDIUM, VerificationStatus.UNVERIFIED, 0.7)))).isEqualTo(100);
         assertThat(calculator.calculate(List.of(
-                finding("B", FindingSeverity.MEDIUM, null, null)))).isEqualTo(90);
+                finding("B", FindingSeverity.MEDIUM, null, null)))).isEqualTo(100);
+    }
+
+    @Test
+    void falsePositiveDoesNotReduceRiskScore() {
+        assertThat(calculator.calculate(List.of(
+                finding("A", FindingSeverity.CRITICAL, VerificationStatus.FALSE_POSITIVE, 1.0)))).isEqualTo(100);
     }
 
     @Test
@@ -73,6 +77,19 @@ class ScoreCalculatorTest {
                 finding("DUP", FindingSeverity.HIGH, VerificationStatus.DETECTED, 0.9));
         assertThat(calculator.deduplicate(findings)).hasSize(1);
         assertThat(calculator.deduplicate(findings).get(0).getConfidence()).isEqualTo(0.9);
+    }
+
+    @Test
+    void deduplicationPrefersDetectedOverHigherConfidenceUnverified() {
+        var findings = List.of(
+                finding("DUP", FindingSeverity.HIGH, VerificationStatus.DETECTED, 0.7),
+                finding("DUP", FindingSeverity.HIGH, VerificationStatus.UNVERIFIED, 0.95));
+
+        assertThat(calculator.deduplicate(findings)).singleElement().satisfies(f -> {
+            assertThat(f.getVerificationStatus()).isEqualTo(VerificationStatus.DETECTED);
+            assertThat(f.getConfidence()).isEqualTo(0.7);
+        });
+        assertThat(calculator.calculate(findings)).isEqualTo(87);
     }
 
     @Test

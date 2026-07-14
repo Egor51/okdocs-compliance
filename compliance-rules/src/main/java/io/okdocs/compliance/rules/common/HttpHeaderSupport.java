@@ -2,6 +2,7 @@ package io.okdocs.compliance.rules.common;
 
 import io.okdocs.compliance.contracts.crawler.HttpResponseInfo;
 
+import java.net.URI;
 import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
@@ -13,11 +14,14 @@ import java.util.regex.Pattern;
  */
 public final class HttpHeaderSupport {
 
-    /** Страницы, на которых отсутствие защит/кэширование ответа особенно опасно для ПДн. */
+    /**
+     * Только user-specific маршруты, способные вернуть данные кабинета/заказа. Проверяем полный
+     * сегмент path: слово personal в /blog/personal-data-forms не делает статью чувствительной.
+     * Публичные entry-страницы login/register/reset сюда намеренно не входят.
+     */
     private static final Pattern SENSITIVE_URL = Pattern.compile(
-            "(login|signin|sign-in|auth|account|cabinet|lk|profile|personal|checkout|payment|"
-                    + "oplata|order|register|signup|sign-up|password|reset|admin|"
-                    + "lichnyj-kabinet|lichnyij-kabinet|vhod|regist)",
+            "(^|/)(account|cabinet|dashboard|lk|profile|personal|checkout|payment|"
+                    + "oplata|order|orders|admin|lichnyj-kabinet|lichnyij-kabinet)(/|$)",
             Pattern.CASE_INSENSITIVE);
 
     private HttpHeaderSupport() {
@@ -35,9 +39,17 @@ public final class HttpHeaderSupport {
                 .toList();
     }
 
-    /** Чувствительная ли это страница по URL (вход/ЛК/оплата/регистрация). */
+    /** Чувствительный ли user-specific ответ по отдельным сегментам URL path (query не учитывается). */
     public static boolean isSensitive(String url) {
-        return url != null && SENSITIVE_URL.matcher(url).find();
+        if (url == null) {
+            return false;
+        }
+        try {
+            String path = URI.create(url).getPath();
+            return path != null && SENSITIVE_URL.matcher(path).find();
+        } catch (IllegalArgumentException ignored) {
+            return false;
+        }
     }
 
     /** Короткий хвост URL для evidence: путь без query (или сам URL, если не парсится). */

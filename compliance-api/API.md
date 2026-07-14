@@ -621,34 +621,79 @@ Path parameters:
     "high": 1,
     "medium": 2,
     "low": 0,
-    "totalPotentialFine": "60 000 — 220 000 ₽"
+    "totalPotentialFine": "от 150 000 до 500 000 ₽",
+    "sanctionExposure": {
+      "headline": "От 150 000 до 500 000 ₽ — суммарно по потенциальным нарушениям",
+      "minimumRelevantAmount": 150000,
+      "maximumRelevantAmount": 500000,
+      "currency": "RUB",
+      "calculationMethod": "SUM_DISTINCT_VIOLATION_GROUP_RANGES",
+      "scenariosAreNotSummed": false,
+      "requiresLegalQualification": true,
+      "scenarios": [
+        {
+          "id": "KOAP_13_11_1_LEGAL_FIRST",
+          "aggregationGroup": "GENERAL_PROCESSING",
+          "label": "обработка без предусмотренного законом основания",
+          "relatedFindingCodes": ["THIRD_PARTY_TRACKERS"],
+          "law": "КоАП РФ",
+          "article": "13.11",
+          "part": "1",
+          "subjectType": "Юридическое лицо",
+          "recurrence": "FIRST",
+          "minimumAmount": 150000,
+          "maximumAmount": 300000,
+          "currency": "RUB",
+          "applicability": "Только если проверка подтвердит обработку ПДн без применимого основания.",
+          "sourceUrl": "https://www.consultant.ru/document/cons_doc_LAW_34661/1f421640c6775ff67079ebde06a7d2f6d17b96db/",
+          "normVerifiedOn": "2026-07-13"
+        },
+        {
+          "id": "KOAP_13_11_1_1_LEGAL_REPEAT",
+          "aggregationGroup": "GENERAL_PROCESSING",
+          "label": "повторная обработка без предусмотренного законом основания",
+          "relatedFindingCodes": ["THIRD_PARTY_TRACKERS"],
+          "law": "КоАП РФ",
+          "article": "13.11",
+          "part": "1.1",
+          "subjectType": "Юридическое лицо или ИП",
+          "recurrence": "REPEATED",
+          "minimumAmount": 300000,
+          "maximumAmount": 500000,
+          "currency": "RUB",
+          "applicability": "Только при подтверждении состава и юридически установленной повторности.",
+          "sourceUrl": "https://www.consultant.ru/document/cons_doc_LAW_34661/1f421640c6775ff67079ebde06a7d2f6d17b96db/",
+          "normVerifiedOn": "2026-07-13"
+        }
+      ]
+    }
   },
   "findings": [
     {
-      "code": "NO_PRIVACY_POLICY",
+      "code": "THIRD_PARTY_TRACKERS",
       "severity": "HIGH",
       "category": "DOCUMENTS",
-      "title": "Не найдена политика конфиденциальности",
-      "fineAmount": "до 60 000 ₽",
-      "legalBasis": "152-ФЗ",
-      "explanation": "На сайте не найдена ссылка на политику обработки персональных данных.",
-      "recommendation": "Опубликуйте политику и добавьте ссылку рядом с формами.",
-      "evidence": "privacy policy link not found",
+      "title": "Обнаружена обработка через сторонние трекеры",
+      "fineAmount": "от 150 000 до 500 000 ₽",
+      "legalBasis": "ст. 13.11 ч. 1 и 1.1 КоАП РФ",
+      "explanation": "На сайте обнаружены сторонние трекеры, требующие проверки правового основания.",
+      "recommendation": "Проверьте основание обработки, получателей и раскрытие в документах.",
+      "evidence": "third-party tracker request observed",
       "sourceUrl": "https://example.ru",
       "sourceType": "HTML",
       "confidence": 0.8,
       "verificationStatus": "DETECTED",
       "evidenceType": "STATIC_ANALYSIS",
-      "matchedSignals": ["privacy"],
+      "matchedSignals": ["tracker.example"],
       "affectedPages": [
         {
           "url": "https://example.ru",
-          "evidence": "privacy policy link not found",
+          "evidence": "third-party tracker request observed",
           "sourceType": "HTML",
           "confidence": 0.8,
           "verificationStatus": "DETECTED",
           "evidenceType": "STATIC_ANALYSIS",
-          "matchedSignals": ["privacy"]
+          "matchedSignals": ["tracker.example"]
         }
       ]
     }
@@ -664,6 +709,8 @@ Path parameters:
     "passed": 8,
     "failed": 3,
     "notEvaluated": 0,
+    "coveragePercent": 100,
+    "unverifiedRules": [],
     "positiveChecks": [
       {
         "code": "HTTPS_ENABLED",
@@ -679,6 +726,20 @@ Path parameters:
   "finishedAt": "2026-06-17T12:01:30Z"
 }
 ```
+
+`score` — индекс наблюдаемого риска внешнего контура, а не процент полного соответствия 152-ФЗ.
+`UNVERIFIED`, `FALSE_POSITIVE` и findings без verification status не уменьшают `score` и не входят
+в severity-сводку. Неполнота проверки отражается в `diagnostics` и `quality`.
+
+`summary.totalPotentialFine` — арифметический диапазон по структурированному каталогу. Для каждой
+независимой `aggregationGroup` берутся минимальная и максимальная альтернативы, после чего границы
+разных групп складываются. Поэтому ИП/юрлицо и первое/повторное нарушение внутри одного состава не
+удваивают итог. Свободный текст `fineAmount` в расчёте не участвует и для `UNVERIFIED` не выдаётся.
+
+`summary.sanctionExposure` использует метод `SUM_DISTINCT_VIOLATION_GROUP_RANGES` и содержит
+машиночитаемые итоговые границы. В FREE `scenarios` — пустой массив (headline и итоговый диапазон
+используются как paywall pain), в PREMIUM возвращаются группы, части КоАП, субъект, повторность и
+условия применимости.
 
 Если отчёт ещё не готов, возвращается `409 Conflict`.
 
@@ -1368,13 +1429,47 @@ Query parameters:
 
 #### ScanSummaryDto
 
+| Поле | Тип | Примечание |
+|---|---|---|
+| `critical` | int | Наблюдаемые риски |
+| `high` | int | Наблюдаемые риски |
+| `medium` | int | Наблюдаемые риски |
+| `low` | int | Наблюдаемые риски |
+| `totalPotentialFine` | string или `null` | Арифметический диапазон разных групп нарушений, например `от 1 010 000 до 18 060 000 ₽` |
+| `sanctionExposure` | `SanctionExposureDto` или `null` | Итоговые границы и сценарии расчёта |
+
+#### SanctionExposureDto
+
+| Поле | Тип | Примечание |
+|---|---|---|
+| `headline` | string | Маркетинговый headline с арифметическим диапазоном |
+| `minimumRelevantAmount` | Long | Сумма минимальных альтернатив разных групп |
+| `maximumRelevantAmount` | Long | Сумма максимальных альтернатив разных групп |
+| `currency` | string | `RUB` |
+| `calculationMethod` | string | `SUM_DISTINCT_VIOLATION_GROUP_RANGES` |
+| `scenariosAreNotSummed` | boolean | `false`: разные группы суммируются; альтернативы внутри группы — нет |
+| `requiresLegalQualification` | boolean | Всегда `true` для текущего RU-каталога |
+| `scenarios` | array of `SanctionScenarioDto` | PREMIUM — детали; FREE — пустой массив |
+
+#### SanctionScenarioDto
+
 | Поле | Тип |
 |---|---|
-| `critical` | int |
-| `high` | int |
-| `medium` | int |
-| `low` | int |
-| `totalPotentialFine` | string |
+| `id` | string |
+| `aggregationGroup` | string |
+| `label` | string |
+| `relatedFindingCodes` | array of string |
+| `law` | string |
+| `article` | string |
+| `part` | string |
+| `subjectType` | string |
+| `recurrence` | `FIRST` или `REPEATED` |
+| `minimumAmount` | long |
+| `maximumAmount` | long |
+| `currency` | string |
+| `applicability` | string |
+| `sourceUrl` | string |
+| `normVerifiedOn` | LocalDate |
 
 #### FindingDto
 
@@ -1395,7 +1490,7 @@ Query parameters:
 | `verificationStatus` | `VerificationStatus` или `null` |
 | `evidenceType` | `EvidenceType` или `null` |
 | `matchedSignals` | array of string или `null` |
-| `affectedPages` | array of `AffectedPageDto` или `null` |
+| `affectedPages` | array of `AffectedPageDto` | В PREMIUM — все страницы finding; в FREE — пустой массив. В старых snapshots может быть `null` |
 
 #### AffectedPageDto
 
@@ -1430,6 +1525,20 @@ Query parameters:
 | `failed` | int |
 | `notEvaluated` | int |
 | `positiveChecks` | array of `PositiveCheckDto` |
+| `coveragePercent` | integer или `null`; доля правил с однозначным автоматическим результатом |
+| `unverifiedRules` | array of `UnverifiedRuleDto`; правила, требующие ручной проверки, и причины |
+
+`UNVERIFIED`-факт не увеличивает `failed`: соответствующее правило учитывается в `notEvaluated`
+и уменьшает `coveragePercent`. Процент считается как `(passed + failed) / общее число правил`.
+
+#### UnverifiedRuleDto
+
+| Поле | Тип |
+|---|---|
+| `code` | string |
+| `title` | string |
+| `category` | `FindingCategory` |
+| `reason` | string или `null` |
 
 #### PositiveCheckDto
 
