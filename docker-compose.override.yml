@@ -1,5 +1,64 @@
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-compliance}
+      POSTGRES_USER: ${POSTGRES_USER:-compliance}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-compliance}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      # Dedicated fresh dev volume; preserves any legacy local database volume.
+      - postgres_local_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  kafka:
+    image: bitnamilegacy/kafka:3.7.0
+    restart: unless-stopped
+    environment:
+      KAFKA_CFG_NODE_ID: 1
+      KAFKA_CFG_PROCESS_ROLES: broker,controller
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # Host JVM connects to localhost:9092; containers (Kafka UI) use kafka:29092.
+      KAFKA_CFG_LISTENERS: INTERNAL://:29092,EXTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_CFG_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_CFG_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    ports:
+      - "${KAFKA_PORT:-9092}:9092"
+    volumes:
+      - kafka_data:/bitnami/kafka
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+    ports:
+      - "${KAFKA_UI_PORT:-8081}:8080"
+
   redis:
     # База уже без пароля (dev по умолчанию) — здесь только проброс порта.
     ports:
@@ -7,5 +66,26 @@ services:
 
   browserless:
     ports:
-      - "${BROWSERLESS_PORT:-3000}:3000"
+      - "${BROWSERLESS_PORT:-3005}:3000"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >
+          node -e "const t=process.env.TOKEN||'';
+          fetch('http://127.0.0.1:3000/json/version?token='+encodeURIComponent(t),
+          {headers:{Authorization:'Bearer '+t}})
+          .then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
+volumes:
+  postgres_local_data:
+  kafka_data:
+
+
+#  docker compose up -d
+#
+#  set -a
+#  source compliance-app/.env.app
+#  set +a
+#
+#  JAVA_HOME=$(/usr/libexec/java_home -v 21) \
+#  mvn spring-boot:run -pl compliance-app

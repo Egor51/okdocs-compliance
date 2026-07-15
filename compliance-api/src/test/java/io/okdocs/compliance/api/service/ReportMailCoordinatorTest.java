@@ -45,7 +45,7 @@ class ReportMailCoordinatorTest {
         coordinator.enqueueIfReady(id);
 
         verify(mail).enqueueReportReady(eq(id), eq("buyer@example.com"), eq("example.com"),
-                eq(73), contains("/en/dashboard/scans/" + id), eq("en"));
+                eq(73), contains("/en/dashboard/reports/" + id), eq("en"));
     }
 
     @Test
