@@ -205,6 +205,7 @@ jobs:
             cd "$DEPLOY_DIR"
 
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
 
             COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.deploy.yml"
 
@@ -213,10 +214,28 @@ jobs:
             [ "$DEPLOY_WORKER" = "true" ] && SERVICES="$SERVICES worker"
             echo "Deploying services:$SERVICES"
 
-            $COMPOSE pull $SERVICES
+            pull_with_retry() {
+              local service="$1"
+              local attempt=1
+              local max_attempts=3
+
+              until $COMPOSE pull "$service"; do
+                if [ "$attempt" -ge "$max_attempts" ]; then
+                  echo "Failed to pull $service after $max_attempts attempts"
+                  return 1
+                fi
+
+                local delay=$((attempt * 5))
+                echo "Pull failed for $service (attempt $attempt/$max_attempts); retrying in ${delay}s"
+                sleep "$delay"
+                attempt=$((attempt + 1))
+              done
+            }
+
+            [ "$DEPLOY_API" = "true" ] && pull_with_retry api
+            [ "$DEPLOY_WORKER" = "true" ] && pull_with_retry worker
             $COMPOSE up -d $SERVICES
 
-            docker logout ghcr.io
             docker image prune -f
 
             $COMPOSE ps

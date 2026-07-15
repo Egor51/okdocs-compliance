@@ -29,10 +29,24 @@ public class ReportMailCoordinator {
         if (scan.getBuyerEmail() == null || scan.getBuyerEmail().isBlank()) return;
         if (!reportRepository.existsById(scanId)) return;
 
+        enqueue(scan, scan.getBuyerEmail());
+    }
+
+    /** Кабинетная отправка: email уже проверен по AppUser, в scan его не сохраняем. */
+    @Transactional
+    public void enqueueForAccount(UUID scanId, String email) {
+        ComplianceScan scan = scanRepository.findById(scanId).orElse(null);
+        if (scan == null || (scan.getStatus() != ScanStatus.COMPLETED
+                && scan.getStatus() != ScanStatus.PARTIAL)) return;
+        if (email == null || email.isBlank() || !reportRepository.existsById(scanId)) return;
+        enqueue(scan, email);
+    }
+
+    private void enqueue(ComplianceScan scan, String email) {
         String locale = normalizeLocale(scan.getLocale());
         String reportUrl = mailProperties.frontendBaseUrl() + "/" + locale
-                + "/dashboard/scans/" + scanId;
-        mailNotificationService.enqueueReportReady(scanId, scan.getBuyerEmail(), scan.getSiteDomain(),
+                + "/dashboard/reports/" + scan.getId();
+        mailNotificationService.enqueueReportReady(scan.getId(), email, scan.getSiteDomain(),
                 scan.getScore(), reportUrl, locale);
     }
 

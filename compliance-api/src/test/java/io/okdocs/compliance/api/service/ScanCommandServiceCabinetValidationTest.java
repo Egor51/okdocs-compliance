@@ -4,11 +4,18 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.okdocs.compliance.api.config.ComplianceApiProperties;
 import io.okdocs.compliance.api.security.CompliancePrincipal;
 import io.okdocs.compliance.contracts.enums.UserRole;
+import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
+import io.okdocs.compliance.contracts.enums.ScanKind;
+import io.okdocs.compliance.contracts.enums.ScanStatus;
+import io.okdocs.compliance.contracts.enums.ScanTier;
 import io.okdocs.compliance.contracts.exception.AccessDeniedToScanException;
 import io.okdocs.compliance.contracts.exception.ComplianceValidationException;
 import io.okdocs.compliance.contracts.scan.ScanRequest;
 import io.okdocs.compliance.messaging.OutboxEventFactory;
+import io.okdocs.compliance.persistence.outbox.OutboxEvent;
 import io.okdocs.compliance.persistence.outbox.OutboxEventRepository;
+import io.okdocs.compliance.persistence.auth.AppUserRepository;
+import io.okdocs.compliance.persistence.scan.ComplianceScan;
 import io.okdocs.compliance.persistence.scan.ComplianceScanReportRepository;
 import io.okdocs.compliance.persistence.scan.ComplianceScanRepository;
 import io.okdocs.compliance.persistence.scan.ScanEmailRepository;
@@ -17,12 +24,18 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -39,6 +52,7 @@ class ScanCommandServiceCabinetValidationTest {
     @Mock private ComplianceScanRepository scanRepository;
     @Mock private ComplianceScanReportRepository scanReportRepository;
     @Mock private ScanEmailRepository scanEmailRepository;
+    @Mock private AppUserRepository appUserRepository;
     @Mock private OutboxEventRepository outboxRepository;
     @Mock private OutboxEventFactory outboxEventFactory;
     @Mock private ScanBalanceService balanceService;
@@ -57,6 +71,7 @@ class ScanCommandServiceCabinetValidationTest {
     @BeforeEach
     void setUp() {
         service = new ScanCommandService(scanRepository, scanReportRepository, scanEmailRepository,
+                appUserRepository,
                 outboxRepository, outboxEventFactory, balanceService, rateLimitService, urlValidator,
                 scanMapper, properties, objectMapper, reportMailCoordinator, emailSubscriptionService);
     }
@@ -100,5 +115,49 @@ class ScanCommandServiceCabinetValidationTest {
 
         verify(rateLimitService, never()).checkScanAllowed(any(), any());
         verify(balanceService, never()).debit(anyLong(), any());
+    }
+
+    @Test
+    void rerunInheritsTrustedParentParametersAndIgnoresBrowserOverrides() {
+        UUID parentId = UUID.randomUUID();
+        ComplianceScan parent = new ComplianceScan();
+        parent.setId(parentId);
+        parent.setUserId(1L);
+        parent.setSiteUrl("https://trusted.example/legal");
+        parent.setSiteDomain("trusted.example");
+        parent.setJurisdiction(ScanJurisdiction.RU);
+        parent.setLocale("en");
+        parent.setStatus(ScanStatus.COMPLETED);
+        parent.setTier(ScanTier.PREMIUM);
+        parent.setKind(ScanKind.CABINET_PREMIUM);
+
+        when(scanRepository.findById(parentId)).thenReturn(Optional.of(parent));
+        when(urlValidator.validate("https://trusted.example/legal"))
+                .thenReturn(new UrlValidatorService.ValidatedUrl(
+                        "https://trusted.example/legal", "trusted.example"));
+        when(properties.scan()).thenReturn(new ComplianceApiProperties.Scan(
+                1, 5, 30, 7, 7, Set.of(ScanJurisdiction.RU)));
+        when(properties.kafka()).thenReturn(new ComplianceApiProperties.KafkaTopics(
+                new ComplianceApiProperties.KafkaTopics.Topic(
+                        "scan-requested", "scan-completed", "scan-failed")));
+        when(outboxEventFactory.create(any(), any(), any(), any()))
+                .thenReturn(new OutboxEvent());
+
+        service.startCabinetScan(
+                new ScanRequest("http://169.254.169.254/", "ATLANTIS", parentId, "xx"),
+                "1.2.3.4", user);
+
+        ArgumentCaptor<ComplianceScan> scanCaptor = ArgumentCaptor.forClass(ComplianceScan.class);
+        verify(scanRepository).save(scanCaptor.capture());
+        ComplianceScan rerun = scanCaptor.getValue();
+        assertThat(rerun.getParentScanId()).isEqualTo(parentId);
+        assertThat(rerun.getSiteUrl()).isEqualTo("https://trusted.example/legal");
+        assertThat(rerun.getSiteDomain()).isEqualTo("trusted.example");
+        assertThat(rerun.getJurisdiction()).isEqualTo(ScanJurisdiction.RU);
+        assertThat(rerun.getLocale()).isEqualTo("en");
+        assertThat(rerun.getTier()).isEqualTo(ScanTier.PREMIUM);
+        assertThat(rerun.isDynamicRequired()).isTrue();
+        verify(urlValidator, never()).validate("http://169.254.169.254/");
+        verify(balanceService).debit(eq(1L), eq(rerun.getId()));
     }
 }

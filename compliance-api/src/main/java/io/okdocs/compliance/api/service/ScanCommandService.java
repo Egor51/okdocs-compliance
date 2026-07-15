@@ -22,6 +22,8 @@ import io.okdocs.compliance.contracts.scan.ScanRequest;
 import io.okdocs.compliance.contracts.scan.ScanStatusResponse;
 import io.okdocs.compliance.persistence.outbox.OutboxEvent;
 import io.okdocs.compliance.persistence.outbox.OutboxEventRepository;
+import io.okdocs.compliance.persistence.auth.AppUser;
+import io.okdocs.compliance.persistence.auth.AppUserRepository;
 import io.okdocs.compliance.persistence.scan.ComplianceScan;
 import io.okdocs.compliance.persistence.scan.ComplianceScanReport;
 import io.okdocs.compliance.persistence.scan.ComplianceScanReportRepository;
@@ -49,6 +51,7 @@ public class ScanCommandService {
     private final ComplianceScanRepository scanRepository;
     private final ComplianceScanReportRepository scanReportRepository;
     private final ScanEmailRepository scanEmailRepository;
+    private final AppUserRepository appUserRepository;
     private final OutboxEventRepository outboxRepository;
     private final OutboxEventFactory outboxEventFactory;
     private final ScanBalanceService balanceService;
@@ -93,14 +96,21 @@ public class ScanCommandService {
             throw new AccessDeniedToScanException(null);
         }
         rateLimitService.checkScanAllowed(principal, ipAddress);
-        UrlValidatorService.ValidatedUrl validated = urlValidator.validate(request.siteUrl());
-        UUID parentScanId = resolveParent(request.parentScanId(), validated.domain(), principal);
+        ComplianceScan parent = resolveParent(request.parentScanId(), principal);
+        // Повторный запуск не доверяет siteUrl/jurisdiction/locale из браузера: все параметры
+        // наследуются из принадлежащего пользователю готового premium-скана.
+        UrlValidatorService.ValidatedUrl validated = urlValidator.validate(
+                parent == null ? request.siteUrl() : parent.getSiteUrl());
+        ScanJurisdiction jurisdiction = parent == null
+                ? resolveEnabledJurisdiction(request.jurisdiction())
+                : parent.getJurisdiction();
+        assertJurisdictionEnabled(jurisdiction, properties.scan().enabledJurisdictions());
+        String locale = parent == null ? parseLocale(request.locale()) : parseLocale(parent.getLocale());
 
-        ScanJurisdiction jurisdiction = resolveEnabledJurisdiction(request.jurisdiction());
-
-        ComplianceScan scan = newScan(validated, ipAddress, principal, parentScanId,
+        ComplianceScan scan = newScan(validated, ipAddress, principal,
+                parent == null ? null : parent.getId(),
                 ScanKind.CABINET_PREMIUM, properties.scan().userMaxPages(), true, jurisdiction,
-                parseLocale(request.locale()));
+                locale);
 
         // Списание баланса — в той же транзакции (oversell ловит @Version; нет баланса → 402).
         balanceService.debit(principal.userId(), scan.getId());
@@ -247,6 +257,27 @@ public class ScanCommandService {
     }
 
     /**
+     * Ручная отправка готового premium-отчёта из кабинета. Адрес берётся только из аккаунта,
+     * поэтому браузер не может выбрать чужого получателя или подменить consent-данные старого flow.
+     */
+    @Transactional
+    public void sendReportToAccountEmail(UUID scanId, CompliancePrincipal principal) {
+        if (!principal.isUser()) {
+            throw new AccessDeniedToScanException(scanId);
+        }
+        ScanReportResponse report = getReport(scanId, principal);
+        if (report.tier() != ScanTier.PREMIUM) {
+            throw new ComplianceValidationException("Отправка на email доступна только для полного отчёта");
+        }
+        AppUser user = appUserRepository.findById(principal.userId())
+                .orElseThrow(() -> new ComplianceValidationException("Пользователь не найден"));
+        if (user.getEmail() == null || user.getEmail().isBlank()) {
+            throw new ComplianceValidationException("В аккаунте не указан email");
+        }
+        reportMailCoordinator.enqueueForAccount(scanId, user.getEmail());
+    }
+
+    /**
      * Строгий разбор юрисдикции из запроса в {@link ScanJurisdiction}: «по какому закону проверяем».
      * Невалидное/пустое значение → 400 ({@link ComplianceValidationException}), без неявного дефолта —
      * выбор юрисдикции явно делает фронт (от неё зависят набор правил и тариф).
@@ -313,17 +344,19 @@ public class ScanCommandService {
         return jurisdiction;
     }
 
-    private UUID resolveParent(UUID parentScanId, String domain, CompliancePrincipal principal) {
+    private ComplianceScan resolveParent(UUID parentScanId, CompliancePrincipal principal) {
         if (parentScanId == null) {
             return null;
         }
         ComplianceScan parent = scanRepository.findById(parentScanId)
                 .orElseThrow(() -> new ScanNotFoundException(parentScanId));
         assertOwner(parent, principal);
-        if (!parent.getSiteDomain().equalsIgnoreCase(domain)) {
-            throw new ComplianceValidationException("Домен повторной проверки не совпадает с родительским сканом");
+        if ((parent.getStatus() != ScanStatus.COMPLETED && parent.getStatus() != ScanStatus.PARTIAL)
+                || effectiveTier(parent) != ScanTier.PREMIUM) {
+            throw new ComplianceValidationException(
+                    "Повторная проверка доступна только для готового полного отчёта");
         }
-        return parent.getId();
+        return parent;
     }
 
     private ComplianceScan loadOwned(UUID scanId, CompliancePrincipal principal) {
