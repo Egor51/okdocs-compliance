@@ -1,8 +1,10 @@
 package io.okdocs.compliance.rules.common;
 
 import io.okdocs.compliance.contracts.crawler.ConsentScenarioResult;
+import io.okdocs.compliance.contracts.crawler.ConsentScenarioFailureReason;
 import io.okdocs.compliance.contracts.crawler.PageAnalysisResult;
 import io.okdocs.compliance.contracts.crawler.ScanAnalysisContext;
+import io.okdocs.compliance.rules.RuleApplicability;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -31,9 +33,27 @@ public final class ConsentSupport {
         return s != null && s.available();
     }
 
+    public static boolean hasBannerInspection(PageAnalysisResult page) {
+        ConsentScenarioResult s = page.consentScenario();
+        return s != null && s.inspectionCompleted();
+    }
+
+    public static boolean hasPostRejectSnapshot(PageAnalysisResult page) {
+        ConsentScenarioResult s = page.consentScenario();
+        return s != null && s.rejectClicked() && s.postRejectSnapshotAvailable();
+    }
+
     /** Отработал ли consent-сценарий хотя бы на одной странице скана. */
     public static boolean scenarioAvailable(ScanAnalysisContext ctx) {
         return pages(ctx).stream().anyMatch(ConsentSupport::hasScenario);
+    }
+
+    public static boolean bannerInspectionAvailable(ScanAnalysisContext ctx) {
+        return pages(ctx).stream().anyMatch(ConsentSupport::hasBannerInspection);
+    }
+
+    public static boolean postRejectSnapshotAvailable(ScanAnalysisContext ctx) {
+        return pages(ctx).stream().anyMatch(ConsentSupport::hasPostRejectSnapshot);
     }
 
     /** Страницы с валидным consent-сценарием (порядок обхода сохранён). */
@@ -45,6 +65,39 @@ public final class ConsentSupport {
             }
         }
         return result;
+    }
+
+    public static List<PageAnalysisResult> pagesWithBannerInspection(ScanAnalysisContext ctx) {
+        return pages(ctx).stream().filter(ConsentSupport::hasBannerInspection).toList();
+    }
+
+    public static List<PageAnalysisResult> pagesWithPostRejectSnapshot(ScanAnalysisContext ctx) {
+        return pages(ctx).stream().filter(ConsentSupport::hasPostRejectSnapshot).toList();
+    }
+
+    /** Причина, почему правило, требующее выполненный Reject, нельзя оценить. */
+    public static RuleApplicability postRejectApplicability(ScanAnalysisContext ctx) {
+        if (postRejectSnapshotAvailable(ctx)) {
+            return RuleApplicability.available();
+        }
+        ConsentScenarioFailureReason reason = pages(ctx).stream()
+                .map(PageAnalysisResult::consentScenario)
+                .filter(java.util.Objects::nonNull)
+                .map(ConsentScenarioResult::failureReason)
+                .filter(java.util.Objects::nonNull)
+                .filter(r -> r != ConsentScenarioFailureReason.NONE)
+                .findFirst()
+                .orElse(ConsentScenarioFailureReason.CDP_ERROR);
+        String detail = switch (reason) {
+            case SCENARIO_DISABLED -> "Consent-сценарий отключён конфигурацией.";
+            case BANNER_NOT_FOUND -> "Cookie-баннер не найден на проверенных динамических страницах.";
+            case REJECT_NOT_FOUND -> "Cookie-баннер найден, но действие отказа не найдено.";
+            case REJECT_CLICK_FAILED -> "Действие отказа найдено, но браузер не смог его выполнить.";
+            case POST_REJECT_CAPTURE_FAILED -> "Отказ выполнен, но состояние после отказа снять не удалось.";
+            case TIMEOUT -> "Consent-сценарий не завершился за отведённое время.";
+            case CDP_ERROR, NONE -> "Consent-сценарий не выполнен из-за ошибки браузера.";
+        };
+        return RuleApplicability.unavailable(detail, "NOT_EVALUATED_CONSENT_" + reason.name());
     }
 
     /**

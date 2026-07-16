@@ -10,6 +10,7 @@ import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.contracts.enums.SourceType;
 import io.okdocs.compliance.contracts.enums.VerificationStatus;
 import io.okdocs.compliance.rules.Rule;
+import io.okdocs.compliance.rules.RuleApplicability;
 import io.okdocs.compliance.rules.RuleDefinition;
 import io.okdocs.compliance.rules.RuleFact;
 import io.okdocs.compliance.rules.common.ConsentSupport;
@@ -58,13 +59,18 @@ public final class EuTrackersBeforeConsentRule implements Rule {
 
     @Override
     public boolean appliesTo(ScanAnalysisContext ctx) {
-        return ConsentSupport.scenarioAvailable(ctx);
+        return ConsentSupport.postRejectSnapshotAvailable(ctx);
+    }
+
+    @Override
+    public RuleApplicability applicability(ScanAnalysisContext ctx) {
+        return ConsentSupport.postRejectApplicability(ctx);
     }
 
     @Override
     public List<RuleFact> evaluate(ScanAnalysisContext ctx) {
         List<RuleFact> facts = new ArrayList<>();
-        for (PageAnalysisResult page : ConsentSupport.pagesWithScenario(ctx)) {
+        for (PageAnalysisResult page : ConsentSupport.pagesWithPostRejectSnapshot(ctx)) {
             List<String> hosts = page.consentScenario().afterRejectTrackerHosts();
             if (hosts == null || hosts.isEmpty()) {
                 continue;

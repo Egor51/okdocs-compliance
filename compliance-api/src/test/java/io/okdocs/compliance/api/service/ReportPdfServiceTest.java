@@ -16,6 +16,7 @@ import io.okdocs.compliance.contracts.scan.FindingDto;
 import io.okdocs.compliance.contracts.scan.ReportQualityDto;
 import io.okdocs.compliance.contracts.scan.ScanReportResponse;
 import io.okdocs.compliance.contracts.scan.ScanSummaryDto;
+import io.okdocs.compliance.contracts.scan.UnverifiedRuleDto;
 import io.okdocs.compliance.persistence.scan.ComplianceScan;
 import io.okdocs.compliance.persistence.scan.ComplianceScanRepository;
 import org.apache.pdfbox.Loader;
@@ -65,7 +66,10 @@ class ReportPdfServiceTest {
             assertThat(document.getNumberOfPages()).isPositive();
             assertThat(new PDFTextStripper().getText(document))
                     .contains("Отчёт о проверке", "https://example.ru", "КРИТИЧНЫЕ",
-                            "КАК ИСПРАВИТЬ", "https://example.ru/login");
+                            "КАК ИСПРАВИТЬ", "https://example.ru/login",
+                            "Умеренный риск", "Требуется ручная проверка",
+                            "Браузер не смог выполнить Reject")
+                    .doesNotContain("НЕПОДТВЕРЖДЁННАЯ НАХОДКА");
         }
         verify(scanCommandService).getReport(scanId, principal);
         verify(scanRepository).findById(scanId);
@@ -96,9 +100,11 @@ class ReportPdfServiceTest {
                 tier,
                 null,
                 new ScanSummaryDto(1, 1, 1, 1, "до 500 000 ₽", null),
-                List.of(finding()),
+                List.of(finding(), unverifiedFinding()),
                 null,
-                new ReportQualityDto(12, 4, 2, List.of()),
+                new ReportQualityDto(12, 4, 2, List.of(), 89, List.of(
+                        new UnverifiedRuleDto("CONSENT", "Проверка отказа",
+                                FindingCategory.CONSENT, "Браузер не смог выполнить Reject"))),
                 null,
                 1_500L,
                 createdAt,
@@ -119,5 +125,13 @@ class ReportPdfServiceTest {
                         "https://example.ru/login", "Внешняя кнопка входа", SourceType.HTML,
                         .91, VerificationStatus.DETECTED, EvidenceType.STATIC_ANALYSIS,
                         List.of("oauth"))));
+    }
+
+    private static FindingDto unverifiedFinding() {
+        return new FindingDto(
+                "UNVERIFIED", FindingSeverity.MEDIUM, FindingCategory.CONSENT,
+                "НЕПОДТВЕРЖДЁННАЯ НАХОДКА", null, null, null, null, null,
+                "https://example.ru", SourceType.HTML, .5, VerificationStatus.UNVERIFIED,
+                EvidenceType.DYNAMIC_RENDER, List.of(), List.of());
     }
 }

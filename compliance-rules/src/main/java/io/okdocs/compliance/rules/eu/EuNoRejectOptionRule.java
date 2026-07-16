@@ -55,13 +55,13 @@ public final class EuNoRejectOptionRule implements Rule {
 
     @Override
     public boolean appliesTo(ScanAnalysisContext ctx) {
-        return ConsentSupport.scenarioAvailable(ctx);
+        return ConsentSupport.bannerInspectionAvailable(ctx);
     }
 
     @Override
     public List<RuleFact> evaluate(ScanAnalysisContext ctx) {
         List<RuleFact> facts = new ArrayList<>();
-        for (PageAnalysisResult page : ConsentSupport.pagesWithScenario(ctx)) {
+        for (PageAnalysisResult page : ConsentSupport.pagesWithBannerInspection(ctx)) {
             ConsentBannerInfo banner = page.consentScenario().banner();
             if (!banner.bannerFound() || !banner.acceptButtonFound()) {
                 continue; // нет баннера/accept — это не «отказ затруднён», а другой случай

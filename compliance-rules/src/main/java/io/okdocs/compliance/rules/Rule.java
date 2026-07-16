@@ -44,4 +44,16 @@ public interface Rule {
     default boolean appliesTo(ScanAnalysisContext ctx) {
         return true;
     }
+
+    /**
+     * Расширенный вариант {@link #appliesTo(ScanAnalysisContext)} с машиночитаемой причиной.
+     * Старые правила автоматически сохраняют прежнее поведение.
+     */
+    default RuleApplicability applicability(ScanAnalysisContext ctx) {
+        return appliesTo(ctx)
+                ? RuleApplicability.available()
+                : RuleApplicability.unavailable(
+                        "Правило не проверялось: нет входных данных для проверки.",
+                        "NOT_EVALUATED_NO_INPUT");
+    }
 }

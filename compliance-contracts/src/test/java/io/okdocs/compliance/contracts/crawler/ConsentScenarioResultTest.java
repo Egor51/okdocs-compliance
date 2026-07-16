@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ConsentScenarioResultTest {
@@ -16,6 +17,23 @@ class ConsentScenarioResultTest {
         assertTrue(r.afterRejectCookies().isEmpty());
         assertTrue(r.afterRejectTrackerHosts().isEmpty());
         assertTrue(r.afterAcceptCookies().isEmpty());
+        assertEquals(ConsentScenarioFailureReason.CDP_ERROR, r.failureReason());
+        assertFalse(r.rejectClicked());
+        assertFalse(r.postRejectSnapshotAvailable());
+    }
+
+    @Test
+    void explicitFailurePreservesScenarioProgressAndReason() {
+        ConsentBannerInfo banner = new ConsentBannerInfo(
+                true, true, true, false, false, true, false, "CMP");
+        ConsentScenarioResult r = ConsentScenarioResult.failed(
+                banner, true, true, false, ConsentScenarioFailureReason.REJECT_CLICK_FAILED);
+
+        assertTrue(r.inspectionCompleted());
+        assertTrue(r.rejectFound());
+        assertFalse(r.rejectClicked());
+        assertFalse(r.available());
+        assertEquals(ConsentScenarioFailureReason.REJECT_CLICK_FAILED, r.failureReason());
     }
 
     @Test

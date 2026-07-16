@@ -3,6 +3,7 @@ package io.okdocs.compliance.api.service;
 import io.okdocs.compliance.api.security.CompliancePrincipal;
 import io.okdocs.compliance.contracts.enums.FindingSeverity;
 import io.okdocs.compliance.contracts.enums.ScanTier;
+import io.okdocs.compliance.contracts.enums.VerificationStatus;
 import io.okdocs.compliance.contracts.exception.ComplianceValidationException;
 import io.okdocs.compliance.contracts.scan.AffectedPageDto;
 import io.okdocs.compliance.contracts.scan.FindingDto;
@@ -10,6 +11,7 @@ import io.okdocs.compliance.contracts.scan.PositiveCheckDto;
 import io.okdocs.compliance.contracts.scan.ReportQualityDto;
 import io.okdocs.compliance.contracts.scan.ScanReportResponse;
 import io.okdocs.compliance.contracts.scan.ScanSummaryDto;
+import io.okdocs.compliance.contracts.scan.UnverifiedRuleDto;
 import io.okdocs.compliance.persistence.scan.ComplianceScan;
 import io.okdocs.compliance.persistence.scan.ComplianceScanRepository;
 import lombok.RequiredArgsConstructor;
@@ -76,6 +78,7 @@ public class ReportPdfService {
             try (ProductPdf pdf = new ProductPdf(document, font, report, labels)) {
                 pdf.cover();
                 pdf.findings();
+                pdf.manualReview();
                 pdf.positiveChecks();
             }
             addFooters(document, font, report, labels);
@@ -236,7 +239,10 @@ public class ReportPdfService {
         }
 
         private void findings() throws IOException {
-            List<FindingDto> findings = report.findings() == null ? List.of() : report.findings();
+            List<FindingDto> findings = report.findings() == null ? List.of() : report.findings().stream()
+                    .filter(f -> f.verificationStatus() == VerificationStatus.DETECTED
+                            || f.verificationStatus() == VerificationStatus.CONFIRMED)
+                    .toList();
             newSectionPage(labels.findings, labels.findingsSubtitle(findings.size()), Palette.RED);
             if (findings.isEmpty()) {
                 emptyState(labels.noFindings, labels.noFindingsText, Palette.GREEN, Palette.GREEN_TINT);
@@ -245,6 +251,34 @@ public class ReportPdfService {
             int index = 1;
             for (FindingDto finding : findings) {
                 finding(index++, finding);
+            }
+        }
+
+        private void manualReview() throws IOException {
+            ReportQualityDto quality = report.quality();
+            List<UnverifiedRuleDto> rules = quality == null ? List.of() : quality.unverifiedRules();
+            if (rules.isEmpty()) return;
+            newSectionPage(labels.manualReview, labels.manualReviewSubtitle(rules.size()), Palette.AMBER);
+            for (UnverifiedRuleDto rule : rules) {
+                List<String> title = wrap(hasText(rule.title()) ? rule.title() : rule.code(),
+                        11, CONTENT_WIDTH - 54);
+                List<String> reason = hasText(rule.reason())
+                        ? wrap(rule.reason(), 9, CONTENT_WIDTH - 54) : List.of();
+                float height = 37 + title.size() * 15 + reason.size() * 12;
+                ensure(height + 8);
+                fillRect(MARGIN, y - height, CONTENT_WIDTH, height, Palette.AMBER_TINT);
+                fillCircle(MARGIN + 22, y - 23, 10, Color.WHITE);
+                textAt("?", MARGIN + 18.5f, y - 27, 11, Palette.AMBER);
+                float lineY = y - 22;
+                for (String line : title) {
+                    textAt(line, MARGIN + 44, lineY, 11, Palette.NAVY);
+                    lineY -= 15;
+                }
+                for (String line : reason) {
+                    textAt(line, MARGIN + 44, lineY - 2, 9, Palette.BODY);
+                    lineY -= 12;
+                }
+                y -= height + 8;
             }
         }
 
@@ -629,10 +663,10 @@ public class ReportPdfService {
 
     private record Risk(String label, Color color) {
         private static Risk forScore(int score, Labels labels) {
-            if (score >= 75) return new Risk(labels.riskHigh, Palette.RED);
-            if (score >= 50) return new Risk(labels.riskElevated, Palette.ORANGE);
-            if (score >= 25) return new Risk(labels.riskModerate, Palette.AMBER);
-            return new Risk(labels.riskLow, Palette.GREEN);
+            if (score >= 75) return new Risk(labels.riskLow, Palette.GREEN);
+            if (score >= 50) return new Risk(labels.riskModerate, Palette.AMBER);
+            if (score >= 25) return new Risk(labels.riskElevated, Palette.ORANGE);
+            return new Risk(labels.riskHigh, Palette.RED);
         }
     }
 
@@ -673,10 +707,14 @@ public class ReportPdfService {
             String recommendation, String evidence, String affectedPages, String positiveChecks,
             String positiveSubtitle, String continued, String andMore, String page,
             String riskHigh, String riskElevated, String riskModerate, String riskLow,
-            String findingsSubtitlePattern
+            String findingsSubtitlePattern, String manualReview, String manualReviewSubtitlePattern
     ) {
         private String findingsSubtitle(int count) {
             return String.format(Locale.ROOT, findingsSubtitlePattern, count);
+        }
+
+        private String manualReviewSubtitle(int count) {
+            return String.format(Locale.ROOT, manualReviewSubtitlePattern, count);
         }
 
         private static Labels forLocale(String locale) {
@@ -696,7 +734,8 @@ public class ReportPdfService {
                         "Evidence", "Affected pages", "What is already done well",
                         "Positive controls detected during the automated scan", "continued",
                         "and more", "Page", "High risk", "Elevated risk", "Moderate risk",
-                        "Low risk", "%d findings prioritized by severity and impact");
+                        "Low risk", "%d findings prioritized by severity and impact",
+                        "Manual review required", "%d checks need manual confirmation");
             }
             return new Labels(
                     "Отчёт о проверке", "Автоматическая проверка сайта",
@@ -714,7 +753,8 @@ public class ReportPdfService {
                     "Что уже сделано хорошо", "Положительные результаты автоматической проверки",
                     "продолжение", "и ещё", "Страница", "Высокий риск", "Повышенный риск",
                     "Умеренный риск", "Низкий риск",
-                    "Найдено нарушений: %d · отсортировано по серьёзности и влиянию");
+                    "Найдено нарушений: %d · отсортировано по серьёзности и влиянию",
+                    "Требуется ручная проверка", "Не удалось автоматически оценить правил: %d");
         }
     }
 }
