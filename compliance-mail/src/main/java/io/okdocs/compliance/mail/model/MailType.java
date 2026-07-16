@@ -4,5 +4,6 @@ public enum MailType {
     WELCOME,
     PASSWORD_RESET,
     REPORT_READY,
+    REMEDIATION_REQUEST,
     PROMO
 }

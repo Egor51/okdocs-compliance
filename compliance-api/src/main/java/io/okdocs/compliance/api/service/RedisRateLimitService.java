@@ -80,6 +80,17 @@ public class RedisRateLimitService implements RateLimitService {
         }
     }
 
+    @Override
+    public void checkRemediationRequestAllowed(String ipAddress) {
+        var bucket = proxyManager.builder()
+                .build(("remediation:" + ipAddress).getBytes(StandardCharsets.UTF_8),
+                        config(properties.rateLimit().remediationRequestsPerIpPerHour()));
+        if (!bucket.tryConsume(1)) {
+            throw new ComplianceRateLimitException(
+                    "Слишком много заявок, попробуйте отправить форму позже");
+        }
+    }
+
     private void consumeOrThrow(String key, int limitPerHour) {
         var bucket = proxyManager.builder()
                 .build(key.getBytes(StandardCharsets.UTF_8), config(limitPerHour));

@@ -42,6 +42,15 @@ public class InMemoryRateLimitService implements RateLimitService {
         }
     }
 
+    @Override
+    public void checkRemediationRequestAllowed(String ipAddress) {
+        if (!bucket("remediation:" + ipAddress,
+                properties.rateLimit().remediationRequestsPerIpPerHour()).tryConsume(1)) {
+            throw new ComplianceRateLimitException(
+                    "Слишком много заявок, попробуйте отправить форму позже");
+        }
+    }
+
     private void consumeOrThrow(String key, int limitPerHour) {
         if (!bucket(key, limitPerHour).tryConsume(1)) {
             throw new ComplianceRateLimitException("Превышен лимит сканов, попробуйте позже");

@@ -56,6 +56,27 @@ public class DefaultMailNotificationService implements MailNotificationService {
     }
 
     @Override
+    public void enqueueRemediationRequest(UUID requestId, String recipient, String siteUrl,
+                                          String name, String email, String phone,
+                                          Instant submittedAt, String locale) {
+        if (!hasEmail(recipient)) return;
+        String lang = HandlebarsMailTemplateRenderer.normalizeLocale(locale);
+        Map<String, Object> model = new HashMap<>();
+        model.put("requestId", requestId.toString());
+        model.put("siteUrl", blankTo("—", siteUrl));
+        model.put("name", blankTo("—", name));
+        model.put("email", blankTo("—", email));
+        model.put("phone", blankTo("—", phone));
+        model.put("submittedAt", submittedAt.toString());
+        outbox.enqueue(MailType.REMEDIATION_REQUEST,
+                "REMEDIATION_REQUEST:" + requestId, requestId.toString(), recipient,
+                "en".equals(lang)
+                        ? "New website remediation request"
+                        : "Новая заявка на доработку сайта",
+                "remediation_request", lang, model);
+    }
+
+    @Override
     public void enqueuePromo(UUID campaignId, UUID subscriptionId, String email,
                              String subject, Map<String, Object> model, String locale) {
         if (!hasEmail(email)) return;

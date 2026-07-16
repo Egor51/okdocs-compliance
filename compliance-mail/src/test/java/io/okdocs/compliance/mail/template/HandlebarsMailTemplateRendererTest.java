@@ -24,4 +24,18 @@ class HandlebarsMailTemplateRendererTest {
         assertThat(renderer.render("welcome", "de", Map.of("name", "Ivan", "email", "a@b.c")))
                 .contains("Добро пожаловать");
     }
+
+    @Test
+    void rendersRemediationNotificationAndEscapesLeadData() {
+        String html = renderer.render("remediation_request", "ru", Map.of(
+                "requestId", "request-id",
+                "siteUrl", "https://example.com/?q=<script>",
+                "name", "<b>Иван</b>",
+                "email", "ivan@example.com",
+                "phone", "+7 999 000-00-00",
+                "submittedAt", "2026-07-16T08:00:00Z"));
+
+        assertThat(html).contains("Новая заявка", "ivan@example.com", "request-id");
+        assertThat(html).doesNotContain("<script>", "<b>Иван</b>");
+    }
 }

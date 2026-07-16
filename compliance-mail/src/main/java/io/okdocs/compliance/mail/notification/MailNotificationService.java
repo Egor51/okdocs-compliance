@@ -10,6 +10,9 @@ public interface MailNotificationService {
                               String resetUrl, Instant expiresAt, String locale);
     void enqueueReportReady(UUID scanId, String email, String siteDomain,
                             Integer score, String reportUrl, String locale);
+    void enqueueRemediationRequest(UUID requestId, String recipient, String siteUrl,
+                                   String name, String email, String phone,
+                                   Instant submittedAt, String locale);
     void enqueuePromo(UUID campaignId, UUID subscriptionId, String email,
                       String subject, Map<String, Object> model, String locale);
 }

@@ -27,4 +27,7 @@ public interface RateLimitService {
      * Refresh сюда намеренно НЕ ходит: см. javadoc {@code RateLimit#authAttemptsPerIpPerHour}.
      */
     void checkAuthAttemptAllowed(String ipAddress);
+
+    /** Публичная форма услуги: отдельный IP-bucket, чтобы не расходовать лимит сканов. */
+    void checkRemediationRequestAllowed(String ipAddress);
 }
