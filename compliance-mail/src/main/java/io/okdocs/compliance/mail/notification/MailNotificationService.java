@@ -13,6 +13,10 @@ public interface MailNotificationService {
     void enqueueRemediationRequest(UUID requestId, String recipient, String siteUrl,
                                    String name, String email, String phone,
                                    Instant submittedAt, String locale);
+    void enqueueMonitoringAlert(UUID scanId, String email, String siteDomain,
+                                Integer previousScore, Integer currentScore,
+                                int newFindings, int resolvedFindings,
+                                String reportUrl, String locale);
     void enqueuePromo(UUID campaignId, UUID subscriptionId, String email,
                       String subject, Map<String, Object> model, String locale);
 }

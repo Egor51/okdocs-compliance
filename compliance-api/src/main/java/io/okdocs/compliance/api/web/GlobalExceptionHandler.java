@@ -7,6 +7,7 @@ import io.okdocs.compliance.contracts.exception.ForbiddenResourceException;
 import io.okdocs.compliance.contracts.exception.InsufficientScanBalanceException;
 import io.okdocs.compliance.contracts.exception.ScanNotFoundException;
 import io.okdocs.compliance.contracts.exception.ScanReportNotReadyException;
+import io.okdocs.compliance.contracts.exception.SiteMonitorNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -26,6 +27,12 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(ScanNotFoundException.class)
     public ResponseEntity<Map<String, Object>> handleNotFound(ScanNotFoundException e, HttpServletRequest req) {
+        return error(HttpStatus.NOT_FOUND, e.getMessage(), req);
+    }
+
+    @ExceptionHandler(SiteMonitorNotFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleMonitorNotFound(
+            SiteMonitorNotFoundException e, HttpServletRequest req) {
         return error(HttpStatus.NOT_FOUND, e.getMessage(), req);
     }
 

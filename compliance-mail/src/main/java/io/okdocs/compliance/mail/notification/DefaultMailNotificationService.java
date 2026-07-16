@@ -77,6 +77,29 @@ public class DefaultMailNotificationService implements MailNotificationService {
     }
 
     @Override
+    public void enqueueMonitoringAlert(UUID scanId, String email, String siteDomain,
+                                       Integer previousScore, Integer currentScore,
+                                       int newFindings, int resolvedFindings,
+                                       String reportUrl, String locale) {
+        if (!hasEmail(email)) return;
+        String lang = HandlebarsMailTemplateRenderer.normalizeLocale(locale);
+        Map<String, Object> model = new HashMap<>();
+        model.put("siteDomain", blankTo("—", siteDomain));
+        model.put("previousScore", previousScore == null ? "—" : previousScore);
+        model.put("currentScore", currentScore == null ? "—" : currentScore);
+        model.put("newFindings", newFindings);
+        model.put("resolvedFindings", resolvedFindings);
+        model.put("reportUrl", reportUrl);
+        outbox.enqueue(MailType.MONITORING_ALERT,
+                "MONITORING_ALERT:" + scanId + ":" + sha256(email.trim().toLowerCase()),
+                scanId.toString(), email,
+                "en".equals(lang)
+                        ? "Your monitored site has changed"
+                        : "Изменения по сайту под мониторингом",
+                "monitoring_alert", lang, model);
+    }
+
+    @Override
     public void enqueuePromo(UUID campaignId, UUID subscriptionId, String email,
                              String subject, Map<String, Object> model, String locale) {
         if (!hasEmail(email)) return;

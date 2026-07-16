@@ -5,6 +5,7 @@ import io.okdocs.compliance.api.security.CompliancePrincipal;
 import io.okdocs.compliance.messaging.OutboxEventFactory;
 import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.contracts.enums.ScanKind;
+import io.okdocs.compliance.contracts.enums.ScanLaunchSource;
 import io.okdocs.compliance.contracts.enums.ScanStatus;
 import io.okdocs.compliance.contracts.enums.ScanTier;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -120,6 +121,38 @@ public class ScanCommandService {
         return toStatusResponse(scan);
     }
 
+    /**
+     * System-initiated premium scan for a recurring monitor. Interactive IP rate limits do not
+     * apply; entitlement, monitor concurrency and schedule ownership are enforced by the monitoring
+     * service. Balance debit and outbox publication still share this transaction with scan creation.
+     */
+    @Transactional
+    public ScanStatusResponse startMonitoringScan(Long userId, UUID monitorId, String siteUrl,
+                                                  ScanJurisdiction requestedJurisdiction,
+                                                  String requestedLocale, UUID parentScanId) {
+        CompliancePrincipal principal = CompliancePrincipal.user(
+                userId, io.okdocs.compliance.contracts.enums.UserRole.USER);
+        ComplianceScan parent = resolveParent(parentScanId, principal);
+        UrlValidatorService.ValidatedUrl validated = urlValidator.validate(
+                parent == null ? siteUrl : parent.getSiteUrl());
+        ScanJurisdiction jurisdiction = parent == null
+                ? requestedJurisdiction
+                : parent.getJurisdiction();
+        assertJurisdictionEnabled(jurisdiction, properties.scan().enabledJurisdictions());
+        String locale = parent == null ? parseLocale(requestedLocale) : parseLocale(parent.getLocale());
+
+        ComplianceScan scan = newScan(validated, "127.0.0.1", principal,
+                parent == null ? null : parent.getId(), ScanKind.CABINET_PREMIUM,
+                properties.scan().userMaxPages(), true, jurisdiction, locale);
+        scan.setMonitorId(monitorId);
+        scan.setLaunchSource(ScanLaunchSource.MONITORING);
+
+        balanceService.debit(userId, scan.getId());
+        scanRepository.save(scan);
+        publishScanRequested(scan, principal);
+        return toStatusResponse(scan);
+    }
+
     /** Сборка строки скана в QUEUED. Режим выполнения (kind/maxPages/dynamicRequired) — здесь. */
     private ComplianceScan newScan(UrlValidatorService.ValidatedUrl validated, String ipAddress,
                                    CompliancePrincipal principal, UUID parentScanId,
@@ -142,6 +175,7 @@ public class ScanCommandService {
         scan.setTier(kind == ScanKind.CABINET_PREMIUM ? ScanTier.PREMIUM : ScanTier.FREE);
         scan.setMaxPages(maxPages);
         scan.setDynamicRequired(dynamicRequired);
+        scan.setLaunchSource(ScanLaunchSource.MANUAL);
         return scan;
     }
 

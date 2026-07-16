@@ -38,4 +38,18 @@ class HandlebarsMailTemplateRendererTest {
         assertThat(html).contains("Новая заявка", "ivan@example.com", "request-id");
         assertThat(html).doesNotContain("<script>", "<b>Иван</b>");
     }
+
+    @Test
+    void rendersMonitoringAlertAndEscapesDomain() {
+        String html = renderer.render("monitoring_alert", "en", Map.of(
+                "siteDomain", "<script>example.com</script>",
+                "previousScore", 80,
+                "currentScore", 70,
+                "newFindings", 2,
+                "resolvedFindings", 1,
+                "reportUrl", "https://okdocs.io/en/dashboard/reports/id"));
+
+        assertThat(html).contains("risks have changed", "80", "70");
+        assertThat(html).doesNotContain("<script>");
+    }
 }
