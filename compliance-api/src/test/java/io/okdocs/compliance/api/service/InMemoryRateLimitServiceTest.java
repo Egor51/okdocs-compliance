@@ -54,14 +54,34 @@ class InMemoryRateLimitServiceTest {
                 .isInstanceOf(ComplianceRateLimitException.class);
     }
 
+    @Test
+    void remediationFormUsesDedicatedPerIpBucket() {
+        InMemoryRateLimitService service = service(10, 10, 30, 2);
+        String ip = "203.0.113.10";
+
+        service.checkRemediationRequestAllowed(ip);
+        service.checkRemediationRequestAllowed(ip);
+        assertThatThrownBy(() -> service.checkRemediationRequestAllowed(ip))
+                .isInstanceOf(ComplianceRateLimitException.class);
+
+        // Лид-форма не расходует scan bucket того же посетителя.
+        service.checkScanAllowed(CompliancePrincipal.guest(UUID.randomUUID()), ip);
+    }
+
     private static InMemoryRateLimitService service(int guestPerIp, int userPerHour) {
         return service(guestPerIp, userPerHour, 30);
     }
 
     private static InMemoryRateLimitService service(int guestPerIp, int userPerHour, int authPerIp) {
+        return service(guestPerIp, userPerHour, authPerIp, 5);
+    }
+
+    private static InMemoryRateLimitService service(int guestPerIp, int userPerHour,
+                                                    int authPerIp, int remediationPerIp) {
         var props = new ComplianceApiProperties(
                 null,
-                new ComplianceApiProperties.RateLimit(guestPerIp, userPerHour, authPerIp),
+                new ComplianceApiProperties.RateLimit(
+                        guestPerIp, userPerHour, authPerIp, remediationPerIp),
                 null, null, null, null, null, null, null);
         return new InMemoryRateLimitService(props);
     }

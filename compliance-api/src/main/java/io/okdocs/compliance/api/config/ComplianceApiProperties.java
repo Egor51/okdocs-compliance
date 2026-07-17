@@ -104,7 +104,8 @@ public record ComplianceApiProperties(
      *                                 лишь ломал бы офисы за NAT с множеством активных сессий.
      */
     public record RateLimit(Integer guestScansPerIpPerHour, Integer userScansPerHour,
-                            Integer authAttemptsPerIpPerHour) {
+                            Integer authAttemptsPerIpPerHour,
+                            Integer remediationRequestsPerIpPerHour) {
         public RateLimit {
             if (guestScansPerIpPerHour == null) {
                 guestScansPerIpPerHour = 5;
@@ -114,6 +115,9 @@ public record ComplianceApiProperties(
             }
             if (authAttemptsPerIpPerHour == null) {
                 authAttemptsPerIpPerHour = 30;
+            }
+            if (remediationRequestsPerIpPerHour == null) {
+                remediationRequestsPerIpPerHour = 5;
             }
         }
     }

@@ -2,6 +2,7 @@ package io.okdocs.compliance.api.messaging;
 
 import io.okdocs.compliance.api.service.ScanBalanceService;
 import io.okdocs.compliance.api.service.ReportMailCoordinator;
+import io.okdocs.compliance.api.service.SiteMonitorResultService;
 import io.okdocs.compliance.contracts.event.ScanCompletedEvent;
 import io.okdocs.compliance.contracts.event.ScanFailedEvent;
 import lombok.RequiredArgsConstructor;
@@ -25,6 +26,7 @@ public class ScanResultListener {
 
     private final ScanBalanceService balanceService;
     private final ReportMailCoordinator reportMailCoordinator;
+    private final SiteMonitorResultService siteMonitorResultService;
 
     @KafkaListener(
             topics = "${compliance.kafka.topic.scan-failed}",
@@ -35,6 +37,8 @@ public class ScanResultListener {
             if (event.userId() != null) {
                 balanceService.refund(event.userId(), event.scanId());
             }
+            siteMonitorResultService.failed(
+                    event.scanId(), event.errorMessage(), event.failedAt());
             acknowledgment.acknowledge();
         } catch (RuntimeException e) {
             log.warn("Не удалось обработать ScanFailedEvent для скана {} — offset не подтверждён: {}",
@@ -51,6 +55,8 @@ public class ScanResultListener {
             log.debug("Получен ScanCompletedEvent для скана {} (status={}, score={})",
                     event.scanId(), event.status(), event.score());
             reportMailCoordinator.enqueueIfReady(event.scanId());
+            siteMonitorResultService.completed(
+                    event.scanId(), event.status(), event.score(), event.completedAt());
             acknowledgment.acknowledge();
         } catch (RuntimeException e) {
             log.warn("Не удалось поставить report email в очередь для скана {} — offset не подтверждён: {}",

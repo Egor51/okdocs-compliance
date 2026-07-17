@@ -85,6 +85,8 @@ public class SecurityConfig {
                                 "/api/auth/oauth/exchange").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/auth/me").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/mail/unsubscribe").permitAll()
+                        // публичная лид-форма; валидация, honeypot в BFF и IP rate-limit в сервисе
+                        .requestMatchers(HttpMethod.POST, "/api/remediation-requests").permitAll()
                         // публичный продуктовый каталог для маркетинга и формы запуска scan
                         .requestMatchers(HttpMethod.GET,
                                 "/api/jurisdictions",

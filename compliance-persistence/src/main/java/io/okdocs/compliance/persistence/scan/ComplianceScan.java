@@ -2,6 +2,7 @@ package io.okdocs.compliance.persistence.scan;
 
 import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.contracts.enums.ScanKind;
+import io.okdocs.compliance.contracts.enums.ScanLaunchSource;
 import io.okdocs.compliance.contracts.enums.ScanStatus;
 import io.okdocs.compliance.contracts.enums.ScanTier;
 import jakarta.persistence.Column;
@@ -41,6 +42,14 @@ public class ComplianceScan {
     /** Self-ref: предыдущий скан того же домена (повторная проверка). */
     @Column(name = "parent_scan_id")
     private UUID parentScanId;
+
+    /** Recurring monitor that created this scan; null for manual/free flows. */
+    @Column(name = "monitor_id")
+    private UUID monitorId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "launch_source", nullable = false, length = 20)
+    private ScanLaunchSource launchSource = ScanLaunchSource.MANUAL;
 
     @Column(name = "ip_address", nullable = false, length = 45)
     private String ipAddress;

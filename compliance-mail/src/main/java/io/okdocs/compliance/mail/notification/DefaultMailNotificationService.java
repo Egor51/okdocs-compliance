@@ -56,6 +56,50 @@ public class DefaultMailNotificationService implements MailNotificationService {
     }
 
     @Override
+    public void enqueueRemediationRequest(UUID requestId, String recipient, String siteUrl,
+                                          String name, String email, String phone,
+                                          Instant submittedAt, String locale) {
+        if (!hasEmail(recipient)) return;
+        String lang = HandlebarsMailTemplateRenderer.normalizeLocale(locale);
+        Map<String, Object> model = new HashMap<>();
+        model.put("requestId", requestId.toString());
+        model.put("siteUrl", blankTo("—", siteUrl));
+        model.put("name", blankTo("—", name));
+        model.put("email", blankTo("—", email));
+        model.put("phone", blankTo("—", phone));
+        model.put("submittedAt", submittedAt.toString());
+        outbox.enqueue(MailType.REMEDIATION_REQUEST,
+                "REMEDIATION_REQUEST:" + requestId, requestId.toString(), recipient,
+                "en".equals(lang)
+                        ? "New website remediation request"
+                        : "Новая заявка на доработку сайта",
+                "remediation_request", lang, model);
+    }
+
+    @Override
+    public void enqueueMonitoringAlert(UUID scanId, String email, String siteDomain,
+                                       Integer previousScore, Integer currentScore,
+                                       int newFindings, int resolvedFindings,
+                                       String reportUrl, String locale) {
+        if (!hasEmail(email)) return;
+        String lang = HandlebarsMailTemplateRenderer.normalizeLocale(locale);
+        Map<String, Object> model = new HashMap<>();
+        model.put("siteDomain", blankTo("—", siteDomain));
+        model.put("previousScore", previousScore == null ? "—" : previousScore);
+        model.put("currentScore", currentScore == null ? "—" : currentScore);
+        model.put("newFindings", newFindings);
+        model.put("resolvedFindings", resolvedFindings);
+        model.put("reportUrl", reportUrl);
+        outbox.enqueue(MailType.MONITORING_ALERT,
+                "MONITORING_ALERT:" + scanId + ":" + sha256(email.trim().toLowerCase()),
+                scanId.toString(), email,
+                "en".equals(lang)
+                        ? "Your monitored site has changed"
+                        : "Изменения по сайту под мониторингом",
+                "monitoring_alert", lang, model);
+    }
+
+    @Override
     public void enqueuePromo(UUID campaignId, UUID subscriptionId, String email,
                              String subject, Map<String, Object> model, String locale) {
         if (!hasEmail(email)) return;

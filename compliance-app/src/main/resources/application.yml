@@ -120,6 +120,15 @@ compliance:
     # Анти-brute-force: попытки login/register/oauth-exchange с одного IP в час.
     # Refresh не лимитируется (256-бит токен + reuse-detection в AuthService).
     auth-attempts-per-ip-per-hour: ${AUTH_ATTEMPTS_PER_IP_PER_HOUR:30}
+    remediation-requests-per-ip-per-hour: ${REMEDIATION_REQUESTS_PER_IP_PER_HOUR:5}
+  remediation:
+    notification-recipient: ${REMEDIATION_NOTIFICATION_EMAIL:${ADMIN_EMAIL:${MAIL_REPLY_TO:support@okdocs.io}}}
+  monitoring:
+    poll-interval-ms: ${MONITORING_POLL_INTERVAL_MS:60000}
+    max-monitors:
+      FREE: 0
+      PRO: ${MONITORING_PRO_MAX_SITES:2}
+      BUSINESS: ${MONITORING_BUSINESS_MAX_SITES:10}
   scan:
     # api-флоу: лимиты страниц по принципалу + TTL короткоживущих сканов
     free-marketing-max-pages: 1
