@@ -5,7 +5,9 @@ spring:
     # Единый источник правды для compliance.* (краулер/scan/score/dynamic/outbox).
     # Тот же файл импортирует combined-app — worker и app не могут разъехаться по
     # таймаутам/score/CDP. Здесь остаётся только worker-инфраструктура и env-специфика.
-    import: "classpath:application-compliance-core.yml"
+    import:
+      - "classpath:application-domain-policy.yml"
+      - "classpath:application-compliance-core.yml"
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/compliance}
     username: ${DB_USERNAME:compliance}

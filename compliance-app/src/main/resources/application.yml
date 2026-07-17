@@ -12,7 +12,9 @@ spring:
     # Тот же core-yml, что импортирует standalone-worker — единый источник правды для
     # compliance.crawler/scan/score/dynamic/outbox. Combined-app не может разъехаться с
     # worker по таймаутам/score/CDP. Ниже — только api-блоки и env-специфика CDP.
-    import: "classpath:application-compliance-core.yml"
+    import:
+      - "classpath:application-domain-policy.yml"
+      - "classpath:application-compliance-core.yml"
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/compliance}
     username: ${DB_USERNAME:compliance}

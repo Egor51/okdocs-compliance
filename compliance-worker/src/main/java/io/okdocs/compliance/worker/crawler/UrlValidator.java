@@ -1,7 +1,7 @@
 package io.okdocs.compliance.worker.crawler;
 
+import io.okdocs.compliance.contracts.security.BlockedDomainPolicy;
 import io.okdocs.compliance.worker.config.ComplianceWorkerProperties;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -26,12 +26,18 @@ import java.util.Set;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class UrlValidator {
 
     private static final Set<String> ALLOWED_SCHEMES = Set.of("http", "https");
 
     private final ComplianceWorkerProperties properties;
+    private final BlockedDomainPolicy blockedDomainPolicy;
+
+    public UrlValidator(ComplianceWorkerProperties properties) {
+        this.properties = properties;
+        this.blockedDomainPolicy = new BlockedDomainPolicy(
+                properties.getSecurity().getBlockedDomains());
+    }
 
     public ValidationResult validate(String urlString) {
         if (urlString == null || urlString.isBlank()) {
@@ -125,13 +131,7 @@ public class UrlValidator {
     }
 
     private boolean isBlockedDomain(String host) {
-        for (String blocked : properties.getCrawler().getBlockedDomains()) {
-            String b = blocked.toLowerCase(Locale.ROOT);
-            if (host.equals(b) || host.endsWith("." + b)) {
-                return true;
-            }
-        }
-        return false;
+        return blockedDomainPolicy.isBlocked(host);
     }
 
     /**
