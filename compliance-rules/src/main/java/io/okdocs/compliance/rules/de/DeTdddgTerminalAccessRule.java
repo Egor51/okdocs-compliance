@@ -11,6 +11,7 @@ import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.contracts.enums.SourceType;
 import io.okdocs.compliance.contracts.enums.VerificationStatus;
 import io.okdocs.compliance.rules.Rule;
+import io.okdocs.compliance.rules.RuleApplicability;
 import io.okdocs.compliance.rules.RuleDefinition;
 import io.okdocs.compliance.rules.RuleFact;
 import io.okdocs.compliance.rules.common.ConsentSupport;
@@ -59,13 +60,18 @@ public final class DeTdddgTerminalAccessRule implements Rule {
 
     @Override
     public boolean appliesTo(ScanAnalysisContext ctx) {
-        return ConsentSupport.scenarioAvailable(ctx);
+        return ConsentSupport.postRejectSnapshotAvailable(ctx);
+    }
+
+    @Override
+    public RuleApplicability applicability(ScanAnalysisContext ctx) {
+        return ConsentSupport.postRejectApplicability(ctx);
     }
 
     @Override
     public List<RuleFact> evaluate(ScanAnalysisContext ctx) {
         List<RuleFact> facts = new ArrayList<>();
-        for (PageAnalysisResult page : ConsentSupport.pagesWithScenario(ctx)) {
+        for (PageAnalysisResult page : ConsentSupport.pagesWithPostRejectSnapshot(ctx)) {
             Set<String> evidence = new LinkedHashSet<>();
             for (ObservedCookie c : page.consentScenario().afterRejectCookies()) {
                 if (TrackerCookieNames.isTracker(c.name())) {
@@ -74,6 +80,11 @@ public final class DeTdddgTerminalAccessRule implements Rule {
             }
             for (String host : page.consentScenario().afterRejectTrackerHosts()) {
                 TrackerCatalog.lookup(host).ifPresent(info -> evidence.add("tracker:" + info.provider()));
+            }
+            for (String key : page.consentScenario().afterRejectStorageKeys()) {
+                if (TrackerCookieNames.isTracker(key)) {
+                    evidence.add("storage:" + key);
+                }
             }
             if (evidence.isEmpty()) {
                 continue;

@@ -2,6 +2,7 @@ package io.okdocs.compliance.rules.ru;
 
 import io.okdocs.compliance.contracts.crawler.PageAnalysisResult;
 import io.okdocs.compliance.contracts.crawler.ScanAnalysisContext;
+import io.okdocs.compliance.contracts.crawler.ObservedCookie;
 import io.okdocs.compliance.contracts.enums.EvidenceType;
 import io.okdocs.compliance.contracts.enums.FindingCategory;
 import io.okdocs.compliance.contracts.enums.FindingSeverity;
@@ -11,8 +12,10 @@ import io.okdocs.compliance.contracts.enums.VerificationStatus;
 import io.okdocs.compliance.rules.Rule;
 import io.okdocs.compliance.rules.RuleDefinition;
 import io.okdocs.compliance.rules.RuleFact;
+import io.okdocs.compliance.rules.RuleApplicability;
 import io.okdocs.compliance.rules.common.ConsentSupport;
 import io.okdocs.compliance.rules.common.TrackerCatalog;
+import io.okdocs.compliance.rules.common.TrackerCookieNames;
 
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -54,20 +57,31 @@ public final class ConsentChoiceNotEffectiveRule implements Rule {
 
     @Override
     public boolean appliesTo(ScanAnalysisContext ctx) {
-        return ConsentSupport.scenarioAvailable(ctx);
+        return ConsentSupport.postRejectSnapshotAvailable(ctx);
+    }
+
+    @Override
+    public RuleApplicability applicability(ScanAnalysisContext ctx) {
+        return ConsentSupport.postRejectApplicability(ctx);
     }
 
     @Override
     public List<RuleFact> evaluate(ScanAnalysisContext ctx) {
         List<RuleFact> facts = new ArrayList<>();
-        for (PageAnalysisResult page : ConsentSupport.pagesWithScenario(ctx)) {
-            if (page.consentScenario().banner() == null
-                    || !page.consentScenario().banner().rejectButtonFound()) {
-                continue; // RU rule does not treat absence/placement of Reject as a standalone violation.
-            }
+        for (PageAnalysisResult page : ConsentSupport.pagesWithPostRejectSnapshot(ctx)) {
             Set<String> providers = new LinkedHashSet<>();
             for (String host : page.consentScenario().afterRejectTrackerHosts()) {
                 TrackerCatalog.lookup(host).ifPresent(info -> providers.add(info.provider()));
+            }
+            for (ObservedCookie cookie : page.consentScenario().afterRejectCookies()) {
+                if (TrackerCookieNames.isTracker(cookie.name())) {
+                    providers.add("cookie:" + cookie.name());
+                }
+            }
+            for (String key : page.consentScenario().afterRejectStorageKeys()) {
+                if (TrackerCookieNames.isTracker(key)) {
+                    providers.add("storage:" + key);
+                }
             }
             if (providers.isEmpty()) {
                 continue;

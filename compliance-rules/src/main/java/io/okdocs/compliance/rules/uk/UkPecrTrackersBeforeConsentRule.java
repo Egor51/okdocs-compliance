@@ -2,6 +2,7 @@ package io.okdocs.compliance.rules.uk;
 
 import io.okdocs.compliance.contracts.crawler.PageAnalysisResult;
 import io.okdocs.compliance.contracts.crawler.ScanAnalysisContext;
+import io.okdocs.compliance.contracts.crawler.ObservedCookie;
 import io.okdocs.compliance.contracts.enums.EvidenceType;
 import io.okdocs.compliance.contracts.enums.FindingCategory;
 import io.okdocs.compliance.contracts.enums.FindingSeverity;
@@ -10,10 +11,12 @@ import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.contracts.enums.SourceType;
 import io.okdocs.compliance.contracts.enums.VerificationStatus;
 import io.okdocs.compliance.rules.Rule;
+import io.okdocs.compliance.rules.RuleApplicability;
 import io.okdocs.compliance.rules.RuleDefinition;
 import io.okdocs.compliance.rules.RuleFact;
 import io.okdocs.compliance.rules.common.ConsentSupport;
 import io.okdocs.compliance.rules.common.TrackerCatalog;
+import io.okdocs.compliance.rules.common.TrackerCookieNames;
 
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -55,20 +58,34 @@ public final class UkPecrTrackersBeforeConsentRule implements Rule {
 
     @Override
     public boolean appliesTo(ScanAnalysisContext ctx) {
-        return ConsentSupport.scenarioAvailable(ctx);
+        return ConsentSupport.postRejectSnapshotAvailable(ctx);
+    }
+
+    @Override
+    public RuleApplicability applicability(ScanAnalysisContext ctx) {
+        return ConsentSupport.postRejectApplicability(ctx);
     }
 
     @Override
     public List<RuleFact> evaluate(ScanAnalysisContext ctx) {
         List<RuleFact> facts = new ArrayList<>();
-        for (PageAnalysisResult page : ConsentSupport.pagesWithScenario(ctx)) {
+        for (PageAnalysisResult page : ConsentSupport.pagesWithPostRejectSnapshot(ctx)) {
             List<String> hosts = page.consentScenario().afterRejectTrackerHosts();
-            if (hosts == null || hosts.isEmpty()) {
-                continue;
-            }
             Set<String> named = new LinkedHashSet<>();
-            for (String host : hosts) {
-                TrackerCatalog.lookup(host).ifPresent(info -> named.add(info.provider()));
+            if (hosts != null) {
+                for (String host : hosts) {
+                    TrackerCatalog.lookup(host).ifPresent(info -> named.add(info.provider()));
+                }
+            }
+            for (ObservedCookie cookie : page.consentScenario().afterRejectCookies()) {
+                if (TrackerCookieNames.isTracker(cookie.name())) {
+                    named.add("cookie:" + cookie.name());
+                }
+            }
+            for (String key : page.consentScenario().afterRejectStorageKeys()) {
+                if (TrackerCookieNames.isTracker(key)) {
+                    named.add("storage:" + key);
+                }
             }
             if (named.isEmpty()) {
                 continue;

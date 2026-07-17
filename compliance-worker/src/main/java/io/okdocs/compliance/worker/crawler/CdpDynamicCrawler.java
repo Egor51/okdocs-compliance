@@ -20,6 +20,7 @@ import java.net.http.HttpResponse;
 import java.net.http.WebSocket;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -109,16 +110,21 @@ public class CdpDynamicCrawler implements DynamicCrawler {
             + "function visible(el){if(!el)return false;var r=el.getBoundingClientRect();"
             + "if(r.width<1||r.height<1)return false;var st=getComputedStyle(el);"
             + "return st.display!=='none'&&st.visibility!=='hidden'&&st.opacity!=='0';}"
-            + "function clickable(){return Array.prototype.slice.call("
-            + "document.querySelectorAll('button,a[role=button],a,input[type=button],input[type=submit],[role=button]'));}"
-            + "function findCmp(){for(var sel in CMP){try{var el=document.querySelector(sel);"
-            + "if(el&&visible(el))return {el:el,name:CMP[sel]};}catch(e){}}"
+            + "function roots(){var out=[],seen=[];function walk(r){if(!r||seen.indexOf(r)>=0)return;"
+            + "seen.push(r);out.push(r);var all=[];try{all=r.querySelectorAll('*');}catch(e){}"
+            + "for(var i=0;i<all.length;i++){if(all[i].shadowRoot)walk(all[i].shadowRoot);"
+            + "if(low(all[i].tagName)==='iframe'){try{walk(all[i].contentDocument);}catch(e){}}}}walk(document);return out;}"
+            + "function queryAll(sel){var rs=roots(),out=[];for(var i=0;i<rs.length;i++){try{"
+            + "var a=rs[i].querySelectorAll(sel);for(var j=0;j<a.length;j++)out.push(a[j]);}catch(e){}}return out;}"
+            + "function clickable(){return queryAll('button,a[role=button],a,input[type=button],input[type=submit],[role=button]');}"
+            + "function findCmp(){for(var sel in CMP){try{var els=queryAll(sel);"
+            + "for(var x=0;x<els.length;x++){if(visible(els[x]))return {el:els[x],name:CMP[sel]};}}catch(e){}}"
             + "for(var sel2 in CMP){try{if(sel2.charAt(sel2.length-1)==='_'){"
-            + "var all=document.querySelectorAll('[id^='+JSON.stringify(sel2.slice(1))+']');"
+            + "var all=queryAll('[id^='+JSON.stringify(sel2.slice(1))+']');"
             + "for(var i=0;i<all.length;i++){if(visible(all[i]))return {el:all[i],name:CMP[sel2]};}}}catch(e){}}"
             + "return null;}"
             + "function findBanner(){var c=findCmp();if(c)return c;"
-            + "var cand=document.querySelectorAll('[id*=cookie],[class*=cookie],[id*=consent],[class*=consent],"
+            + "var cand=queryAll('[id*=cookie],[class*=cookie],[id*=consent],[class*=consent],"
             + "[aria-label*=cookie],[aria-label*=consent],[role=dialog],[role=alertdialog]');"
             + "for(var i=0;i<cand.length;i++){var el=cand[i];if(!visible(el))continue;"
             + "var t=txt(el);if(t.indexOf('cookie')>=0||t.indexOf('consent')>=0||t.indexOf('privacy')>=0||"
@@ -194,6 +200,9 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                     HttpResponse.BodyHandlers.ofString());
             statusCode = r.statusCode();
             isNowAvailable = statusCode == 200;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            errorMessage = e.getMessage();
         } catch (Exception e) {
             errorMessage = e.getMessage();
         }
@@ -398,16 +407,7 @@ public class CdpDynamicCrawler implements DynamicCrawler {
             String wsUrl = target[1];
 
             try (CdpSession s = new CdpSession(wsUrl, authHeader)) {
-                s.send("Network.enable", null);
-                s.send("Network.setUserAgentOverride",
-                        objectMapper.createObjectNode().put("userAgent", userAgent).toString());
-                s.send("Page.enable", null);
-                s.send("Fetch.enable",
-                        objectMapper.createObjectNode()
-                                .put("handleAuthRequests", false)
-                                .set("patterns", objectMapper.createArrayNode()
-                                        .add(objectMapper.createObjectNode().put("urlPattern", "*")))
-                                .toString());
+                initializePageSession(s);
 
                 String url;
                 while ((url = queue.poll()) != null) {
@@ -416,7 +416,7 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                     }
                     long pageStart = System.currentTimeMillis();
                     try {
-                        PageFetch result = fetchPage(s, url, allowedThirdPartyHosts);
+                        PageFetch result = fetchPage(browser, s, url, allowedThirdPartyHosts);
                         long ms = System.currentTimeMillis() - pageStart;
                         log.info("CDP crawl ok url={} finalUrl={} html-len={} preConsent={} ms={}",
                                 url, result.finalUrl(), result.html().length(),
@@ -442,6 +442,19 @@ public class CdpDynamicCrawler implements DynamicCrawler {
             }
             MDC.clear();
         }
+    }
+
+    private void initializePageSession(CdpSession s) throws Exception {
+        s.send("Network.enable", null);
+        s.send("Network.setUserAgentOverride",
+                objectMapper.createObjectNode().put("userAgent", userAgent).toString());
+        s.send("Page.enable", null);
+        s.send("Fetch.enable",
+                objectMapper.createObjectNode()
+                        .put("handleAuthRequests", false)
+                        .set("patterns", objectMapper.createArrayNode()
+                                .add(objectMapper.createObjectNode().put("urlPattern", "*")))
+                        .toString());
     }
 
     /**
@@ -526,10 +539,17 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                                   boolean available) {
     }
 
-    private record RequestObservation(String host, double epochMs) {
+    private record RequestObservation(long sequence, String host, double epochMs, String resourceType) {
     }
 
-    private PageFetch fetchPage(CdpSession s, String targetUrl, Set<String> allowedThirdPartyHosts) throws Exception {
+    private record ConsentClickBoundary(long sequence, double epochMs, boolean clicked) {
+    }
+
+    private record StorageSnapshot(List<String> keys, boolean available) {
+    }
+
+    private PageFetch fetchPage(CdpSession browser, CdpSession s, String targetUrl,
+                                Set<String> allowedThirdPartyHosts) throws Exception {
         String allowedDomain = extractDomain(targetUrl);
         s.setDomainPolicy(allowedDomain, allowedThirdPartyHosts);
         try {
@@ -588,9 +608,10 @@ public class CdpDynamicCrawler implements DynamicCrawler {
             // скан не падает. Снимок «до» — это hosts/cookies выше; «после Reject» — ключевой вход
             // для EU/UK consent-правил («трекеры пережили отказ»).
             io.okdocs.compliance.contracts.crawler.ConsentScenarioResult consentScenario =
-                    io.okdocs.compliance.contracts.crawler.ConsentScenarioResult.notEvaluated();
+                    io.okdocs.compliance.contracts.crawler.ConsentScenarioResult.disabled();
             if (consentScenariosEnabled) {
-                consentScenario = driveConsentScenarios(s, allowedDomain);
+                consentScenario = driveConsentScenarioIsolated(
+                        browser, targetUrl, allowedDomain, allowedThirdPartyHosts);
             }
 
             return new PageFetch(
@@ -639,44 +660,157 @@ public class CdpDynamicCrawler implements DynamicCrawler {
         }
     }
 
+    private StorageSnapshot collectStorageKeys(CdpSession s) {
+        try {
+            String json = s.eval("(function(){var out=[];try{for(var i=0;i<localStorage.length;i++){"
+                    + "out.push('local:'+localStorage.key(i));}}catch(e){return JSON.stringify({ok:false,keys:[]});}"
+                    + "try{for(var j=0;j<sessionStorage.length;j++){out.push('session:'+sessionStorage.key(j));}}"
+                    + "catch(e){return JSON.stringify({ok:false,keys:[]});}"
+                    + "return JSON.stringify({ok:true,keys:out});})()");
+            JsonNode node = objectMapper.readTree(json);
+            return new StorageSnapshot(readStringArray(node.path("keys")), node.path("ok").asBoolean(false));
+        } catch (Exception e) {
+            log.debug("Post-reject Web Storage snapshot failed: {}", e.getMessage());
+            return new StorageSnapshot(List.of(), false);
+        }
+    }
+
+    /** Запускает Reject в отдельном чистом BrowserContext и всегда уничтожает его после снимка. */
+    private io.okdocs.compliance.contracts.crawler.ConsentScenarioResult driveConsentScenarioIsolated(
+            CdpSession browser,
+            String targetUrl,
+            String allowedDomain,
+            Set<String> allowedThirdPartyHosts) {
+        String contextId = null;
+        String targetId = null;
+        try {
+            contextId = createBrowserContext(browser);
+            String[] target = createTargetInContext(browser, contextId);
+            targetId = target[0];
+            try (CdpSession scenario = new CdpSession(target[1], authHeader)) {
+                initializePageSession(scenario);
+                scenario.setDomainPolicy(allowedDomain, allowedThirdPartyHosts);
+                JsonNode navigation = scenario.send("Page.navigate",
+                        objectMapper.createObjectNode().put("url", targetUrl).toString());
+                String error = navigation.path("errorText").asText("");
+                if (!error.isBlank()) {
+                    throw new IllegalStateException("Consent navigation failed: " + error);
+                }
+                scenario.waitForEvent("Page.loadEventFired", pageTimeoutMs);
+                scenario.waitForNetworkIdle(networkIdleQuietMs, networkIdleTimeoutMs);
+                return driveConsentScenarios(scenario, allowedDomain);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return consentFailure(io.okdocs.compliance.contracts.crawler.ConsentBannerInfo.notFound(),
+                    false, false, false,
+                    io.okdocs.compliance.contracts.crawler.ConsentScenarioFailureReason.TIMEOUT);
+        } catch (Exception e) {
+            log.debug("Isolated consent scenario failed url={}: {}", targetUrl, e.getMessage());
+            return consentFailure(io.okdocs.compliance.contracts.crawler.ConsentBannerInfo.notFound(),
+                    false, false, false,
+                    io.okdocs.compliance.contracts.crawler.ConsentScenarioFailureReason.CDP_ERROR);
+        } finally {
+            if (targetId != null) {
+                closeTarget(browser, targetId);
+            }
+            if (contextId != null) {
+                disposeBrowserContext(browser, contextId);
+            }
+        }
+    }
+
     /**
-     * Прогон consent-сценариев на текущей странице (Фаза 4): инспектирует баннер, кликает Reject,
-     * снимает cookies/трекеры, затем кликает Accept и снова снимает cookies. Best-effort: любой сбой
-     * или отсутствие баннера → {@link ConsentScenarioResult#notEvaluated()} (правило тогда «не
-     * проверяли», а не «нарушений нет»). Снимки трекер-хостов берутся из текущей карты запросов
-     * сессии минус то, что уже было до клика.
+     * Инспектирует баннер, ставит точную временную/sequence-границу перед Reject и снимает все
+     * разрешённые запросы, cookies и Web Storage после клика. PASS допустим только если этот метод
+     * вернул {@code postRejectSnapshotAvailable=true}.
      */
     private io.okdocs.compliance.contracts.crawler.ConsentScenarioResult driveConsentScenarios(
             CdpSession s, String allowedDomain) {
         try {
-            io.okdocs.compliance.contracts.crawler.ConsentBannerInfo banner = inspectBanner(s);
+            io.okdocs.compliance.contracts.crawler.ConsentBannerInfo banner = inspectBannerWithWait(s);
             if (!banner.bannerFound()) {
-                return io.okdocs.compliance.contracts.crawler.ConsentScenarioResult.notEvaluated();
+                return consentFailure(banner, true, false, false,
+                        io.okdocs.compliance.contracts.crawler.ConsentScenarioFailureReason.BANNER_NOT_FOUND);
+            }
+            if (!banner.rejectButtonFound()) {
+                return consentFailure(banner, true, false, false,
+                        io.okdocs.compliance.contracts.crawler.ConsentScenarioFailureReason.REJECT_NOT_FOUND);
             }
 
-            // Reject-сценарий: хосты, запрошенные ДО клика, исключаем из «после Reject».
-            Set<String> hostsBeforeReject = new java.util.HashSet<>(s.firstRequestEpochMsByHost().keySet());
-            List<io.okdocs.compliance.contracts.crawler.ObservedCookie> afterRejectCookies = List.of();
-            List<String> afterRejectHosts = List.of();
-            if (banner.rejectButtonFound() && clickConsent(s, "reject")) {
-                waitAfterConsentClick(s);
-                afterRejectCookies = collectCookies(s).cookies();
-                afterRejectHosts = hostsSince(s, hostsBeforeReject, allowedDomain);
+            ConsentClickBoundary boundary;
+            try {
+                boundary = clickRejectWithBoundary(s);
+            } catch (Exception clickError) {
+                log.debug("Consent Reject click failed: {}", clickError.getMessage());
+                return consentFailure(banner, true, true, false,
+                        io.okdocs.compliance.contracts.crawler.ConsentScenarioFailureReason.REJECT_CLICK_FAILED);
+            }
+            if (!boundary.clicked()) {
+                return consentFailure(banner, true, true, false,
+                        io.okdocs.compliance.contracts.crawler.ConsentScenarioFailureReason.REJECT_CLICK_FAILED);
+            }
+            waitAfterConsentClick(s);
+            if (Thread.currentThread().isInterrupted()) {
+                return consentFailure(banner, true, true, true,
+                        io.okdocs.compliance.contracts.crawler.ConsentScenarioFailureReason.TIMEOUT);
             }
 
-            // Accept-сценарий (опционально): фиксируем cookies после принятия для сравнения.
-            List<io.okdocs.compliance.contracts.crawler.ObservedCookie> afterAcceptCookies = List.of();
-            if (banner.acceptButtonFound() && clickConsent(s, "accept")) {
-                waitAfterConsentClick(s);
-                afterAcceptCookies = collectCookies(s).cookies();
+            CookieSnapshot cookies = collectCookies(s);
+            StorageSnapshot storage = collectStorageKeys(s);
+            List<RequestObservation> observations = s.requestsAfter(
+                    boundary.sequence(), boundary.epochMs());
+            if (!cookies.available() || !storage.available()) {
+                return consentFailure(banner, true, true, true,
+                        io.okdocs.compliance.contracts.crawler.ConsentScenarioFailureReason.POST_REJECT_CAPTURE_FAILED);
             }
+            List<String> afterRejectHosts = thirdPartyHosts(observations, allowedDomain);
+            List<io.okdocs.compliance.contracts.crawler.NetworkRequestObservation> requestEvidence =
+                    observations.stream()
+                            .map(o -> new io.okdocs.compliance.contracts.crawler.NetworkRequestObservation(
+                                    o.sequence(), o.epochMs(), o.host(), o.resourceType()))
+                            .toList();
 
             return new io.okdocs.compliance.contracts.crawler.ConsentScenarioResult(
-                    banner, afterRejectCookies, afterRejectHosts, afterAcceptCookies, true);
+                    banner, cookies.cookies(), afterRejectHosts, storage.keys(), List.of(),
+                    requestEvidence, true, true, true, true,
+                    io.okdocs.compliance.contracts.crawler.ConsentScenarioFailureReason.NONE,
+                    s.requestTimelineTruncated(), true);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return consentFailure(io.okdocs.compliance.contracts.crawler.ConsentBannerInfo.notFound(),
+                    false, false, false,
+                    io.okdocs.compliance.contracts.crawler.ConsentScenarioFailureReason.TIMEOUT);
         } catch (Exception e) {
             log.debug("Consent scenario run failed: {}", e.getMessage());
-            return io.okdocs.compliance.contracts.crawler.ConsentScenarioResult.notEvaluated();
+            return consentFailure(io.okdocs.compliance.contracts.crawler.ConsentBannerInfo.notFound(),
+                    false, false, false,
+                    io.okdocs.compliance.contracts.crawler.ConsentScenarioFailureReason.CDP_ERROR);
         }
+    }
+
+    private static io.okdocs.compliance.contracts.crawler.ConsentScenarioResult consentFailure(
+            io.okdocs.compliance.contracts.crawler.ConsentBannerInfo banner,
+            boolean inspected,
+            boolean rejectFound,
+            boolean rejectClicked,
+            io.okdocs.compliance.contracts.crawler.ConsentScenarioFailureReason reason) {
+        return io.okdocs.compliance.contracts.crawler.ConsentScenarioResult.failed(
+                banner, inspected, rejectFound, rejectClicked, reason);
+    }
+
+    private io.okdocs.compliance.contracts.crawler.ConsentBannerInfo inspectBannerWithWait(CdpSession s)
+            throws Exception {
+        long deadline = System.currentTimeMillis() + Math.max(500, consentWaitAfterClickMs);
+        io.okdocs.compliance.contracts.crawler.ConsentBannerInfo banner;
+        do {
+            banner = inspectBanner(s);
+            if (banner.bannerFound()) {
+                return banner;
+            }
+            Thread.sleep(100);
+        } while (System.currentTimeMillis() < deadline && !Thread.currentThread().isInterrupted());
+        return banner;
     }
 
     /** Инспектирует структуру cookie-баннера/CMP через JS, парсит в {@link ConsentBannerInfo}. */
@@ -709,27 +843,39 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                 (cmp == null || cmp.isBlank()) ? null : cmp);
     }
 
-    /** Кликает кнопку баннера (action: accept|reject|manage); true, если кнопка найдена и нажата. */
-    private boolean clickConsent(CdpSession s, String action) {
-        try {
-            String r = s.eval(CONSENT_JS + ";__okdocksConsent.click('" + action + "')");
-            return "true".equals(r);
-        } catch (Exception e) {
-            log.debug("Consent click '{}' failed: {}", action, e.getMessage());
-            return false;
-        }
+    /** Sequence снимается до Runtime.evaluate, а browser timestamp — непосредственно перед click(). */
+    private ConsentClickBoundary clickRejectWithBoundary(CdpSession s) throws Exception {
+        long sequence = s.currentRequestSequence();
+        String json = s.eval(CONSENT_JS
+                + ";(function(){var t=Date.now();var ok=__okdocksConsent.click('reject');"
+                + "return JSON.stringify({epochMs:t,clicked:ok});})()");
+        JsonNode result = objectMapper.readTree(json);
+        return new ConsentClickBoundary(sequence, result.path("epochMs").asDouble(0),
+                result.path("clicked").asBoolean(false));
     }
 
     /** Пауза на догрузку после клика по баннеру: сетевая тишина в пределах настроенного окна. */
     private void waitAfterConsentClick(CdpSession s) {
+        long started = System.currentTimeMillis();
         s.waitForNetworkIdle(networkIdleQuietMs, consentWaitAfterClickMs);
+        long remaining = consentWaitAfterClickMs - (System.currentTimeMillis() - started);
+        while (remaining > 0 && !Thread.currentThread().isInterrupted()) {
+            try {
+                Thread.sleep(Math.min(remaining, 100));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            remaining = consentWaitAfterClickMs - (System.currentTimeMillis() - started);
+        }
     }
 
-    /** Сторонние хосты, впервые запрошенные ПОСЛЕ клика (которых не было в {@code before}). */
-    private static List<String> hostsSince(CdpSession s, Set<String> before, String allowedDomain) {
-        List<String> result = new ArrayList<>();
-        for (String host : s.firstRequestEpochMsByHost().keySet()) {
-            if (host == null || before.contains(host)) {
+    /** Уникальные сторонние хосты из полного потока после Reject, включая повторно вызванные. */
+    private static List<String> thirdPartyHosts(List<RequestObservation> observations, String allowedDomain) {
+        Set<String> result = new LinkedHashSet<>();
+        for (RequestObservation observation : observations) {
+            String host = observation.host();
+            if (host == null) {
                 continue;
             }
             if (allowedDomain != null && (host.equals(allowedDomain) || host.endsWith("." + allowedDomain))) {
@@ -737,7 +883,7 @@ public class CdpDynamicCrawler implements DynamicCrawler {
             }
             result.add(host);
         }
-        return result;
+        return List.copyOf(result);
     }
 
     /** Преобразует JSON-массив строк в List (для ключей localStorage). */
@@ -797,6 +943,7 @@ public class CdpDynamicCrawler implements DynamicCrawler {
     // ── CdpSession (WebSocket) ────────────────────────────────────────────────
 
     private final class CdpSession implements AutoCloseable {
+        private static final int MAX_REQUEST_TIMELINE_SIZE = 5_000;
         private final WebSocket ws;
         private final AtomicInteger ids = new AtomicInteger(0);
         private final ConcurrentHashMap<Integer, CompletableFuture<JsonNode>> pending = new ConcurrentHashMap<>();
@@ -817,6 +964,10 @@ public class CdpDynamicCrawler implements DynamicCrawler {
         private final ConcurrentHashMap<String, RequestObservation> requestByNetworkId = new ConcurrentHashMap<>();
         private final Set<String> continuedNetworkIds = ConcurrentHashMap.newKeySet();
         private final Set<String> failedNetworkIds = ConcurrentHashMap.newKeySet();
+        private final Set<String> committedNetworkIds = ConcurrentHashMap.newKeySet();
+        private final ArrayDeque<RequestObservation> requestTimeline = new ArrayDeque<>();
+        private final AtomicLong requestSequence = new AtomicLong(0);
+        private volatile boolean requestTimelineTruncated;
         // Сериализует все WebSocket-отправки — Java WebSocket запрещает конкурентные sendText.
         private final ExecutorService sendExecutor = Executors.newSingleThreadExecutor();
 
@@ -837,6 +988,12 @@ public class CdpDynamicCrawler implements DynamicCrawler {
             this.requestByNetworkId.clear();
             this.continuedNetworkIds.clear();
             this.failedNetworkIds.clear();
+            this.committedNetworkIds.clear();
+            synchronized (requestTimeline) {
+                this.requestTimeline.clear();
+            }
+            this.requestSequence.set(0);
+            this.requestTimelineTruncated = false;
         }
 
         void clearDomainPolicy() {
@@ -849,6 +1006,23 @@ public class CdpDynamicCrawler implements DynamicCrawler {
         /** Снимок таймлайна запросов текущей страницы (хост → минимальный wallTime, epoch мс). */
         Map<String, Double> firstRequestEpochMsByHost() {
             return new LinkedHashMap<>(firstRequestEpochMsByHost);
+        }
+
+        long currentRequestSequence() {
+            return requestSequence.get();
+        }
+
+        boolean requestTimelineTruncated() {
+            return requestTimelineTruncated;
+        }
+
+        List<RequestObservation> requestsAfter(long boundarySequence, double boundaryEpochMs) {
+            synchronized (requestTimeline) {
+                return requestTimeline.stream()
+                        .filter(o -> isAfterRejectBoundary(
+                                o.sequence(), o.epochMs(), boundarySequence, boundaryEpochMs))
+                        .toList();
+            }
         }
 
         /** Отправляет CDP-команду и ждёт ответа. Потокобезопасна. */
@@ -1018,10 +1192,11 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                     }
                     double epochMs = wallTime * 1000.0;
                     RequestObservation observation = new RequestObservation(
-                            host.toLowerCase(Locale.ROOT), epochMs);
+                            0, host.toLowerCase(Locale.ROOT), epochMs,
+                            params.path("type").asText("Other"));
                     requestByNetworkId.put(networkId, observation);
                     if (continuedNetworkIds.contains(networkId)) {
-                        commitContinuedRequest(observation);
+                        commitContinuedRequest(networkId, observation);
                     }
                 } catch (URISyntaxException e) {
                     // нераспарсенный URL в таймлайн не попадает
@@ -1035,7 +1210,7 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                 continuedNetworkIds.add(networkId);
                 RequestObservation observation = requestByNetworkId.get(networkId);
                 if (observation != null) {
-                    commitContinuedRequest(observation);
+                    commitContinuedRequest(networkId, observation);
                 }
             }
 
@@ -1048,8 +1223,21 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                 requestByNetworkId.remove(networkId);
             }
 
-            private void commitContinuedRequest(RequestObservation observation) {
+            private void commitContinuedRequest(String networkId, RequestObservation observation) {
+                if (!committedNetworkIds.add(networkId)) {
+                    return;
+                }
                 firstRequestEpochMsByHost.merge(observation.host(), observation.epochMs(), Math::min);
+                RequestObservation committed = new RequestObservation(
+                        requestSequence.incrementAndGet(), observation.host(), observation.epochMs(),
+                        observation.resourceType());
+                synchronized (requestTimeline) {
+                    if (requestTimeline.size() >= MAX_REQUEST_TIMELINE_SIZE) {
+                        requestTimeline.removeFirst();
+                        requestTimelineTruncated = true;
+                    }
+                    requestTimeline.addLast(committed);
+                }
             }
 
             private void handleFetchRequestPaused(JsonNode node) {
@@ -1247,6 +1435,13 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                 .map(Map.Entry::getKey)
                 .distinct()
                 .toList();
+    }
+
+    /** Двойная граница исключает как старые события, так и запросы, начатые до Reject, но продолженные после. */
+    static boolean isAfterRejectBoundary(long observationSequence, double observationEpochMs,
+                                         long boundarySequence, double boundaryEpochMs) {
+        return observationSequence > boundarySequence
+                && (boundaryEpochMs <= 0 || observationEpochMs >= boundaryEpochMs);
     }
 
     private static boolean isFirstParty(String host, String firstPartyDomain) {

@@ -64,7 +64,5 @@ CREATE UNIQUE INDEX uq_monitor_runs_monitor_scheduled
     ON monitor_runs(monitor_id, scheduled_for, trigger);
 CREATE UNIQUE INDEX uq_monitor_runs_scan
     ON monitor_runs(scan_id) WHERE scan_id IS NOT NULL;
-CREATE UNIQUE INDEX uq_monitor_runs_one_running
-    ON monitor_runs(monitor_id) WHERE status = 'RUNNING';
 CREATE INDEX idx_monitor_runs_monitor_created
     ON monitor_runs(monitor_id, created_at DESC);

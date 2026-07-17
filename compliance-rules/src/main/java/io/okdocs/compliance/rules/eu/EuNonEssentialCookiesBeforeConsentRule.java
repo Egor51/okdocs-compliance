@@ -11,6 +11,7 @@ import io.okdocs.compliance.contracts.enums.ScanJurisdiction;
 import io.okdocs.compliance.contracts.enums.SourceType;
 import io.okdocs.compliance.contracts.enums.VerificationStatus;
 import io.okdocs.compliance.rules.Rule;
+import io.okdocs.compliance.rules.RuleApplicability;
 import io.okdocs.compliance.rules.RuleDefinition;
 import io.okdocs.compliance.rules.RuleFact;
 import io.okdocs.compliance.rules.common.ConsentSupport;
@@ -57,21 +58,30 @@ public final class EuNonEssentialCookiesBeforeConsentRule implements Rule {
 
     @Override
     public boolean appliesTo(ScanAnalysisContext ctx) {
-        return ConsentSupport.scenarioAvailable(ctx);
+        return ConsentSupport.postRejectSnapshotAvailable(ctx);
+    }
+
+    @Override
+    public RuleApplicability applicability(ScanAnalysisContext ctx) {
+        return ConsentSupport.postRejectApplicability(ctx);
     }
 
     @Override
     public List<RuleFact> evaluate(ScanAnalysisContext ctx) {
         List<RuleFact> facts = new ArrayList<>();
-        for (PageAnalysisResult page : ConsentSupport.pagesWithScenario(ctx)) {
+        for (PageAnalysisResult page : ConsentSupport.pagesWithPostRejectSnapshot(ctx)) {
             List<ObservedCookie> cookies = page.consentScenario().afterRejectCookies();
-            if (cookies == null || cookies.isEmpty()) {
-                continue;
-            }
             Set<String> trackers = new LinkedHashSet<>();
-            for (ObservedCookie c : cookies) {
-                if (TrackerCookieNames.isTracker(c.name())) {
-                    trackers.add(c.name());
+            if (cookies != null) {
+                for (ObservedCookie c : cookies) {
+                    if (TrackerCookieNames.isTracker(c.name())) {
+                        trackers.add(c.name());
+                    }
+                }
+            }
+            for (String key : page.consentScenario().afterRejectStorageKeys()) {
+                if (TrackerCookieNames.isTracker(key)) {
+                    trackers.add("storage:" + key);
                 }
             }
             if (trackers.isEmpty()) {
@@ -79,7 +89,8 @@ public final class EuNonEssentialCookiesBeforeConsentRule implements Rule {
             }
             facts.add(new RuleFact(
                     DEFINITION.code(),
-                    "Tracking cookies present after consent rejection: " + String.join(", ", trackers) + ".",
+                    "Tracking identifiers present after consent rejection: "
+                            + String.join(", ", trackers) + ".",
                     page.url(),
                     SourceType.HTTP_HEADER,
                     EvidenceType.DYNAMIC_RENDER,

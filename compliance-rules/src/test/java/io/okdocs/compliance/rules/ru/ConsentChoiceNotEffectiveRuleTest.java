@@ -2,6 +2,7 @@ package io.okdocs.compliance.rules.ru;
 
 import io.okdocs.compliance.contracts.crawler.ConsentBannerInfo;
 import io.okdocs.compliance.contracts.crawler.ConsentScenarioResult;
+import io.okdocs.compliance.contracts.crawler.ConsentScenarioFailureReason;
 import io.okdocs.compliance.contracts.enums.VerificationStatus;
 import io.okdocs.compliance.rules.RuleEngine;
 import io.okdocs.compliance.rules.RuleOutcomeStatus;
@@ -54,6 +55,33 @@ class ConsentChoiceNotEffectiveRuleTest {
 
         assertThat(rule.evaluate(TestFixtures.ctx(
                 TestFixtures.dynamicPageWithConsent("https://site.ru", scenario)))).isEmpty();
+    }
+
+    @Test
+    void reportsConcreteReasonWhenRejectWasNotFound() {
+        var scenario = ConsentScenarioResult.failed(
+                banner(false), true, false, false, ConsentScenarioFailureReason.REJECT_NOT_FOUND);
+
+        var result = new RuleEngine(List.of(rule)).evaluate(TestFixtures.ctx(
+                TestFixtures.dynamicPageWithConsent("https://site.ru", scenario)));
+
+        assertThat(result.outcomes()).singleElement().satisfies(outcome -> {
+            assertThat(outcome.status()).isEqualTo(RuleOutcomeStatus.NOT_EVALUATED);
+            assertThat(outcome.messageKey()).isEqualTo("NOT_EVALUATED_CONSENT_REJECT_NOT_FOUND");
+            assertThat(outcome.message()).contains("действие отказа не найдено");
+        });
+    }
+
+    @Test
+    void detectsTrackingIdentifierRemainingInLocalStorage() {
+        var scenario = new ConsentScenarioResult(
+                banner(true), List.of(), List.of(), List.of("local:_ga_client_id"), List.of(),
+                List.of(), true, true, true, true, ConsentScenarioFailureReason.NONE, false, true);
+
+        assertThat(rule.evaluate(TestFixtures.ctx(
+                TestFixtures.dynamicPageWithConsent("https://site.ru", scenario))))
+                .singleElement()
+                .satisfies(f -> assertThat(f.matchedSignals()).contains("storage:local:_ga_client_id"));
     }
 
     private static ConsentBannerInfo banner(boolean rejectFound) {
