@@ -16,6 +16,17 @@
 # Postgres и Kafka — внешние (инфра-сервер), подключение через env (.env).
 # Kafka truststore кладётся в ./secrets/compliance-kafka.truststore.jks.
 
+# Docker embedded DNS (127.0.0.11) продолжает резолвить имена compose-сервисов,
+# а внешние домены пересылает на эти настраиваемые upstream-resolver'ы. Дефолты
+# нужны для scan targets: DNS провайдера хоста может фильтровать отдельные домены.
+x-external-dns: &external-dns
+  - ${EXTERNAL_DNS_PRIMARY:-1.1.1.1}
+  - ${EXTERNAL_DNS_SECONDARY:-1.0.0.1}
+
+x-external-dns-options: &external-dns-options
+  - "timeout:2"
+  - "attempts:3"
+
 services:
   api:
     image: ghcr.io/egor51/okdocs-compliance-api:${API_IMAGE_TAG:-latest}
@@ -92,6 +103,8 @@ services:
       TZ: ${TZ:-UTC}
     volumes:
       - ./secrets/compliance-kafka.truststore.jks:/etc/compliance/kafka.truststore.jks:ro
+    dns: *external-dns
+    dns_opt: *external-dns-options
     networks:
       - default
       - compliance-net
@@ -126,9 +139,16 @@ services:
       TZ: ${TZ:-UTC}
     volumes:
       - ./secrets/compliance-kafka.truststore.jks:/etc/compliance/kafka.truststore.jks:ro
+    dns: *external-dns
+    dns_opt: *external-dns-options
     networks:
       - default
       - compliance-net
+
+  # Chromium also resolves every scanned target and third-party request itself.
+  browserless:
+    dns: *external-dns
+    dns_opt: *external-dns-options
 
 networks:
   # External: сеть должна существовать заранее (создаётся инфра-стеком
