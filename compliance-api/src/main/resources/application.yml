@@ -1,6 +1,8 @@
 spring:
   application:
     name: compliance-api
+  config:
+    import: "classpath:application-domain-policy.yml"
   profiles:
     # application-oauth.yml (compliance.oauth.client.providers.*) должен применяться ВСЕГДА,
     # не только при явной активации профиля oauth — иначе OAuthClientRegistrationConfig не видит

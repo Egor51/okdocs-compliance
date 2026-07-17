@@ -132,7 +132,7 @@ class UrlValidatorTest {
     @Test
     void blockedDomainIsRejectedByValidate() {
         ComplianceWorkerProperties props = new ComplianceWorkerProperties();
-        props.getCrawler().setBlockedDomains(java.util.List.of("example.com"));
+        props.getSecurity().setBlockedDomains(java.util.List.of("example.com"));
         UrlValidator v = new UrlValidator(props);
         // blocked-домен отлетает до DNS-резолва
         assertThat(v.validate("https://example.com").valid()).isFalse();

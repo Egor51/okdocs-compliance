@@ -1,0 +1,55 @@
+# Единая anti-abuse политика для API и worker.
+# Один элемент запрещает точный домен и все его поддомены.
+compliance:
+  security:
+    blocked-domains:
+      # Собственные ресурсы: предотвращаем рекурсивное сканирование инфраструктуры продукта.
+      - okdocs.io
+
+      # Государственные ресурсы и критическая публичная инфраструктура.
+      # gov.ru уже покрывает все *.gov.ru.
+      - gov.ru
+      - gosuslugi.ru
+      - mos.ru
+      - kremlin.ru
+      - xn--d1abbgf6aiiy.xn--p1ai # президент.рф
+      - government.ru
+      - cbr.ru
+      - rosstat.ru
+      - fas.ru
+      - rospotrebnadzor.ru
+      - minzdrav.ru
+      - mil.ru
+      - mvd.ru
+      - fsb.ru
+      - sledcom.ru
+      - minjust.ru
+      - minfin.ru
+      - mkrf.ru
+      - mintrans.ru
+      - minenergo.ru
+      - minpromtorg.ru
+      - minstroyrf.ru
+      - mcx.ru
+      - minobrnauki.ru
+      - roszdravnadzor.ru
+      - fss.ru
+      - pfr.ru
+
+      # Банки и национальная платёжная инфраструктура: сканирование третьими лицами запрещено
+      # продуктовой политикой; доступ следует открывать только после подтверждения владения.
+      - sber.ru
+      - vtb.ru
+      - vtb24.ru
+      - gazprombank.ru
+      - rshb.ru
+      - nspk.ru
+      - nspk.com
+      - mironline.ru
+
+      # Высокорисковые крупные платформы: продуктовый anti-abuse запрет, а не утверждение
+      # о полном запрете любого crawler в их robots.txt/ToS.
+      - vk.com
+      - yandex.ru
+      - ya.ru
+      - dzen.ru

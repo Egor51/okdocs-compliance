@@ -34,6 +34,8 @@ public class ComplianceWorkerProperties {
     @Valid
     private Crawler crawler = new Crawler();
     @Valid
+    private Security security = new Security();
+    @Valid
     private Scan scan = new Scan();
     @Valid
     private Score score = new Score();
@@ -84,12 +86,16 @@ public class ComplianceWorkerProperties {
         private String userAgent = "OkDocsCompliance/1.0 (+https://okdocs.io/bot)";
         /** Уважать robots.txt (по умолчанию да; отключение — осознанное решение оператора). */
         private boolean respectRobots = true;
-        /** Домены, сканирование которых запрещено (anti-abuse, в дополнение к SSRF-проверке). */
-        private List<String> blockedDomains = new ArrayList<>();
         /** Если непусто — сканируются ТОЛЬКО эти домены (и поддомены). Пусто = разрешены все публичные. */
         private List<String> allowedDomains = new ArrayList<>();
         @Valid
         private Dynamic dynamic = new Dynamic();
+    }
+
+    @Data
+    public static class Security {
+        /** Единый с API anti-abuse список из application-domain-policy.yml. */
+        private List<String> blockedDomains = new ArrayList<>();
     }
 
     /**

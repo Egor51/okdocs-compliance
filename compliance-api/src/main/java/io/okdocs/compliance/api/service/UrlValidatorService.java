@@ -1,7 +1,10 @@
 package io.okdocs.compliance.api.service;
 
+import io.okdocs.compliance.api.config.ComplianceApiProperties;
 import io.okdocs.compliance.contracts.exception.ComplianceValidationException;
+import io.okdocs.compliance.contracts.security.BlockedDomainPolicy;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.net.IDN;
@@ -9,6 +12,8 @@ import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.UnknownHostException;
+import java.util.Collection;
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -26,13 +31,20 @@ public class UrlValidatorService {
     }
 
     private final HostResolver hostResolver;
+    private final BlockedDomainPolicy blockedDomainPolicy;
 
-    public UrlValidatorService() {
-        this(InetAddress::getAllByName);
+    @Autowired
+    public UrlValidatorService(ComplianceApiProperties properties) {
+        this(InetAddress::getAllByName, properties.security().blockedDomains());
     }
 
     UrlValidatorService(HostResolver hostResolver) {
+        this(hostResolver, List.of());
+    }
+
+    UrlValidatorService(HostResolver hostResolver, Collection<String> blockedDomains) {
         this.hostResolver = hostResolver;
+        this.blockedDomainPolicy = new BlockedDomainPolicy(blockedDomains);
     }
 
     public record ValidatedUrl(String normalizedUrl, String domain) {
@@ -58,6 +70,10 @@ public class UrlValidatorService {
             throw new ComplianceValidationException("Не удалось определить хост из URL");
         }
         String domain = IDN.toASCII(host).toLowerCase(Locale.ROOT);
+
+        if (blockedDomainPolicy.isBlocked(domain)) {
+            throw new ComplianceValidationException("Сканирование этого домена запрещено");
+        }
 
         assertResolvesToPublicAddress(domain);
 

@@ -7,6 +7,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import java.time.Duration;
 import java.util.EnumMap;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -29,7 +30,7 @@ public record ComplianceApiProperties(
 
     public ComplianceApiProperties {
         if (security == null) {
-            security = new Security(null);
+            security = new Security(null, null);
         }
         if (oauth == null) {
             oauth = new Oauth(null);
@@ -85,11 +86,12 @@ public record ComplianceApiProperties(
      *                             приложение недоступно напрямую и заголовок переписывает
      *                             доверенный ingress/proxy.
      */
-    public record Security(Boolean trustForwardedHeader) {
+    public record Security(Boolean trustForwardedHeader, List<String> blockedDomains) {
         public Security {
             if (trustForwardedHeader == null) {
                 trustForwardedHeader = false;
             }
+            blockedDomains = blockedDomains == null ? List.of() : List.copyOf(blockedDomains);
         }
     }
 
