@@ -188,6 +188,6 @@ yookassa:
   # Allowlist хостов для override returnUrl из запроса (анти-open-redirect). Пусто → любой override
   # отвергается с 400; returnUrl без override берётся из return-url выше.
   allowed-return-hosts: ${YOOKASSA_ALLOWED_RETURN_HOSTS:localhost}
-  test-mode: ${YOOKASSA_TEST_MODE:true}
+  test-mode: ${YOOKASSA_TEST_MODE:false}
   # Код ставки НДС для чека (54-ФЗ): 1 — без НДС, 2 — НДС 10%, 4 — НДС 20%.
   vat-code: ${YOOKASSA_VAT_CODE:1}
