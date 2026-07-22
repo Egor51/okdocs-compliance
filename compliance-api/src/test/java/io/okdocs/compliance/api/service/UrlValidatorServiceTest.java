@@ -21,6 +21,8 @@ class UrlValidatorServiceTest {
                     "example.com", new byte[]{93, (byte) 184, (byte) 216, 34})};
             case "notgov.ru" -> new InetAddress[]{InetAddress.getByAddress(
                     "notgov.ru", new byte[]{93, (byte) 184, (byte) 216, 35})};
+            case "xn--d1acufc.xn--p1ai" -> new InetAddress[]{InetAddress.getByAddress(
+                    "xn--d1acufc.xn--p1ai", new byte[]{93, (byte) 184, (byte) 216, 36})};
             case "localhost" -> new InetAddress[]{InetAddress.getLoopbackAddress()};
             case "192.168.0.1" -> new InetAddress[]{InetAddress.getByAddress(
                     new byte[]{(byte) 192, (byte) 168, 0, 1})};
@@ -33,6 +35,15 @@ class UrlValidatorServiceTest {
         var result = validator.validate("example.com/path");
         assertThat(result.domain()).isEqualTo("example.com");
         assertThat(result.normalizedUrl()).startsWith("https://");
+    }
+
+    @Test
+    void acceptsAndNormalizesRussianIdnDomain() {
+        var result = validator.validate("https://домен.рф/путь?q=тест");
+
+        assertThat(result.domain()).isEqualTo("xn--d1acufc.xn--p1ai");
+        assertThat(result.normalizedUrl()).isEqualTo(
+                "https://xn--d1acufc.xn--p1ai/%D0%BF%D1%83%D1%82%D1%8C?q=%D1%82%D0%B5%D1%81%D1%82");
     }
 
     @Test

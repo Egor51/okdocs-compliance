@@ -3,6 +3,7 @@ package io.okdocs.compliance.worker.crawler;
 import io.okdocs.compliance.contracts.crawler.CrawlerDiagnostics;
 import io.okdocs.compliance.contracts.crawler.HttpResponseInfo;
 import io.okdocs.compliance.contracts.crawler.PageAnalysisResult;
+import io.okdocs.compliance.contracts.security.HttpUrlNormalizer;
 import io.okdocs.compliance.worker.config.ComplianceWorkerProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -56,8 +57,6 @@ public class SiteCrawler {
     private static final int MIN_PAGE_TEXT_LENGTH = 350;
     private static final int MIN_SEED_URLS = 3;
 
-    private static final Pattern UTM_PARAM = Pattern.compile(
-            "(?:^|&)(utm_[^=&]+=?[^&]*)", Pattern.CASE_INSENSITIVE);
     private static final Set<String> TRACKING_QUERY_PARAMS = Set.of(
             "gclid", "fbclid", "yclid", "ysclid", "msclkid", "_openstat", "_ga", "_gl",
             "from", "source", "ref", "ref_src", "rb_clickid", "roistat", "roistat_visit",
@@ -101,6 +100,12 @@ public class SiteCrawler {
     }
 
     private CrawlResult doCrawl(String startUrl, int maxPages, int maxDepth) {
+        String normalizedStart = normalizeUrl(startUrl);
+        if (normalizedStart == null) {
+            log.warn("Cannot normalize start url {}", startUrl);
+            return CrawlResult.failed();
+        }
+        startUrl = normalizedStart;
         String startDomain = PageExtractor.extractDomain(startUrl);
         if (startDomain == null) {
             log.warn("Cannot extract domain from start url {}", startUrl);
@@ -123,8 +128,6 @@ public class SiteCrawler {
                 + properties.getCrawler().getCrawlerTimeoutSeconds() * 1000L;
 
         String baseUrl = extractBaseUrl(startUrl);
-        String normalizedStart = normalizeUrl(startUrl);
-
         BlockingQueue<UrlWithDepth> queue = new LinkedBlockingQueue<>();
         CrawlState state = new CrawlState(startDomain, robots, deadline, maxPages, maxDepth, queue,
                 hostSafetyCache);
@@ -693,33 +696,20 @@ public class SiteCrawler {
         }
         String trimmed = url.trim();
         try {
-            URI raw = new URI(trimmed);
-            String scheme = raw.getScheme();
-            String host = raw.getHost();
-            if (scheme == null || host == null) {
-                return null;
-            }
-            String lowerScheme = scheme.toLowerCase(Locale.ROOT);
-            if (!"http".equals(lowerScheme) && !"https".equals(lowerScheme)) {
-                return null;
-            }
+            URI raw = HttpUrlNormalizer.normalize(trimmed, false).uri();
             String path = (raw.getRawPath() == null || raw.getRawPath().isBlank()) ? "/" : raw.getRawPath();
             String normalizedQuery = normalizeQuery(raw.getRawQuery());
-            return new URI(lowerScheme, raw.getRawUserInfo(), host.toLowerCase(Locale.ROOT),
-                    raw.getPort(), path, normalizedQuery, null).normalize().toString();
-        } catch (URISyntaxException e) {
-            int hash = trimmed.indexOf('#');
-            if (hash >= 0) {
-                trimmed = trimmed.substring(0, hash);
+            StringBuilder normalized = new StringBuilder()
+                    .append(raw.getScheme().toLowerCase(Locale.ROOT))
+                    .append("://")
+                    .append(raw.getRawAuthority())
+                    .append(path);
+            if (normalizedQuery != null) {
+                normalized.append('?').append(normalizedQuery);
             }
-            int q = trimmed.indexOf('?');
-            if (q >= 0) {
-                String base = trimmed.substring(0, q);
-                String cleaned = UTM_PARAM.matcher(trimmed.substring(q + 1)).replaceAll("")
-                        .replaceAll("^&+|&+$", "").replaceAll("&&+", "&");
-                trimmed = cleaned.isBlank() ? base : base + "?" + cleaned;
-            }
-            return trimmed.isBlank() ? null : trimmed;
+            return new URI(normalized.toString()).normalize().toASCIIString();
+        } catch (IllegalArgumentException | URISyntaxException e) {
+            return null;
         }
     }
 

@@ -1186,7 +1186,7 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                     if (scheme == null || (!scheme.equals("http") && !scheme.equals("https"))) {
                         return;
                     }
-                    String host = uri.getHost();
+                    String host = PageExtractor.extractDomain(requestUrl);
                     if (host == null || host.isBlank()) {
                         return;
                     }
@@ -1261,7 +1261,7 @@ public class CdpDynamicCrawler implements DynamicCrawler {
                         cdpContinue(requestId);
                         return;
                     }
-                    String host = uri.getHost();
+                    String host = PageExtractor.extractDomain(requestUrl);
                     String hostLower = host == null ? "" : host.toLowerCase(Locale.ROOT);
                     // Навигационный Document-запрос (включая redirect-хопы главной: http→https, на www,
                     // на другой хост/CDN) НЕ фильтруем по allowlist домена — мы сами выбрали этот URL
@@ -1395,11 +1395,7 @@ public class CdpDynamicCrawler implements DynamicCrawler {
     }
 
     private static String extractDomain(String url) {
-        try {
-            return new URI(url).getHost();
-        } catch (URISyntaxException e) {
-            return null;
-        }
+        return PageExtractor.extractDomain(url);
     }
 
     /**

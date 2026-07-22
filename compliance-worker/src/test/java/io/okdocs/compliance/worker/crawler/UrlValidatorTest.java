@@ -153,6 +153,18 @@ class UrlValidatorTest {
     }
 
     @Test
+    void unicodeAllowlistIsComparedUsingPunycode() {
+        ComplianceWorkerProperties props = new ComplianceWorkerProperties();
+        props.getCrawler().setAllowedDomains(java.util.List.of("домен.рф"));
+        UrlValidator v = new UrlValidator(props);
+
+        var result = v.validate("https://другой.рф");
+
+        assertThat(result.valid()).isFalse();
+        assertThat(result.errorMessage()).contains("разрешённых");
+    }
+
+    @Test
     void allowlist_appliesToRedirectHopsToo() {
         ComplianceWorkerProperties props = new ComplianceWorkerProperties();
         props.getCrawler().setAllowedDomains(java.util.List.of("okdocs.io"));

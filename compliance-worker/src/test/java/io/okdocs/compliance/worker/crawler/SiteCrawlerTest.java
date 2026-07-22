@@ -25,6 +25,31 @@ class SiteCrawlerTest {
     private static final String BASE = "https://example.com";
 
     @Test
+    void normalizesRussianIdnUrlBeforeCrawl() {
+        assertThat(SiteCrawler.normalizeUrl(
+                "https://домен.рф/путь?utm_source=test&q=тест#раздел"))
+                .isEqualTo(
+                        "https://xn--d1acufc.xn--p1ai/%D0%BF%D1%83%D1%82%D1%8C?q=%D1%82%D0%B5%D1%81%D1%82");
+        assertThat(PageExtractor.extractDomain("https://домен.рф/путь"))
+                .isEqualTo("xn--d1acufc.xn--p1ai");
+    }
+
+    @Test
+    void crawlsRussianIdnUsingAsciiNetworkUrl() {
+        String asciiUrl = "https://xn--d1acufc.xn--p1ai/";
+        SiteCrawler crawler = crawler(noRobotsMax(1),
+                uri -> asciiUrl.equals(uri.toASCIIString())
+                        ? htmlResponse("idn-home", List.of())
+                        : notFound(),
+                "xn--d1acufc.xn--p1ai");
+
+        SiteCrawler.CrawlResult result = crawler.crawl("https://домен.рф", 1);
+
+        assertThat(result.pages()).hasSize(1);
+        assertThat(result.pages().getFirst().url()).isEqualTo(asciiUrl);
+    }
+
+    @Test
     void storesFinalUrlAfterRedirect() throws Exception {
         SiteCrawler crawler = crawler(props -> props.getCrawler().setRespectRobots(false),
                 uri -> {

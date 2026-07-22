@@ -1,19 +1,17 @@
 package io.okdocs.compliance.worker.crawler;
 
 import io.okdocs.compliance.contracts.security.BlockedDomainPolicy;
+import io.okdocs.compliance.contracts.security.HttpUrlNormalizer;
 import io.okdocs.compliance.worker.config.ComplianceWorkerProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.net.IDN;
 import java.net.InetAddress;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.net.UnknownHostException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
 
 /**
  * SSRF-защита краулера: валидация публичных HTTP/HTTPS URL и хостов redirect-хопов.
@@ -27,8 +25,6 @@ import java.util.Set;
 @Slf4j
 @Component
 public class UrlValidator {
-
-    private static final Set<String> ALLOWED_SCHEMES = Set.of("http", "https");
 
     private final ComplianceWorkerProperties properties;
     private final BlockedDomainPolicy blockedDomainPolicy;
@@ -44,22 +40,14 @@ public class UrlValidator {
             return ValidationResult.invalid("URL пустой");
         }
 
-        URI uri;
+        HttpUrlNormalizer.NormalizedHttpUrl normalized;
         try {
-            uri = new URI(urlString.trim());
-        } catch (URISyntaxException e) {
-            return ValidationResult.invalid("URL некорректный");
+            normalized = HttpUrlNormalizer.normalize(urlString, false);
+        } catch (IllegalArgumentException e) {
+            return ValidationResult.invalid(e.getMessage());
         }
 
-        String scheme = uri.getScheme();
-        if (scheme == null || !ALLOWED_SCHEMES.contains(scheme.toLowerCase(Locale.ROOT))) {
-            return ValidationResult.invalid("Схема URL должна быть http или https");
-        }
-
-        String hostLower = resolveNormalizedHost(uri);
-        if (hostLower == null || hostLower.isBlank()) {
-            return ValidationResult.invalid("URL не содержит host");
-        }
+        String hostLower = normalized.host();
 
         if (isBlockedDomain(hostLower)) {
             return ValidationResult.invalid("Сканирование этого домена запрещено");
@@ -144,7 +132,10 @@ public class UrlValidator {
             return true;
         }
         for (String a : allowed) {
-            String v = a.toLowerCase(Locale.ROOT);
+            String v = normalizeHost(a);
+            if (v == null) {
+                continue;
+            }
             if (host.equals(v) || host.endsWith("." + v)) {
                 return true;
             }
@@ -231,41 +222,6 @@ public class UrlValidator {
         return address != null && !isPrivateOrSpecial(address);
     }
 
-    private static String resolveNormalizedHost(URI uri) {
-        String host = uri.getHost();
-        if (host == null || host.isBlank()) {
-            String authority = uri.getRawAuthority();
-            if (authority == null || authority.isBlank()) {
-                authority = uri.getAuthority();
-            }
-            host = extractHostFromAuthority(authority);
-        }
-        return normalizeHost(host);
-    }
-
-    private static String extractHostFromAuthority(String authority) {
-        if (authority == null || authority.isBlank()) {
-            return null;
-        }
-        String value = authority;
-        int at = value.lastIndexOf('@');
-        if (at >= 0 && at + 1 < value.length()) {
-            value = value.substring(at + 1);
-        }
-        if (value.startsWith("[")) {
-            int close = value.indexOf(']');
-            if (close <= 1) {
-                return null;
-            }
-            return value.substring(1, close);
-        }
-        int lastColon = value.lastIndexOf(':');
-        if (lastColon > 0 && value.indexOf(':') == lastColon) {
-            value = value.substring(0, lastColon);
-        }
-        return value;
-    }
-
     private static String normalizeHost(String host) {
         if (host == null) {
             return null;
@@ -278,7 +234,7 @@ public class UrlValidator {
             return null;
         }
         try {
-            return IDN.toASCII(value).toLowerCase(Locale.ROOT);
+            return IDN.toASCII(value, IDN.USE_STD3_ASCII_RULES).toLowerCase(Locale.ROOT);
         } catch (IllegalArgumentException e) {
             return null;
         }

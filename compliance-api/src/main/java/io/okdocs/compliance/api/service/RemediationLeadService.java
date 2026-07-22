@@ -4,6 +4,7 @@ import io.okdocs.compliance.contracts.exception.ComplianceValidationException;
 import io.okdocs.compliance.contracts.remediation.RemediationLeadRequest;
 import io.okdocs.compliance.contracts.remediation.RemediationLeadResponse;
 import io.okdocs.compliance.contracts.remediation.RemediationRequestStatus;
+import io.okdocs.compliance.contracts.security.HttpUrlNormalizer;
 import io.okdocs.compliance.persistence.remediation.RemediationLead;
 import io.okdocs.compliance.persistence.remediation.RemediationLeadRepository;
 import io.okdocs.compliance.mail.notification.MailNotificationService;
@@ -11,9 +12,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.net.IDN;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
@@ -82,30 +80,13 @@ public class RemediationLeadService {
 
     /** Здесь URL только сохраняется, сетевого запроса нет — DNS lookup формы не требуется. */
     private static NormalizedSite normalizeSite(String rawUrl) {
-        String value = rawUrl == null ? "" : rawUrl.trim();
-        if (value.isEmpty()) {
-            throw new ComplianceValidationException("URL не указан");
-        }
-        if (!value.matches("(?i)^https?://.*")) value = "https://" + value;
         try {
-            URI parsed = new URI(value);
-            String scheme = parsed.getScheme() == null
-                    ? "" : parsed.getScheme().toLowerCase(Locale.ROOT);
-            if (!scheme.equals("http") && !scheme.equals("https")) {
-                throw new ComplianceValidationException("Поддерживаются только http и https");
-            }
-            if (parsed.getHost() == null || parsed.getHost().isBlank() || parsed.getUserInfo() != null) {
-                throw new ComplianceValidationException("Некорректный адрес сайта");
-            }
-            String domain = IDN.toASCII(parsed.getHost()).toLowerCase(Locale.ROOT);
-            if (domain.length() > 255) {
+            var normalized = HttpUrlNormalizer.normalize(rawUrl, true);
+            if (normalized.host().length() > 255) {
                 throw new ComplianceValidationException("Домен сайта слишком длинный");
             }
-            URI normalized = new URI(
-                    scheme, null, domain, parsed.getPort(),
-                    parsed.getPath(), parsed.getQuery(), null).normalize();
-            return new NormalizedSite(normalized.toASCIIString(), domain);
-        } catch (URISyntaxException | IllegalArgumentException e) {
+            return new NormalizedSite(normalized.url(), normalized.host());
+        } catch (IllegalArgumentException e) {
             throw new ComplianceValidationException("Некорректный адрес сайта");
         }
     }

@@ -4,11 +4,11 @@ import io.okdocs.compliance.contracts.crawler.FormInfo;
 import io.okdocs.compliance.contracts.crawler.PageAnalysisResult;
 import io.okdocs.compliance.contracts.enums.FormPurpose;
 import io.okdocs.compliance.contracts.enums.RenderMode;
+import io.okdocs.compliance.contracts.security.HttpUrlNormalizer;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 
 import java.net.URI;
-import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -327,8 +327,8 @@ final class PageExtractor {
 
     static String extractDomain(String url) {
         try {
-            return new URI(url).getHost();
-        } catch (URISyntaxException e) {
+            return HttpUrlNormalizer.normalize(url, false).host();
+        } catch (IllegalArgumentException e) {
             return null;
         }
     }
