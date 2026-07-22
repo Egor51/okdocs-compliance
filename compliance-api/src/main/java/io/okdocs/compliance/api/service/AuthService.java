@@ -23,9 +23,11 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.security.SecureRandom;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.HexFormat;
@@ -37,8 +39,8 @@ import java.util.UUID;
  * Refresh-токен хранится как hash (не plain). Гостевые сканы при регистрации НЕ привязываются (§2.2).
  * <p>
  * Анти-brute-force: login/register/oauth-exchange лимитированы по IP
- * ({@link RateLimitService#checkAuthAttemptAllowed}); refresh защищён reuse-detection'ом (повтор
- * отозванного токена отзывает все сессии юзера), лимит по IP ему не нужен — см. {@link #refresh}.
+ * ({@link RateLimitService#checkAuthAttemptAllowed}); refresh защищён ротацией и reuse-detection'ом
+ * в пределах одной token family (сессии/устройства), лимит по IP ему не нужен — см. {@link #refresh}.
  * <p>
  * <b>User enumeration — осознанный trade-off (F.2):</b> register честно говорит «email уже
  * существует», а login для OAuth-only аккаунта подсказывает «войдите через соц-сеть». Оба ответа
@@ -53,6 +55,7 @@ import java.util.UUID;
 public class AuthService {
 
     private static final String BEARER = "Bearer";
+    private static final Duration REFRESH_ROTATION_GRACE = Duration.ofSeconds(10);
 
     private final AppUserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
@@ -63,8 +66,6 @@ public class AuthService {
     private final OAuthLoginCodeService oauthLoginCodeService;
     private final RateLimitService rateLimitService;
     private final MailNotificationService mailNotificationService;
-
-    private final SecureRandom secureRandom = new SecureRandom();
 
     /** Выдать гостевой JWT (анонимный сеанс, регистрация не нужна). */
     public GuestAuthResponse issueGuestToken() {
@@ -150,39 +151,54 @@ public class AuthService {
     /**
      * Обновить access-токен по refresh-токену (с ротацией: старый отзывается).
      * <p>
-     * <b>Reuse-detection:</b> предъявление УЖЕ отозванного токена — классический сигнал кражи
-     * (легитимный клиент после ротации старым токеном не пользуется; второе предъявление значит,
-     * что значение утекло и им пользуются двое). В этом случае отзываем ВСЕ активные refresh-токены
-     * юзера: и вор, и жертва разлогинены, жертва перелогинится паролем/OAuth, вор — нет. Наружу —
-     * тот же «Невалидный refresh-токен», без подсказки атакующему, что он обнаружен.
+     * Строка исходного токена блокируется в БД, поэтому ротация сериализована между API-репликами.
+     * Повтор в коротком grace-окне получает тот же successor — это легитимный хвост параллельных
+     * BFF-запросов. Более поздний reuse отзывает только текущую token family (одно устройство),
+     * но не остальные сессии пользователя.
      */
     @Transactional
     public AuthResponse refresh(String refreshTokenValue, String userAgent, String ipAddress) {
         String hash = hash(refreshTokenValue);
-        RefreshToken stored = refreshTokenRepository.findByTokenHash(hash)
+        RefreshToken stored = refreshTokenRepository.findByTokenHashForUpdate(hash)
                 .orElseThrow(() -> new ComplianceValidationException("Невалидный refresh-токен"));
+        Instant now = Instant.now();
         if (stored.isRevoked()) {
-            List<RefreshToken> active = refreshTokenRepository.findByUserIdAndRevokedFalse(stored.getUserId());
+            if (canResumeRotation(stored, now)) {
+                return resumeRotation(stored, now);
+            }
+            List<RefreshToken> active = refreshTokenRepository
+                    .findByFamilyIdAndRevokedFalse(stored.getFamilyId());
             active.forEach(this::revoke);
-            log.warn("Reuse отозванного refresh-токена (userId={}, tokenId={}, ip={}) — отозвано {} "
-                    + "активных сессий", stored.getUserId(), stored.getId(), ipAddress, active.size());
+            log.warn("Reuse отозванного refresh-токена (userId={}, familyId={}, tokenId={}, ip={}) — "
+                            + "отозвано {} токенов этой сессии",
+                    stored.getUserId(), stored.getFamilyId(), stored.getId(), ipAddress, active.size());
             throw new ComplianceValidationException("Невалидный refresh-токен");
         }
-        if (stored.getExpiresAt().isBefore(Instant.now())) {
+        if (stored.getExpiresAt().isBefore(now)) {
             throw new ComplianceValidationException("Refresh-токен просрочен");
         }
-        revoke(stored);
         AppUser user = userRepository.findById(stored.getUserId())
                 .orElseThrow(() -> new ComplianceValidationException("Пользователь не найден"));
         ensureActive(user);
-        return issueTokensFor(user, userAgent, ipAddress);
+
+        UUID successorId = UUID.randomUUID();
+        String successorValue = refreshTokenValue(successorId);
+        persistRefreshToken(successorId, stored.getFamilyId(), user.getId(), successorValue,
+                userAgent, ipAddress);
+
+        stored.setReplacedById(successorId);
+        stored.setRotationGraceUntil(now.plus(REFRESH_ROTATION_GRACE));
+        revoke(stored, now);
+        return authResponse(user, successorValue);
     }
 
-    /** Отозвать refresh-токен (logout). Идемпотентно: неизвестный токен молча игнорируется. */
+    /** Отозвать текущую token family (logout одного устройства). Неизвестный токен игнорируется. */
     @Transactional
     public void logout(String refreshTokenValue) {
-        refreshTokenRepository.findByTokenHashAndRevokedFalse(hash(refreshTokenValue))
-                .ifPresent(this::revoke);
+        refreshTokenRepository.findByTokenHashForUpdate(hash(refreshTokenValue))
+                .ifPresent(stored -> refreshTokenRepository
+                        .findByFamilyIdAndRevokedFalse(stored.getFamilyId())
+                        .forEach(this::revoke));
     }
 
     /** Смена пароля: проверка старого, обновление hash, отзыв всех refresh-токенов. */
@@ -226,16 +242,18 @@ public class AuthService {
     }
 
     private AuthResponse issueTokensFor(AppUser user, String userAgent, String ipAddress) {
-        String accessToken = jwtService.issueUserToken(user.getId(), user.getRole());
-        String refreshValue = newRefreshTokenValue();
-        persistRefreshToken(user.getId(), refreshValue, userAgent, ipAddress);
-        return new AuthResponse(accessToken, refreshValue, BEARER,
-                jwtService.accessTokenTtlSeconds(), toProfile(user));
+        UUID tokenId = UUID.randomUUID();
+        String refreshValue = refreshTokenValue(tokenId);
+        persistRefreshToken(tokenId, tokenId, user.getId(), refreshValue, userAgent, ipAddress);
+        return authResponse(user, refreshValue);
     }
 
-    private void persistRefreshToken(Long userId, String value, String userAgent, String ipAddress) {
+    private void persistRefreshToken(UUID tokenId, UUID familyId, Long userId, String value,
+                                     String userAgent, String ipAddress) {
         RefreshToken token = new RefreshToken();
+        token.setId(tokenId);
         token.setUserId(userId);
+        token.setFamilyId(familyId);
         token.setTokenHash(hash(value));
         token.setExpiresAt(Instant.now().plus(properties.auth().refreshTokenTtl()));
         token.setRevoked(false);
@@ -245,15 +263,63 @@ public class AuthService {
     }
 
     private void revoke(RefreshToken token) {
+        revoke(token, Instant.now());
+    }
+
+    private void revoke(RefreshToken token, Instant revokedAt) {
         token.setRevoked(true);
-        token.setRevokedAt(Instant.now());
+        token.setRevokedAt(revokedAt);
         refreshTokenRepository.save(token);
     }
 
-    private String newRefreshTokenValue() {
-        byte[] bytes = new byte[32];
-        secureRandom.nextBytes(bytes);
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+    private boolean canResumeRotation(RefreshToken token, Instant now) {
+        return token.getReplacedById() != null
+                && token.getRotationGraceUntil() != null
+                && !token.getRotationGraceUntil().isBefore(now);
+    }
+
+    private AuthResponse resumeRotation(RefreshToken rotated, Instant now) {
+        RefreshToken successor = refreshTokenRepository.findById(rotated.getReplacedById())
+                .orElseThrow(() -> new ComplianceValidationException("Невалидный refresh-токен"));
+        if (successor.isRevoked() || successor.getExpiresAt().isBefore(now)) {
+            throw new ComplianceValidationException("Невалидный refresh-токен");
+        }
+
+        String successorValue = refreshTokenValue(successor.getId());
+        if (!hash(successorValue).equals(successor.getTokenHash())) {
+            log.error("Невозможно восстановить successor refresh-токена {}", successor.getId());
+            throw new ComplianceValidationException("Невалидный refresh-токен");
+        }
+
+        AppUser user = userRepository.findById(rotated.getUserId())
+                .orElseThrow(() -> new ComplianceValidationException("Пользователь не найден"));
+        ensureActive(user);
+        log.debug("Конкурентный refresh продолжил ротацию tokenId={} -> {}",
+                rotated.getId(), successor.getId());
+        return authResponse(user, successorValue);
+    }
+
+    private AuthResponse authResponse(AppUser user, String refreshValue) {
+        String accessToken = jwtService.issueUserToken(user.getId(), user.getRole());
+        return new AuthResponse(accessToken, refreshValue, BEARER,
+                jwtService.accessTokenTtlSeconds(), toProfile(user));
+    }
+
+    /**
+     * Детерминированное непрозрачное значение позволяет восстановить один и тот же successor
+     * в grace-окне, не сохраняя plaintext refresh-токена. UUID сам по себе наружу не выдаётся.
+     */
+    private String refreshTokenValue(UUID tokenId) {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(properties.auth().jwtSecret().getBytes(StandardCharsets.UTF_8),
+                    "HmacSHA256"));
+            byte[] value = mac.doFinal(("okdocs-refresh-token:" + tokenId)
+                    .getBytes(StandardCharsets.UTF_8));
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(value);
+        } catch (Exception e) {
+            throw new IllegalStateException("HmacSHA256 недоступен", e);
+        }
     }
 
     private static String hash(String value) {

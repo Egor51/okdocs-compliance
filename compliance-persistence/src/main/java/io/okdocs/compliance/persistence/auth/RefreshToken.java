@@ -25,6 +25,10 @@ public class RefreshToken {
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
+    /** Одна цепочка ротаций = одна сессия/устройство. */
+    @Column(name = "family_id", nullable = false, updatable = false)
+    private UUID familyId;
+
     @Column(name = "token_hash", nullable = false)
     private String tokenHash;
 
@@ -36,6 +40,13 @@ public class RefreshToken {
 
     @Column(name = "revoked_at")
     private Instant revokedAt;
+
+    /** Следующий токен цепочки; позволяет идемпотентно ответить на конкурентный refresh. */
+    @Column(name = "replaced_by_id")
+    private UUID replacedById;
+
+    @Column(name = "rotation_grace_until")
+    private Instant rotationGraceUntil;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -50,6 +61,9 @@ public class RefreshToken {
     void prePersist() {
         if (id == null) {
             id = UUID.randomUUID();
+        }
+        if (familyId == null) {
+            familyId = id;
         }
         createdAt = Instant.now();
     }
