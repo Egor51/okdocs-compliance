@@ -24,8 +24,12 @@ public class LocaleAwareAuthorizationRequestResolver implements OAuth2Authorizat
 
     /** Query-параметр старта OAuth (BFF: /api/auth/oauth/{provider}?ui_locale=ru). */
     static final String LOCALE_PARAM = "ui_locale";
-    /** Разделитель в state между CSRF-значением и locale. Не из base64url-алфавита state'а. */
-    static final String LOCALE_SEPARATOR = "__";
+    /**
+     * Разделитель в state между CSRF-значением и locale. Точка не входит в Base64URL-алфавит,
+     * которым Spring генерирует исходный state, поэтому случайное значение не может имитировать
+     * locale-суффикс.
+     */
+    static final String LOCALE_SEPARATOR = ".locale.";
 
     private final DefaultOAuth2AuthorizationRequestResolver delegate;
 
