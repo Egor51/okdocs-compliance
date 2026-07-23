@@ -93,16 +93,24 @@ class ScanLifecycleServiceIT extends AbstractPostgresIT {
         ComplianceScan scan = persistQueuedScan();
         lifecycle.markCrawling(scan.getId());
 
-        lifecycle.fail(scan.getId(), "boom");
+        var failure = io.okdocs.compliance.worker.service.ScanFailures.noPages();
+        lifecycle.fail(scan.getId(), failure);
 
         ComplianceScan reloaded = scanRepository.findById(scan.getId()).orElseThrow();
         assertThat(reloaded.getStatus()).isEqualTo(ScanStatus.FAILED);
-        assertThat(reloaded.getErrorMessage()).isEqualTo("boom");
+        assertThat(reloaded.getErrorMessage())
+                .isEqualTo(io.okdocs.compliance.worker.service.ScanFailures.legacyMessage(failure));
+        assertThat(reloaded.failure()).isEqualTo(failure);
         assertThat(findingRepository.findByScanIdOrderByCreatedAtAsc(scan.getId())).isEmpty();
 
         List<OutboxEvent> outbox = outboxRepository.findAll();
         assertThat(outbox).hasSize(1);
         assertThat(outbox.get(0).getEventType()).isEqualTo("ScanFailedEvent");
+        assertThat(outbox.get(0).getSchemaVersion()).isEqualTo(2);
+        assertThat(outbox.get(0).getPayload())
+                .contains("\"schemaVersion\":2")
+                .contains("\"code\":\"HTTP_INVALID_RESPONSE\"")
+                .doesNotContain("Exception");
     }
 
     @Test
@@ -111,7 +119,7 @@ class ScanLifecycleServiceIT extends AbstractPostgresIT {
         lifecycle.complete(scan.getId(), new ScanResult(List.of(), 100, 1, "{}"));
 
         // Повторный complete/fail на терминальном — no-op, без второго outbox-события.
-        lifecycle.fail(scan.getId(), "late failure");
+        lifecycle.fail(scan.getId(), io.okdocs.compliance.worker.service.ScanFailures.noPages());
         lifecycle.complete(scan.getId(), new ScanResult(List.of(), 0, 1, "{}"));
 
         ComplianceScan reloaded = scanRepository.findById(scan.getId()).orElseThrow();

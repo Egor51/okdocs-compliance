@@ -4,12 +4,14 @@ import io.okdocs.compliance.contracts.enums.ScanKind;
 import io.okdocs.compliance.contracts.enums.ScanStatus;
 import io.okdocs.compliance.contracts.enums.ScanTier;
 import io.okdocs.compliance.contracts.event.ScanRequestedEvent;
+import io.okdocs.compliance.contracts.scan.ScanFailure;
 import io.okdocs.compliance.persistence.scan.ComplianceScan;
 import io.okdocs.compliance.persistence.scan.ComplianceScanRepository;
 import io.okdocs.compliance.worker.config.ComplianceWorkerProperties;
 import io.okdocs.compliance.worker.service.ScanLifecycleService;
 import io.okdocs.compliance.worker.service.ScanPipeline;
 import io.okdocs.compliance.worker.service.ScanResult;
+import io.okdocs.compliance.worker.service.ScanFailures;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -24,7 +26,6 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -82,46 +83,54 @@ class ScanRequestedListenerTest {
     }
 
     @Test
-    void freshInProgressScan_isNacked_notAcked_notProcessed() {
-        // Идёт сейчас в другом потоке/инстансе (свежий updatedAt) — нельзя ни обрабатывать, ни ack'ать.
+    void freshInProgressScan_isAcked_notRestarted() {
         ComplianceScan scan = scan(ScanStatus.CRAWLING, Instant.now()); // свежий
         when(scanRepository.findById(scan.getId())).thenReturn(Optional.of(scan));
 
         listener.onScanRequested(event(scan.getId()), ack);
 
-        verify(ack).nack(REDELIVER);
-        verify(ack, never()).acknowledge();
+        verify(ack).acknowledge();
+        verify(ack, never()).nack(any());
         verifyNoInteractions(pipeline, lifecycle);
     }
 
     @Test
-    void staleInProgressScan_isRestarted_andAcked() {
-        // Протухший in-progress (worker упал): перезапустить и ack после коммита.
+    void staleInProgressScan_isAcked_notRestarted() {
+        // Redelivery never restarts an in-flight scan; reaper owns dead-worker recovery.
         ComplianceScan scan = scan(ScanStatus.ANALYZING, Instant.now().minus(STALE_AFTER).minusSeconds(60));
         when(scanRepository.findById(scan.getId())).thenReturn(Optional.of(scan));
-        when(pipeline.run(eq(scan), eq(scan.getId())))
-                .thenReturn(ScanPipeline.PipelineOutcome.of(ScanStatus.COMPLETED,
-                        new ScanResult(List.of(), 100, 1, "{}")));
 
         listener.onScanRequested(event(scan.getId()), ack);
 
-        verify(lifecycle).markCrawling(scan.getId());
-        verify(lifecycle).complete(eq(scan.getId()), any());
         verify(ack).acknowledge();
         verify(ack, never()).nack(any());
+        verifyNoInteractions(pipeline, lifecycle);
+    }
+
+    @Test
+    void queuedScan_claimLost_isAcked_notProcessed() {
+        ComplianceScan scan = scan(ScanStatus.QUEUED, Instant.now());
+        when(scanRepository.findById(scan.getId())).thenReturn(Optional.of(scan));
+        when(lifecycle.claimForProcessing(scan.getId())).thenReturn(false);
+
+        listener.onScanRequested(event(scan.getId()), ack);
+
+        verify(ack).acknowledge();
+        verifyNoInteractions(pipeline);
     }
 
     @Test
     void queuedScan_completed_marksLifecycleAndAcks() {
         ComplianceScan scan = scan(ScanStatus.QUEUED, Instant.now());
         when(scanRepository.findById(scan.getId())).thenReturn(Optional.of(scan));
+        when(lifecycle.claimForProcessing(scan.getId())).thenReturn(true);
         when(pipeline.run(eq(scan), eq(scan.getId())))
                 .thenReturn(ScanPipeline.PipelineOutcome.of(ScanStatus.COMPLETED,
                         new ScanResult(List.of(), 80, 5, "{}")));
 
         listener.onScanRequested(event(scan.getId()), ack);
 
-        verify(lifecycle).markCrawling(scan.getId());
+        verify(lifecycle).claimForProcessing(scan.getId());
         verify(lifecycle).markAnalyzing(scan.getId());
         verify(lifecycle).complete(eq(scan.getId()), any());
         verify(ack).acknowledge();
@@ -132,12 +141,14 @@ class ScanRequestedListenerTest {
         // 0 страниц / dynamic-required без CDP → FAILED-исход пайплайна: fail + ack (refund по событию).
         ComplianceScan scan = scan(ScanStatus.QUEUED, Instant.now());
         when(scanRepository.findById(scan.getId())).thenReturn(Optional.of(scan));
+        when(lifecycle.claimForProcessing(scan.getId())).thenReturn(true);
+        ScanFailure failure = ScanFailures.noPages();
         when(pipeline.run(eq(scan), eq(scan.getId())))
-                .thenReturn(ScanPipeline.PipelineOutcome.failed("Краулинг не вернул ни одной страницы"));
+                .thenReturn(ScanPipeline.PipelineOutcome.failed(failure));
 
         listener.onScanRequested(event(scan.getId()), ack);
 
-        verify(lifecycle).fail(eq(scan.getId()), eq("Краулинг не вернул ни одной страницы"));
+        verify(lifecycle).fail(eq(scan.getId()), eq(failure));
         verify(lifecycle, never()).complete(any(), any());
         verify(ack).acknowledge();
     }
@@ -148,11 +159,12 @@ class ScanRequestedListenerTest {
         // ack — иначе бесконечный redelivery упавшего скана.
         ComplianceScan scan = scan(ScanStatus.QUEUED, Instant.now());
         when(scanRepository.findById(scan.getId())).thenReturn(Optional.of(scan));
+        when(lifecycle.claimForProcessing(scan.getId())).thenReturn(true);
         when(pipeline.run(eq(scan), eq(scan.getId()))).thenThrow(new RuntimeException("crawl boom"));
 
         listener.onScanRequested(event(scan.getId()), ack);
 
-        verify(lifecycle).fail(eq(scan.getId()), anyString());
+        verify(lifecycle).fail(eq(scan.getId()), any(ScanFailure.class));
         verify(ack).acknowledge();
         verify(ack, never()).nack(any());
     }
@@ -162,9 +174,10 @@ class ScanRequestedListenerTest {
         // Даже FAILED не закоммитился (БД недоступна) → nack, reaper подстрахует по staleAfter.
         ComplianceScan scan = scan(ScanStatus.QUEUED, Instant.now());
         when(scanRepository.findById(scan.getId())).thenReturn(Optional.of(scan));
+        when(lifecycle.claimForProcessing(scan.getId())).thenReturn(true);
         when(pipeline.run(eq(scan), eq(scan.getId()))).thenThrow(new RuntimeException("crawl boom"));
         org.mockito.Mockito.doThrow(new RuntimeException("db down"))
-                .when(lifecycle).fail(eq(scan.getId()), anyString());
+                .when(lifecycle).fail(eq(scan.getId()), any(ScanFailure.class));
 
         listener.onScanRequested(event(scan.getId()), ack);
 

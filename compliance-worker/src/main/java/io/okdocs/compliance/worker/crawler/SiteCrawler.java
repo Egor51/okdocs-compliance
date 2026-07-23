@@ -3,8 +3,13 @@ package io.okdocs.compliance.worker.crawler;
 import io.okdocs.compliance.contracts.crawler.CrawlerDiagnostics;
 import io.okdocs.compliance.contracts.crawler.HttpResponseInfo;
 import io.okdocs.compliance.contracts.crawler.PageAnalysisResult;
+import io.okdocs.compliance.contracts.enums.ScanFailureCode;
+import io.okdocs.compliance.contracts.enums.ScanFailureStage;
+import io.okdocs.compliance.contracts.enums.ScanFetchMode;
+import io.okdocs.compliance.contracts.scan.ScanFailure;
 import io.okdocs.compliance.contracts.security.HttpUrlNormalizer;
 import io.okdocs.compliance.worker.config.ComplianceWorkerProperties;
+import io.okdocs.compliance.worker.service.ScanFailures;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jsoup.Jsoup;
@@ -34,8 +39,10 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -103,13 +110,15 @@ public class SiteCrawler {
         String normalizedStart = normalizeUrl(startUrl);
         if (normalizedStart == null) {
             log.warn("Cannot normalize start url {}", startUrl);
-            return CrawlResult.failed();
+            return CrawlResult.failed(failure(
+                    ScanFailureCode.INVALID_URL, ScanFailureStage.VALIDATION, false, null));
         }
         startUrl = normalizedStart;
         String startDomain = PageExtractor.extractDomain(startUrl);
         if (startDomain == null) {
             log.warn("Cannot extract domain from start url {}", startUrl);
-            return CrawlResult.failed();
+            return CrawlResult.failed(failure(
+                    ScanFailureCode.INVALID_URL, ScanFailureStage.VALIDATION, false, null));
         }
 
         Map<String, Boolean> hostSafetyCache = new ConcurrentHashMap<>();
@@ -119,7 +128,8 @@ public class SiteCrawler {
         // здесь, в том же процессе, что делает запрос; небезопасный → весь краул отклоняется.
         if (!isSafeHost(startDomain, hostSafetyCache)) {
             log.warn("SiteCrawler start host unsafe (SSRF), aborting: {}", startDomain);
-            return CrawlResult.failed();
+            return CrawlResult.failed(failure(
+                    ScanFailureCode.UNSAFE_TARGET, ScanFailureStage.VALIDATION, false, null));
         }
 
         log.info("SiteCrawler start url={} maxPages={} maxDepth={}", startUrl, maxPages, maxDepth);
@@ -157,7 +167,9 @@ public class SiteCrawler {
                 List.copyOf(state.responses),
                 new CrawlerDiagnostics(
                         state.attempted.get(), fetched, state.failed.get(), timedOut,
-                        state.priorityHintsAttempted.get(), state.priorityHintsMissed.get()));
+                        state.priorityHintsAttempted.get(), state.priorityHintsMissed.get()),
+                state.startPageFailure.get(),
+                Map.copyOf(state.secondaryFailureCounts));
     }
 
     /** Запускает пул воркеров и ждёт естественного завершения BFS (очередь пуста И никто не в работе). */
@@ -176,7 +188,19 @@ public class SiteCrawler {
             }
             for (Future<?> f : futures) {
                 try {
-                    f.get();
+                    long remaining = state.deadline - System.currentTimeMillis();
+                    if (remaining <= 0) {
+                        throw new TimeoutException("crawler deadline reached");
+                    }
+                    f.get(remaining, TimeUnit.MILLISECONDS);
+                } catch (TimeoutException e) {
+                    if (state.timedOut.compareAndSet(false, true)) {
+                        log.warn("SiteCrawler worker deadline reached, {} pages so far",
+                                state.accepted.get());
+                    }
+                    state.stopped.set(true);
+                    futures.forEach(future -> future.cancel(true));
+                    break;
                 } catch (Exception e) {
                     log.debug("static-crawler worker failed: {}", e.getMessage());
                 }
@@ -231,6 +255,7 @@ public class SiteCrawler {
 
     /** Обработка одного URL: дедлайн/лимит/visited/robots/SSRF → fetch → accept → results + ссылки. */
     private void processUrl(CrawlState state, UrlWithDepth current) throws InterruptedException {
+        boolean isStart = current.depth() == 0;
         if (System.currentTimeMillis() > state.deadline) {
             if (state.timedOut.compareAndSet(false, true)) {
                 log.warn("SiteCrawler deadline reached, {} pages so far", state.accepted.get());
@@ -252,6 +277,8 @@ public class SiteCrawler {
         }
         if (!state.robots.isAllowed(normalized)) {
             log.debug("Skipping disallowed by robots.txt: {}", normalized);
+            recordFetchFailure(state, current, failure(
+                    ScanFailureCode.ROBOTS_DENIED, ScanFailureStage.ROBOTS, false, null));
             return;
         }
         // Резервируем слот ДО fetch (атомарный потолок). Если слотов нет, но лимит ещё НЕ принят —
@@ -279,7 +306,8 @@ public class SiteCrawler {
             if (current.source() == UrlSource.PRIORITY_HINT) {
                 state.priorityHintsAttempted.incrementAndGet();
             }
-            recordFetchFailure(state, current);
+            recordFetchFailure(state, current, failure(
+                    ScanFailureCode.UNSAFE_TARGET, ScanFailureStage.VALIDATION, false, null));
             state.releaseSlot();
             return;
         }
@@ -289,7 +317,6 @@ public class SiteCrawler {
         }
 
         boolean accepted = false;
-        boolean isStart = current.depth() == 0;
         try {
             FetchedDocument fetched = fetchWithRedirectValidation(normalized, state.hostSafetyCache);
             Document doc = fetched.document();
@@ -332,11 +359,18 @@ public class SiteCrawler {
             throw ie;
         } catch (SsrfBlockedException e) {
             log.warn("SSRF redirect blocked url={} source={}: {}", normalized, current.source(), e.getMessage());
-            recordFetchFailure(state, current);
+            recordFetchFailure(state, current, failure(
+                    ScanFailureCode.UNSAFE_TARGET, ScanFailureStage.VALIDATION, false, null));
+        } catch (FetchException e) {
+            log.warn("Failed to fetch url={} source={} code={}: {}",
+                    normalized, current.source(), e.failure().code(), e.getMessage());
+            recordFetchFailure(state, current, e.failure());
         } catch (Exception e) {
             log.warn("Failed to fetch url={} source={}: {}: {}", normalized, current.source(),
                     e.getClass().getSimpleName(), e.getMessage());
-            recordFetchFailure(state, current);
+            recordFetchFailure(state, current, failure(
+                    ScanFailureCode.HTTP_INVALID_RESPONSE,
+                    ScanFailureStage.HTTP_FETCH, true, null));
         } finally {
             // Слот возвращаем, если страница не принята — он достанется другому URL, и суммарно
             // принятых (homepage + остальные) никогда не превысит maxPages.
@@ -360,8 +394,9 @@ public class SiteCrawler {
         final Set<String> acceptedFingerprints = ConcurrentHashMap.newKeySet();
         // Стартовая страница (depth==0) хранится отдельно, чтобы гарантированно поставить её первой
         // в итог независимо от порядка завершения воркеров и redirect'а финального URL.
-        final java.util.concurrent.atomic.AtomicReference<PageAnalysisResult> startPage =
-                new java.util.concurrent.atomic.AtomicReference<>();
+        final AtomicReference<PageAnalysisResult> startPage = new AtomicReference<>();
+        final AtomicReference<ScanFailure> startPageFailure = new AtomicReference<>();
+        final Map<ScanFailureCode, Integer> secondaryFailureCounts = new ConcurrentHashMap<>();
         final ConcurrentLinkedQueue<PageAnalysisResult> results = new ConcurrentLinkedQueue<>();
         // HTTP-ответы всех успешно дошедших до fetch страниц (вкл. redirect-хопы) — technical-паспорт.
         // Собираются даже для непринятых страниц (soft-404/дубликат): заголовки ответа от этого валидны.
@@ -475,12 +510,20 @@ public class SiteCrawler {
         log.info("SiteCrawler seeds={} domain={}", added, startDomain);
     }
 
-    private static void recordFetchFailure(CrawlState state, UrlWithDepth current) {
+    private static void recordFetchFailure(CrawlState state, UrlWithDepth current,
+                                           ScanFailure failure) {
+        if (current.depth() == 0) {
+            state.startPageFailure.compareAndSet(null, failure);
+            state.failed.incrementAndGet();
+            state.stopped.set(true);
+            return;
+        }
         if (current.source() == UrlSource.PRIORITY_HINT) {
             state.priorityHintsMissed.incrementAndGet();
             return;
         }
         state.failed.incrementAndGet();
+        state.secondaryFailureCounts.merge(failure.code(), 1, Integer::sum);
     }
 
     /** Отбраковка soft-404 / дубликатов для не-стартовых страниц. */
@@ -509,10 +552,21 @@ public class SiteCrawler {
             throws IOException {
         String currentUrl = startUrl;
         List<HttpResponseInfo> responses = new ArrayList<>();
+        long pageDeadlineNanos = System.nanoTime()
+                + TimeUnit.MILLISECONDS.toNanos(properties.getCrawler().getPageTimeoutMs());
         for (int hop = 0; hop < MAX_REDIRECT_HOPS; hop++) {
+            long remainingNanos = pageDeadlineNanos - System.nanoTime();
+            if (remainingNanos <= 0) {
+                throw new FetchException(failure(
+                        ScanFailureCode.RESPONSE_TIMEOUT,
+                        ScanFailureStage.HTTP_FETCH, true, null),
+                        "Per-page redirect deadline exhausted");
+            }
+            int remainingMs = (int) Math.max(1L,
+                    Math.min(Integer.MAX_VALUE, TimeUnit.NANOSECONDS.toMillis(remainingNanos)));
             PinnedHttpFetcher.Response resp = fetchPinned(
                     currentUrl,
-                    properties.getCrawler().getPageTimeoutMs(),
+                    remainingMs,
                     properties.getCrawler().getMaxBodyBytes());
 
             int status = resp.statusCode();
@@ -520,7 +574,10 @@ public class SiteCrawler {
                 String location = resp.header("Location");
                 responses.add(new HttpResponseInfo(currentUrl, status, resp.headers(), true, location));
                 if (location == null || location.isBlank()) {
-                    throw new IOException("Empty Location header on redirect from " + currentUrl);
+                    throw new FetchException(failure(
+                            ScanFailureCode.HTTP_INVALID_RESPONSE,
+                            ScanFailureStage.HTTP_FETCH, false, status),
+                            "Redirect response has no Location header");
                 }
                 String nextUrl = resolveUrl(currentUrl, location);
                 String host = PageExtractor.extractDomain(nextUrl);
@@ -536,10 +593,12 @@ public class SiteCrawler {
                 return new FetchedDocument(Jsoup.parse(resp.body(), currentUrl), responses);
             } else {
                 responses.add(new HttpResponseInfo(currentUrl, status, resp.headers(), false, null));
-                throw new IOException("HTTP " + status + " for " + currentUrl);
+                throw new FetchException(httpFailure(status), "HTTP status " + status);
             }
         }
-        throw new IOException("Too many redirects (>" + MAX_REDIRECT_HOPS + ") for " + startUrl);
+        throw new FetchException(failure(
+                ScanFailureCode.REDIRECT_LOOP, ScanFailureStage.HTTP_FETCH, false, null),
+                "Too many redirects");
     }
 
     /** Финальный документ + HTTP-ответы всей redirect-цепочки (для technical-паспорта). */
@@ -676,17 +735,32 @@ public class SiteCrawler {
             throw new SsrfBlockedException(resolved.errorMessage());
         }
 
-        int connectTimeoutMs = Math.min(properties.getCrawler().getConnectTimeoutMs(), timeoutMs);
+        long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
         IOException last = null;
         for (InetAddress address : resolved.addresses()) {
+            long remainingNanos = deadlineNanos - System.nanoTime();
+            if (remainingNanos <= 0) {
+                break;
+            }
+            int remainingMs = (int) Math.max(1L,
+                    Math.min(Integer.MAX_VALUE, TimeUnit.NANOSECONDS.toMillis(remainingNanos)));
+            int connectTimeoutMs = Math.min(
+                    properties.getCrawler().getConnectTimeoutMs(), remainingMs);
+            int handshakeTimeoutMs = Math.min(
+                    properties.getCrawler().getTlsHandshakeTimeoutMs(), remainingMs);
             try {
                 return pinnedHttpFetcher.fetch(uri, address, properties.getCrawler().getUserAgent(),
-                        connectTimeoutMs, timeoutMs, maxBodyBytes);
+                        connectTimeoutMs, handshakeTimeoutMs, remainingMs, maxBodyBytes);
             } catch (IOException e) {
                 last = e;
             }
         }
-        throw last == null ? new IOException("No resolved addresses for " + url) : last;
+        if (last != null) {
+            throw last;
+        }
+        throw new FetchException(failure(
+                ScanFailureCode.RESPONSE_TIMEOUT, ScanFailureStage.HTTP_FETCH, true, null),
+                "Per-page fetch deadline exhausted");
     }
 
     /** Нормализация URL: убираем fragment, utm_* и tracking-параметры. */
@@ -848,15 +922,60 @@ public class SiteCrawler {
     }
 
     /** Результат обхода: страницы для движка правил + HTTP-ответы (technical) + метрики (§1.6). */
+    private static ScanFailure httpFailure(int status) {
+        if (status == 401) {
+            return failure(ScanFailureCode.HTTP_UNAUTHORIZED,
+                    ScanFailureStage.HTTP_FETCH, false, status);
+        }
+        if (status == 403) {
+            return failure(ScanFailureCode.HTTP_FORBIDDEN,
+                    ScanFailureStage.HTTP_FETCH, false, status);
+        }
+        if (status == 404) {
+            return failure(ScanFailureCode.HTTP_NOT_FOUND,
+                    ScanFailureStage.HTTP_FETCH, false, status);
+        }
+        if (status == 429) {
+            return failure(ScanFailureCode.HTTP_RATE_LIMITED,
+                    ScanFailureStage.HTTP_FETCH, true, status);
+        }
+        if (status >= 400 && status < 500) {
+            return failure(ScanFailureCode.HTTP_CLIENT_ERROR,
+                    ScanFailureStage.HTTP_FETCH, false, status);
+        }
+        if (status >= 500 && status < 600) {
+            return failure(ScanFailureCode.HTTP_SERVER_ERROR,
+                    ScanFailureStage.HTTP_FETCH, true, status);
+        }
+        return failure(ScanFailureCode.HTTP_INVALID_RESPONSE,
+                ScanFailureStage.HTTP_FETCH, false, status);
+    }
+
+    private static ScanFailure failure(ScanFailureCode code, ScanFailureStage stage,
+                                       boolean retryable, Integer httpStatus) {
+        return ScanFailures.failure(code, stage, retryable, httpStatus, ScanFetchMode.HTTP);
+    }
+
     public record CrawlResult(List<PageAnalysisResult> pages, List<HttpResponseInfo> responses,
-                              CrawlerDiagnostics diagnostics) {
+                              CrawlerDiagnostics diagnostics, ScanFailure startPageFailure,
+                              Map<ScanFailureCode, Integer> secondaryFailureCounts) {
 
         public CrawlResult {
             responses = responses == null ? List.of() : List.copyOf(responses);
+            secondaryFailureCounts = secondaryFailureCounts == null
+                    ? Map.of() : Map.copyOf(secondaryFailureCounts);
         }
 
-        public static CrawlResult failed() {
-            return new CrawlResult(List.of(), List.of(), new CrawlerDiagnostics(0, 0, 0, false));
+        /** Compatibility constructor for callers/tests that have no page-level failures. */
+        public CrawlResult(List<PageAnalysisResult> pages, List<HttpResponseInfo> responses,
+                           CrawlerDiagnostics diagnostics) {
+            this(pages, responses, diagnostics, null, Map.of());
+        }
+
+        public static CrawlResult failed(ScanFailure failure) {
+            return new CrawlResult(
+                    List.of(), List.of(), new CrawlerDiagnostics(0, 0, 0, false),
+                    failure, Map.of());
         }
     }
 }

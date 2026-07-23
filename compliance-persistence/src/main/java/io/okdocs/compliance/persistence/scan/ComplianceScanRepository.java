@@ -5,16 +5,22 @@ import io.okdocs.compliance.contracts.enums.ScanStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import jakarta.persistence.LockModeType;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 
 public interface ComplianceScanRepository extends JpaRepository<ComplianceScan, UUID> {
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT s FROM ComplianceScan s WHERE s.id = :scanId")
+    java.util.Optional<ComplianceScan> findByIdForUpdate(@Param("scanId") UUID scanId);
 
     Page<ComplianceScan> findByUserIdOrderByCreatedAtDesc(Long userId, Pageable pageable);
 
@@ -36,6 +42,22 @@ public interface ComplianceScanRepository extends JpaRepository<ComplianceScan, 
 
     /** Reaper зависших сканов (§5.3): статус в работе + давно не обновлялся. */
     List<ComplianceScan> findByStatusInAndUpdatedAtBefore(Collection<ScanStatus> statuses, Instant cutoff);
+
+    /**
+     * Atomic ownership claim. Only one Kafka delivery can move a scan from QUEUED to CRAWLING.
+     * Incrementing the optimistic version fences entities loaded before the claim.
+     */
+    @Modifying
+    @Query("""
+            UPDATE ComplianceScan s
+            SET s.status = io.okdocs.compliance.contracts.enums.ScanStatus.CRAWLING,
+                s.startedAt = COALESCE(s.startedAt, :now),
+                s.updatedAt = :now,
+                s.version = s.version + 1
+            WHERE s.id = :scanId
+              AND s.status = io.okdocs.compliance.contracts.enums.ScanStatus.QUEUED
+            """)
+    int claimQueued(@Param("scanId") UUID scanId, @Param("now") Instant now);
 
     /**
      * Backfill отчётных снапшотов (этап 3.5): terminal-сканы с findings ({@code COMPLETED}/{@code PARTIAL}),

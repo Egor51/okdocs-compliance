@@ -11,6 +11,7 @@ public record ScanStatusResponse(
         String progressStep,
         int progressPct,
         String reportUrl,
-        String errorMessage
+        String errorMessage,
+        ScanFailure failure
 ) {
 }

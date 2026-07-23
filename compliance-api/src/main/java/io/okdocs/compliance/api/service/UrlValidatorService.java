@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.net.InetAddress;
+import java.net.URI;
 import java.net.UnknownHostException;
 import java.util.Collection;
 import java.util.List;
@@ -63,6 +64,18 @@ public class UrlValidatorService {
         assertResolvesToPublicAddress(domain);
 
         return new ValidatedUrl(normalized.url(), domain);
+    }
+
+    /**
+     * Validates the submitted URL with the regular DNS/SSRF policy and then reduces it to the site
+     * origin. FREE_MARKETING scans promise to check the homepage, so a pasted deep link must not
+     * turn a one-page scan into a check of an arbitrary inner page.
+     */
+    public ValidatedUrl validateSiteRoot(String rawUrl) {
+        ValidatedUrl validated = validate(rawUrl);
+        URI uri = URI.create(validated.normalizedUrl());
+        String rootUrl = uri.getScheme() + "://" + uri.getRawAuthority();
+        return new ValidatedUrl(rootUrl, validated.domain());
     }
 
     private void assertResolvesToPublicAddress(String host) {

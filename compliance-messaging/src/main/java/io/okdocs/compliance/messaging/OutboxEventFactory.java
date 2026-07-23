@@ -27,12 +27,25 @@ public class OutboxEventFactory {
      * @param payload     доменное событие (record из contracts)
      */
     public OutboxEvent create(UUID aggregateId, String topic, String eventKey, Object payload) {
+        return create(aggregateId, topic, eventKey, payload, 1);
+    }
+
+    /**
+     * Создаёт outbox-запись с явной версией схемы payload. Нужен при rolling upgrade события:
+     * версия в колонке должна совпадать с {@code schemaVersion} внутри JSON.
+     */
+    public OutboxEvent create(UUID aggregateId, String topic, String eventKey,
+                              Object payload, int schemaVersion) {
+        if (schemaVersion < 1) {
+            throw new IllegalArgumentException("schemaVersion must be positive");
+        }
         OutboxEvent event = new OutboxEvent();
         event.setAggregateId(aggregateId);
         event.setEventType(payload.getClass().getSimpleName());
         event.setTopic(topic);
         event.setEventKey(eventKey);
         event.setPayload(serialize(payload));
+        event.setSchemaVersion(schemaVersion);
         event.setStatus(OutboxStatus.PENDING);
         return event;
     }

@@ -271,7 +271,7 @@ class SiteCrawlerTest {
             when(validator.resolvePublicHost(anyString()))
                     .thenReturn(UrlValidator.ResolvedHost.ok(resolvedHost, List.of(publicAddress)));
             when(fetcher.fetch(any(URI.class), any(InetAddress.class), anyString(),
-                    anyInt(), anyInt(), anyLong()))
+                    anyInt(), anyInt(), anyInt(), anyLong()))
                     .thenAnswer(inv -> {
                         // Небольшая задержка имитирует сетевой фетч — последовательный обход был бы
                         // заметно медленнее, проявляя реальную конкурентность.

@@ -60,6 +60,9 @@ spring:
       # Сырые байты + ByteArrayJsonMessageConverter (MessagingConfig): тип из сигнатуры @KafkaListener
       # без type-headers. Единый контракт api↔worker в combined-процессе.
       value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+      properties:
+        max.poll.records: 1
+        max.poll.interval.ms: 420000
     listener:
       concurrency: ${KAFKA_LISTENER_CONCURRENCY:6}
       ack-mode: manual

@@ -6,6 +6,7 @@ import io.okdocs.compliance.contracts.crawler.CrawlerDiagnostics;
 import io.okdocs.compliance.contracts.crawler.PageAnalysisResult;
 import io.okdocs.compliance.contracts.crawler.ScanAnalysisContext;
 import io.okdocs.compliance.contracts.crawler.TechnicalAnalysisResult;
+import io.okdocs.compliance.contracts.scan.ScanFailure;
 import io.okdocs.compliance.contracts.enums.RegistryStatus;
 import io.okdocs.compliance.contracts.enums.ScanKind;
 import io.okdocs.compliance.persistence.scan.ComplianceFinding;
@@ -61,10 +62,17 @@ public class ScanPipeline {
      */
     public record PipelineOutcome(io.okdocs.compliance.contracts.enums.ScanStatus finalStatus,
                                   ScanResult result,
-                                  String failureMessage) {
+                                  ScanFailure failure) {
 
-        public static PipelineOutcome failed(String message) {
-            return new PipelineOutcome(io.okdocs.compliance.contracts.enums.ScanStatus.FAILED, null, message);
+        public PipelineOutcome {
+            boolean failed = finalStatus == io.okdocs.compliance.contracts.enums.ScanStatus.FAILED;
+            if (failed != (failure != null) || failed == (result != null)) {
+                throw new IllegalArgumentException("FAILED requires failure only; other statuses require result only");
+            }
+        }
+
+        public static PipelineOutcome failed(ScanFailure failure) {
+            return new PipelineOutcome(io.okdocs.compliance.contracts.enums.ScanStatus.FAILED, null, failure);
         }
 
         public static PipelineOutcome of(io.okdocs.compliance.contracts.enums.ScanStatus status, ScanResult result) {
@@ -82,7 +90,7 @@ public class ScanPipeline {
         // валим скан до краула. ScanRequestedListener → lifecycle.fail → ScanFailedEvent → refund.
         if (scan.isDynamicRequired() && !dynamicCrawler.isAvailable()) {
             log.warn("Scan {} requires dynamic but CDP unavailable → FAILED (refund)", scanId);
-            return PipelineOutcome.failed("Динамический анализ недоступен (CDP)");
+            return PipelineOutcome.failed(ScanFailures.browserUnavailable());
         }
 
         progressService.updateProgress(scanId, 10, "Краулинг сайта");
@@ -93,10 +101,18 @@ public class ScanPipeline {
                 scan.getKind(), staticCrawlMs);
         CrawlerDiagnostics diag = crawl.diagnostics();
 
+        // Homepage is the subject of the scan. A successful speculative/secondary page must never
+        // mask a terminal homepage failure.
+        if (crawl.startPageFailure() != null) {
+            log.warn("Scan {} homepage failed with {}", scanId, crawl.startPageFailure().code());
+            return PipelineOutcome.failed(crawl.startPageFailure());
+        }
+
         // pagesFetched == 0 → анализировать нечего → FAILED (событие ScanFailedEvent сформирует lifecycle).
         if (diag.pagesFetched() == 0) {
             log.warn("Scan {} fetched 0 pages → FAILED", scanId);
-            return PipelineOutcome.failed("Краулинг не вернул ни одной страницы");
+            return PipelineOutcome.failed(
+                    diag.crawlerTimedOut() ? ScanFailures.pipelineTimeout() : ScanFailures.noPages());
         }
 
         // Гибридный static+dynamic (§5.4): дорогой headless-проход — только для CABINET_PREMIUM с

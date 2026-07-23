@@ -28,6 +28,8 @@ compliance:
     # Отдельный (короткий) TCP-connect-таймаут: мёртвый seed (NoRouteToHost/refused) отваливается
     # быстро, не съедая page-timeout × число resolved-адресов на каждом приоритетном хинте.
     connect-timeout-ms: 4000
+    # SSLSocket handshake выполняется до обычного read-timeout и поэтому ограничивается отдельно.
+    tls-handshake-timeout-ms: 10000
     crawler-timeout-seconds: 90
     # Вежливая пауза между запросами к сайту НА ОДИН ПОТОК. С concurrency=5 фактический rps ≈ 10
     # (5 потоков / 0.5с). Static-фетч теперь параллельный (см. concurrency).
@@ -68,8 +70,8 @@ compliance:
   scan:
     # Порог reaper'а: скан без апдейта дольше этого срока считается зависшим.
     # Строго больше crawler.crawler-timeout-seconds (90s) — инвариант, fail-fast.
-    stale-after: 5m
-    # Задержка повторной доставки, когда скан уже идёт в другом потоке/инстансе.
+    stale-after: 7m
+    # Задержка повторной доставки, если worker не смог зафиксировать терминальный FAILED.
     redeliver-delay: 30s
     # Жёсткий общий дедлайн на весь скан сверх crawler-таймаута (страховка от
     # зависания не в краулере). Не меньше crawler.crawler-timeout-seconds.

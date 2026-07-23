@@ -72,7 +72,7 @@ public class ScanCommandService {
     public ScanStatusResponse startFreeScan(FreeScanRequest request, String ipAddress,
                                             CompliancePrincipal principal) {
         rateLimitService.checkScanAllowed(principal, ipAddress);
-        UrlValidatorService.ValidatedUrl validated = urlValidator.validate(request.siteUrl());
+        UrlValidatorService.ValidatedUrl validated = urlValidator.validateSiteRoot(request.siteUrl());
 
         ScanJurisdiction jurisdiction = resolveEnabledJurisdiction(request.jurisdiction());
 
@@ -421,7 +421,8 @@ public class ScanCommandService {
                 scan.getProgressStep(),
                 scan.getProgressPct(),
                 reportUrl,
-                scan.getErrorMessage());
+                scan.getErrorMessage(),
+                scan.failure());
     }
 
     private static String blankToNull(String s) {

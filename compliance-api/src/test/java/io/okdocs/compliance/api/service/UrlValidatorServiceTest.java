@@ -38,6 +38,15 @@ class UrlValidatorServiceTest {
     }
 
     @Test
+    void siteRootRemovesDeepPathQueryAndFragmentButPreservesOrigin() {
+        var result = validator.validateSiteRoot(
+                "https://example.com:8443/rus/contacts/accounts.php?from=scan#details");
+
+        assertThat(result.domain()).isEqualTo("example.com");
+        assertThat(result.normalizedUrl()).isEqualTo("https://example.com:8443");
+    }
+
+    @Test
     void acceptsAndNormalizesRussianIdnDomain() {
         var result = validator.validate("https://домен.рф/путь?q=тест");
 

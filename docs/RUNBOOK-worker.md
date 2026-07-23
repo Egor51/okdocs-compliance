@@ -49,6 +49,9 @@ Relay подхватит на следующем тике. **Важно:** consu
 `compliance.scan.stale-after`, default 5m, строго > `crawler.crawler-timeout-seconds`). Для USER-сканов
 api делает refund по `ScanFailedEvent`.
 
+Структурированные коды, правила приоритета причин и ограничения повторной обработки описаны в
+[`FAILED-REASONS.md`](../FAILED-REASONS.md).
+
 **Ручной разбор** (если автоматика не сработала — reaper выключен/упал):
 ```sql
 SELECT id, status, kind, updated_at, error_message

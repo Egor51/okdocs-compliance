@@ -10,6 +10,7 @@ import io.okdocs.compliance.contracts.enums.ScanStatus;
 import io.okdocs.compliance.contracts.enums.ScanTier;
 import io.okdocs.compliance.contracts.exception.AccessDeniedToScanException;
 import io.okdocs.compliance.contracts.exception.ComplianceValidationException;
+import io.okdocs.compliance.contracts.scan.FreeScanRequest;
 import io.okdocs.compliance.contracts.scan.ScanRequest;
 import io.okdocs.compliance.messaging.OutboxEventFactory;
 import io.okdocs.compliance.persistence.outbox.OutboxEvent;
@@ -88,6 +89,30 @@ class ScanCommandServiceCabinetValidationTest {
 
         verify(balanceService, never()).debit(anyLong(), any());
         verify(scanRepository, never()).save(any());
+    }
+
+    @Test
+    void freeScanAlwaysPersistsValidatedSiteRoot() {
+        String submitted = "https://icr.su/rus/contacts/accounts.php";
+        when(urlValidator.validateSiteRoot(submitted))
+                .thenReturn(new UrlValidatorService.ValidatedUrl("https://icr.su", "icr.su"));
+        when(properties.scan()).thenReturn(new ComplianceApiProperties.Scan(
+                1, 5, 30, 7, 7, Set.of(ScanJurisdiction.RU)));
+        when(properties.kafka()).thenReturn(new ComplianceApiProperties.KafkaTopics(
+                new ComplianceApiProperties.KafkaTopics.Topic(
+                        "scan-requested", "scan-completed", "scan-failed")));
+        when(outboxEventFactory.create(any(), any(), any(), any()))
+                .thenReturn(new OutboxEvent());
+
+        service.startFreeScan(
+                new FreeScanRequest(submitted, "RU", "ru"), "1.2.3.4", user);
+
+        ArgumentCaptor<ComplianceScan> scanCaptor = ArgumentCaptor.forClass(ComplianceScan.class);
+        verify(scanRepository).save(scanCaptor.capture());
+        assertThat(scanCaptor.getValue().getSiteUrl()).isEqualTo("https://icr.su");
+        assertThat(scanCaptor.getValue().getSiteDomain()).isEqualTo("icr.su");
+        verify(urlValidator).validateSiteRoot(submitted);
+        verify(balanceService, never()).debit(anyLong(), any());
     }
 
     @Test
