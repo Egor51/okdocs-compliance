@@ -1,5 +1,7 @@
 package io.okdocs.compliance.contracts.event;
 
+import io.okdocs.compliance.contracts.scan.ScanFailure;
+
 import java.time.Instant;
 import java.util.UUID;
 
@@ -11,6 +13,7 @@ public record ScanFailedEvent(
         Long userId,
         UUID guestId,
         String errorMessage,
+        ScanFailure failure,
         Instant failedAt
 ) {
 }

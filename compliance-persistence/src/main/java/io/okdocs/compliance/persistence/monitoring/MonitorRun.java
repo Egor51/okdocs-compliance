@@ -2,6 +2,10 @@ package io.okdocs.compliance.persistence.monitoring;
 
 import io.okdocs.compliance.contracts.enums.MonitorRunStatus;
 import io.okdocs.compliance.contracts.enums.MonitorTrigger;
+import io.okdocs.compliance.contracts.enums.ScanFailureCode;
+import io.okdocs.compliance.contracts.enums.ScanFailureStage;
+import io.okdocs.compliance.contracts.enums.ScanFetchMode;
+import io.okdocs.compliance.contracts.scan.ScanFailure;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -58,6 +62,30 @@ public class MonitorRun {
     @Column(name = "error_message", columnDefinition = "text")
     private String errorMessage;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "failure_code", length = 50)
+    private ScanFailureCode failureCode;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "failure_stage", length = 30)
+    private ScanFailureStage failureStage;
+
+    @Column(name = "failure_retryable")
+    private Boolean failureRetryable;
+
+    @Column(name = "failure_http_status")
+    private Integer failureHttpStatus;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "failure_fetch_mode", length = 20)
+    private ScanFetchMode failureFetchMode;
+
+    @Column(name = "failure_fallback_attempted")
+    private Boolean failureFallbackAttempted;
+
+    @Column(name = "failure_incident_id")
+    private UUID failureIncidentId;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -70,5 +98,39 @@ public class MonitorRun {
             id = UUID.randomUUID();
         }
         createdAt = Instant.now();
+    }
+
+    public void setFailure(ScanFailure failure) {
+        if (failure == null) {
+            failureCode = null;
+            failureStage = null;
+            failureRetryable = null;
+            failureHttpStatus = null;
+            failureFetchMode = null;
+            failureFallbackAttempted = null;
+            failureIncidentId = null;
+            return;
+        }
+        failureCode = failure.code();
+        failureStage = failure.stage();
+        failureRetryable = failure.retryable();
+        failureHttpStatus = failure.httpStatus();
+        failureFetchMode = failure.fetchMode();
+        failureFallbackAttempted = failure.fallbackAttempted();
+        failureIncidentId = failure.incidentId();
+    }
+
+    public ScanFailure failure() {
+        if (failureCode == null) {
+            return null;
+        }
+        return new ScanFailure(
+                failureCode,
+                failureStage == null ? ScanFailureStage.UNKNOWN : failureStage,
+                Boolean.TRUE.equals(failureRetryable),
+                failureHttpStatus,
+                failureFetchMode,
+                Boolean.TRUE.equals(failureFallbackAttempted),
+                failureIncidentId);
     }
 }

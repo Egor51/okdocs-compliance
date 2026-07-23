@@ -6,6 +6,10 @@ import io.okdocs.compliance.contracts.crawler.PageAnalysisResult;
 import io.okdocs.compliance.contracts.enums.RenderMode;
 import io.okdocs.compliance.contracts.enums.ScanKind;
 import io.okdocs.compliance.contracts.enums.ScanStatus;
+import io.okdocs.compliance.contracts.enums.ScanFailureCode;
+import io.okdocs.compliance.contracts.enums.ScanFailureStage;
+import io.okdocs.compliance.contracts.enums.ScanFetchMode;
+import io.okdocs.compliance.contracts.scan.ScanFailure;
 import io.okdocs.compliance.persistence.scan.ComplianceScan;
 import io.okdocs.compliance.rules.RuleEngine;
 import io.okdocs.compliance.rules.RuleEngineResult;
@@ -73,9 +77,33 @@ class ScanPipelineTest {
         assertThat(outcome.finalStatus()).isEqualTo(ScanStatus.FAILED);
         assertThat(outcome.result()).isNull();
         // Конкретная причина (не общий «краулинг не вернул страниц») — попадёт в БД/outbox.
-        assertThat(outcome.failureMessage()).contains("CDP");
+        assertThat(outcome.failure().code())
+                .isEqualTo(io.okdocs.compliance.contracts.enums.ScanFailureCode.BROWSER_UNAVAILABLE);
         // до краула не дошли
         org.mockito.Mockito.verifyNoInteractions(siteCrawler);
+    }
+
+    @Test
+    void homepageFailureWinsEvenWhenSecondaryPageWasFetched() {
+        ComplianceScan scan = freeScan(
+                io.okdocs.compliance.contracts.enums.ScanJurisdiction.RU);
+        ScanFailure homepageFailure = new ScanFailure(
+                ScanFailureCode.TLS_HANDSHAKE_TIMEOUT,
+                ScanFailureStage.TLS,
+                true, null, ScanFetchMode.HTTP, false, null);
+        when(siteCrawler.crawl(anyString(), anyInt()))
+                .thenReturn(new SiteCrawler.CrawlResult(
+                        List.of(page("https://example.com/privacy")),
+                        List.of(),
+                        new CrawlerDiagnostics(2, 1, 1, false),
+                        homepageFailure,
+                        Map.of()));
+
+        ScanPipeline.PipelineOutcome outcome = pipeline.run(scan, scan.getId());
+
+        assertThat(outcome.finalStatus()).isEqualTo(ScanStatus.FAILED);
+        assertThat(outcome.failure()).isEqualTo(homepageFailure);
+        org.mockito.Mockito.verifyNoInteractions(ruleEngine);
     }
 
     @Test

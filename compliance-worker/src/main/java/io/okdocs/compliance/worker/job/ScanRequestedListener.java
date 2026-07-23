@@ -15,7 +15,6 @@ import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
-import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -24,15 +23,14 @@ import java.util.UUID;
  * COMPLETED | PARTIAL | FAILED}. Manual ack, concurrency из конфига.
  * <p>
  * <b>Idempotency-гард по {@code scan.status}</b> (at-least-once Kafka + transactional outbox дают
- * дубли). Ключевое различие — «не обрабатывать» vs «не подтверждать»: дубликат нужно <b>поглотить
- * (ack)</b>, иначе Kafka передоставляет вечно; но скан, идущий <b>сейчас</b> в другом потоке/инстансе,
- * подтверждать нельзя — пусть передоставится позже.
+ * дубли). Право выполнения выдаёт атомарный переход {@code QUEUED → CRAWLING}. Все остальные
+ * доставки поглощаются: уже работающий скан нельзя запускать повторно, а потерянного владельца
+ * завершит reaper по общему deadline.
  * <table>
  *   <tr><th>status</th><th>действие</th><th>ack?</th></tr>
  *   <tr><td>терминальный</td><td>не обрабатывать (дубль / добит reaper'ом)</td><td>да, поглотить</td></tr>
  *   <tr><td>QUEUED</td><td>обработать</td><td>да, после коммита</td></tr>
- *   <tr><td>CRAWLING/ANALYZING, свежий</td><td>не обрабатывать (идёт сейчас)</td><td><b>нет</b></td></tr>
- *   <tr><td>CRAWLING/ANALYZING, протух</td><td>перезапустить (worker упал)</td><td>да, после коммита</td></tr>
+ *   <tr><td>CRAWLING/ANALYZING</td><td>не обрабатывать (владелец уже выбран)</td><td>да</td></tr>
  * </table>
  * Финальный переход + событие (через outbox) делает {@link ScanLifecycleService} в одной транзакции;
  * напрямую в Kafka не шлём.
@@ -61,6 +59,7 @@ public class ScanRequestedListener {
         } finally {
             MDC.remove("scanId");
             MDC.remove("scanKind");
+            MDC.remove("incidentId");
         }
     }
 
@@ -84,30 +83,40 @@ public class ScanRequestedListener {
         }
 
         if (status == ScanStatus.CRAWLING || status == ScanStatus.ANALYZING) {
-            if (isFresh(scan)) {
-                // Идёт сейчас в другом потоке/инстансе — нельзя ни обрабатывать, ни ack'ать.
-                // nack(delay): контейнер переставит offset на это сообщение и повторит позже
-                // (с паузой), без подтверждения. Голый return offset не зафиксирует, но и
-                // повторной доставки не вызовет до rebalance/restart — поэтому именно nack.
-                Duration delay = properties.getScan().getRedeliverDelay();
-                log.debug("Scan {} in progress ({}, fresh) — nack, redeliver in {}", scanId, status, delay);
-                acknowledgment.nack(delay);
-                return;
-            }
-            log.info("Scan {} stale in {} — restarting (worker likely crashed)", scanId, status);
+            // Execution ownership is persisted by the atomic QUEUED→CRAWLING claim. A redelivery
+            // must never restart or refresh an in-flight scan. Reaper handles a dead owner.
+            log.debug("Scan {} already in progress ({}) — duplicate, acking", scanId, status);
+            acknowledgment.acknowledge();
+            return;
         }
 
-        // QUEUED либо протухший in-progress → обрабатываем.
+        if (status != ScanStatus.QUEUED) {
+            log.warn("Scan {} has unsupported non-terminal status {} — acking", scanId, status);
+            acknowledgment.acknowledge();
+            return;
+        }
+
+        if (!lifecycle.claimForProcessing(scanId)) {
+            log.debug("Scan {} claim lost to another worker — duplicate, acking", scanId);
+            acknowledgment.acknowledge();
+            return;
+        }
+
+        // This delivery owns processing after the committed atomic claim.
         try {
             process(scan);
             acknowledgment.acknowledge(); // ack только после успешного коммита финального статуса
         } catch (Exception e) {
             metrics.listenerFailure();
-            log.error("Pipeline failed for scan {}: {}", scanId, e.getMessage(), e);
+            UUID incidentId = UUID.randomUUID();
+            MDC.put("incidentId", incidentId.toString());
+            log.error("Pipeline failed for scan {} (incidentId={}): {}",
+                    scanId, incidentId, e.getMessage(), e);
             // Финальный fail коммитим в БД (+ ScanFailedEvent через outbox), затем ack — иначе
             // бесконечный redelivery упавшего скана. Reaper подстрахует, если этот fail тоже упадёт.
             try {
-                lifecycle.fail(scanId, "Pipeline error: " + e.getClass().getSimpleName());
+                lifecycle.fail(scanId,
+                        io.okdocs.compliance.worker.service.ScanFailures.internal(incidentId));
                 acknowledgment.acknowledge();
             } catch (Exception failEx) {
                 // Даже FAILED не закоммитился (БД недоступна?) — nack для управляемой повторной
@@ -122,12 +131,11 @@ public class ScanRequestedListener {
 
     private void process(ComplianceScan scan) {
         UUID scanId = scan.getId();
-        lifecycle.markCrawling(scanId);
         // Режим выполнения (maxPages/kind/dynamicRequired) worker берёт из строки скана, не из события.
         ScanPipeline.PipelineOutcome outcome = pipeline.run(scan, scanId);
 
         switch (outcome.finalStatus()) {
-            case FAILED -> lifecycle.fail(scanId, outcome.failureMessage());
+            case FAILED -> lifecycle.fail(scanId, outcome.failure());
             case PARTIAL -> {
                 lifecycle.markAnalyzing(scanId);
                 lifecycle.partial(scanId, outcome.result());
@@ -140,10 +148,4 @@ public class ScanRequestedListener {
         }
     }
 
-    /** «Свежий» in-progress: обновлялся недавно (< staleAfter) — значит идёт сейчас, не завис. */
-    private boolean isFresh(ComplianceScan scan) {
-        Duration staleAfter = properties.getScan().getStaleAfter();
-        Instant cutoff = Instant.now().minus(staleAfter);
-        return scan.getUpdatedAt() != null && scan.getUpdatedAt().isAfter(cutoff);
-    }
 }

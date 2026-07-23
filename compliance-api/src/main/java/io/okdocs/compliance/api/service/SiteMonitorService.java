@@ -249,6 +249,7 @@ public class SiteMonitorService {
                 run.getId(), run.getMonitorId(), run.getScanId(), run.getTrigger(), run.getStatus(),
                 run.getScheduledFor(), run.getPreviousScore(), run.getCurrentScore(),
                 run.getNewFindings(), run.getResolvedFindings(), run.getErrorMessage(),
+                run.failure(),
                 run.getCreatedAt(), run.getFinishedAt());
     }
 }

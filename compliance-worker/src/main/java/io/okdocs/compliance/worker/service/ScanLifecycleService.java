@@ -3,6 +3,7 @@ package io.okdocs.compliance.worker.service;
 import io.okdocs.compliance.contracts.enums.ScanStatus;
 import io.okdocs.compliance.contracts.event.ScanCompletedEvent;
 import io.okdocs.compliance.contracts.event.ScanFailedEvent;
+import io.okdocs.compliance.contracts.scan.ScanFailure;
 import io.okdocs.compliance.messaging.OutboxEventFactory;
 import io.okdocs.compliance.persistence.outbox.OutboxEvent;
 import io.okdocs.compliance.persistence.outbox.OutboxEventRepository;
@@ -56,6 +57,12 @@ public class ScanLifecycleService {
         moveToIntermediate(scanId, ScanStatus.CRAWLING);
     }
 
+    /** Atomic QUEUED → CRAWLING claim used as the execution ownership boundary. */
+    @Transactional
+    public boolean claimForProcessing(UUID scanId) {
+        return scanRepository.claimQueued(scanId, Instant.now()) == 1;
+    }
+
     @Transactional
     public void markAnalyzing(UUID scanId) {
         moveToIntermediate(scanId, ScanStatus.ANALYZING);
@@ -72,12 +79,12 @@ public class ScanLifecycleService {
     }
 
     @Transactional
-    public void fail(UUID scanId, String errorMessage) {
+    public void fail(UUID scanId, ScanFailure failure) {
         ComplianceScan scan = scanRepository.findById(scanId).orElseThrow();
         if (scan.getStatus().isTerminal()) {
             return;
         }
-        scan.fail(errorMessage);
+        scan.fail(ScanFailures.legacyMessage(failure), failure);
         markDuration(scan);
         recordTerminal(scan);
         outboxRepository.save(scanFailedEvent(scan));
@@ -86,11 +93,17 @@ public class ScanLifecycleService {
     /** Вызывается reaper'ом (§5.3): no-op если статус уже терминальный. */
     @Transactional
     public void failStuck(UUID scanId, Duration staleAfter) {
-        ComplianceScan scan = scanRepository.findById(scanId).orElseThrow();
+        ComplianceScan scan = scanRepository.findByIdForUpdate(scanId).orElseThrow();
         if (scan.getStatus().isTerminal()) {
             return; // уже завершён (живой листенер успел) — пропускаем
         }
-        scan.fail("Scan timed out — no progress for " + staleAfter);
+        Instant cutoff = Instant.now().minus(staleAfter);
+        if (scan.getUpdatedAt() != null && !scan.getUpdatedAt().isBefore(cutoff)) {
+            log.debug("Reaper skip scan {}: progress was refreshed after candidate selection", scanId);
+            return;
+        }
+        ScanFailure failure = ScanFailures.pipelineTimeout();
+        scan.fail(ScanFailures.legacyMessage(failure), failure);
         markDuration(scan);
         recordTerminal(scan);
         outboxRepository.save(scanFailedEvent(scan));
@@ -202,10 +215,10 @@ public class ScanLifecycleService {
 
     private OutboxEvent scanFailedEvent(ComplianceScan scan) {
         ScanFailedEvent event = new ScanFailedEvent(
-                UUID.randomUUID(), 1, scan.getId(), scan.getUserId(), scan.getGuestId(),
-                scan.getErrorMessage(), Instant.now());
+                UUID.randomUUID(), 2, scan.getId(), scan.getUserId(), scan.getGuestId(),
+                scan.getErrorMessage(), scan.failure(), Instant.now());
         return outboxEventFactory.create(
                 scan.getId(), properties.getKafka().getTopic().getScanFailed(),
-                scan.getId().toString(), event);
+                scan.getId().toString(), event, event.schemaVersion());
     }
 }

@@ -60,6 +60,9 @@ public class ComplianceWorkerProperties {
          */
         @Positive
         private int connectTimeoutMs = 4000;
+        /** Timeout for TLS negotiation; must be applied before {@code SSLSocket.startHandshake()}. */
+        @Positive
+        private int tlsHandshakeTimeoutMs = 10000;
         @Positive
         private int crawlerTimeoutSeconds = 90;
         /**
@@ -223,11 +226,11 @@ public class ComplianceWorkerProperties {
          * считается зависшим (§5.3). Строго больше {@code crawler.crawlerTimeoutSeconds}.
          */
         @NotNull
-        private Duration staleAfter = Duration.ofMinutes(5);
+        private Duration staleAfter = Duration.ofMinutes(7);
         /**
-         * Задержка повторной доставки (§5.2), когда скан идёт прямо сейчас в другом потоке/инстансе:
-         * {@code Acknowledgment.nack(delay)} переставляет offset и повторяет позже, не подтверждая
-         * сообщение. Должна быть достаточной, чтобы активный воркер успел продвинуть/завершить скан.
+         * Задержка повторной доставки (§5.2), если после сбоя пайплайна не удалось записать
+         * терминальный FAILED (например, БД недоступна). Дубликаты уже захваченного скана
+         * подтверждаются без повторного запуска.
          */
         @NotNull
         private Duration redeliverDelay = Duration.ofSeconds(30);
@@ -410,6 +413,22 @@ public class ComplianceWorkerProperties {
             return true;
         }
         return scan.getTotalDeadline().getSeconds() >= crawler.getCrawlerTimeoutSeconds();
+    }
+
+    @AssertTrue(message = "compliance.crawler.tlsHandshakeTimeoutMs must be <= "
+            + "compliance.crawler.pageTimeoutMs")
+    public boolean isTlsHandshakeWithinPageTimeout() {
+        return crawler == null
+                || crawler.getTlsHandshakeTimeoutMs() <= crawler.getPageTimeoutMs();
+    }
+
+    @AssertTrue(message = "compliance.scan.staleAfter must be strictly greater than "
+            + "compliance.scan.totalDeadline")
+    public boolean isReaperThresholdAboveTotalDeadline() {
+        if (scan == null || scan.getStaleAfter() == null || scan.getTotalDeadline() == null) {
+            return true;
+        }
+        return scan.getStaleAfter().compareTo(scan.getTotalDeadline()) > 0;
     }
 
     /**

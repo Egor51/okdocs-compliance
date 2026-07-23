@@ -54,6 +54,10 @@ spring:
       # сигнатуры @KafkaListener, без type-headers от продюсера. JsonDeserializer тут не годится —
       # без headers он не знает тип и падает с «No type information in headers».
       value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+      properties:
+        max.poll.records: 1
+        # Выше hard pipeline deadline (5m), чтобы долгий handler не вызвал rebalance.
+        max.poll.interval.ms: 420000
     listener:
       concurrency: ${KAFKA_LISTENER_CONCURRENCY:6}
       ack-mode: manual

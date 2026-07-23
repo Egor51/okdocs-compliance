@@ -38,7 +38,7 @@ public class ScanResultListener {
                 balanceService.refund(event.userId(), event.scanId());
             }
             siteMonitorResultService.failed(
-                    event.scanId(), event.errorMessage(), event.failedAt());
+                    event.scanId(), event.errorMessage(), event.failure(), event.failedAt());
             acknowledgment.acknowledge();
         } catch (RuntimeException e) {
             log.warn("Не удалось обработать ScanFailedEvent для скана {} — offset не подтверждён: {}",

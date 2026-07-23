@@ -1,18 +1,28 @@
 package io.okdocs.compliance.worker.crawler;
 
+import io.okdocs.compliance.contracts.enums.ScanFailureCode;
+import io.okdocs.compliance.contracts.enums.ScanFailureStage;
+import io.okdocs.compliance.contracts.enums.ScanFetchMode;
+import io.okdocs.compliance.contracts.scan.ScanFailure;
+import io.okdocs.compliance.worker.service.ScanFailures;
 import org.springframework.stereotype.Component;
 
 import javax.net.ssl.SNIHostName;
+import javax.net.ssl.SSLException;
+import javax.net.ssl.SSLHandshakeException;
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
+import java.net.ConnectException;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.NoRouteToHostException;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
@@ -21,6 +31,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.security.cert.CertificateException;
 import java.util.zip.GZIPInputStream;
 
 /**
@@ -34,35 +45,81 @@ public class PinnedHttpFetcher {
     private static final int MAX_HEADER_BYTES = 64 * 1024;
 
     public Response fetch(URI uri, InetAddress address, String userAgent,
-                          int connectTimeoutMs, int readTimeoutMs, long maxBodyBytes)
+                          int connectTimeoutMs, int tlsHandshakeTimeoutMs,
+                          int readTimeoutMs, long maxBodyBytes)
             throws IOException {
         String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
         int port = effectivePort(uri, scheme);
-        try (Socket socket = openSocket(uri, address, scheme, port, connectTimeoutMs)) {
-            socket.setSoTimeout(readTimeoutMs);
+        long deadlineNanos = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(readTimeoutMs);
+        try (Socket socket = openSocket(
+                uri, address, scheme, port, connectTimeoutMs, tlsHandshakeTimeoutMs, deadlineNanos)) {
+            socket.setSoTimeout(boundedTimeout(readTimeoutMs, deadlineNanos));
             writeRequest(socket.getOutputStream(), uri, userAgent);
-            return readResponse(socket.getInputStream(), maxBodyBytes);
+            try {
+                return readResponse(socket.getInputStream(), maxBodyBytes);
+            } catch (FetchException e) {
+                throw e;
+            } catch (SocketTimeoutException e) {
+                throw failure(ScanFailureCode.RESPONSE_TIMEOUT, ScanFailureStage.HTTP_FETCH,
+                        true, null, "Timed out before HTTP response", e);
+            } catch (BodyTooLargeException e) {
+                throw failure(ScanFailureCode.RESPONSE_TOO_LARGE, ScanFailureStage.HTTP_FETCH,
+                        false, null, "HTTP response body exceeds the configured limit", e);
+            } catch (IOException e) {
+                throw failure(ScanFailureCode.HTTP_INVALID_RESPONSE, ScanFailureStage.HTTP_FETCH,
+                        true, null, "Invalid HTTP response", e);
+            }
         }
     }
 
-    private Socket openSocket(URI uri, InetAddress address, String scheme, int port, int connectTimeoutMs)
+    private Socket openSocket(URI uri, InetAddress address, String scheme, int port,
+                              int connectTimeoutMs, int tlsHandshakeTimeoutMs, long deadlineNanos)
             throws IOException {
         Socket plain = new Socket();
-        plain.connect(new InetSocketAddress(address, port), connectTimeoutMs);
-        if (!"https".equals(scheme)) {
-            return plain;
+        try {
+            try {
+                plain.connect(new InetSocketAddress(address, port),
+                        boundedTimeout(connectTimeoutMs, deadlineNanos));
+            } catch (SocketTimeoutException e) {
+                throw failure(ScanFailureCode.CONNECT_TIMEOUT, ScanFailureStage.CONNECT,
+                        true, null, "TCP connect timed out", e);
+            } catch (ConnectException | NoRouteToHostException e) {
+                throw failure(ScanFailureCode.CONNECT_FAILED, ScanFailureStage.CONNECT,
+                        true, null, "TCP connect failed", e);
+            }
+            if (!"https".equals(scheme)) {
+                return plain;
+            }
+            String host = uri.getHost();
+            SSLSocketFactory factory = (SSLSocketFactory) SSLSocketFactory.getDefault();
+            SSLSocket ssl = (SSLSocket) factory.createSocket(plain, host, port, true);
+            SSLParameters params = ssl.getSSLParameters();
+            params.setEndpointIdentificationAlgorithm("HTTPS");
+            if (isDnsName(host)) {
+                params.setServerNames(List.of(new SNIHostName(host)));
+            }
+            ssl.setSSLParameters(params);
+            ssl.setSoTimeout(boundedTimeout(tlsHandshakeTimeoutMs, deadlineNanos));
+            try {
+                ssl.startHandshake();
+            } catch (SocketTimeoutException e) {
+                throw failure(ScanFailureCode.TLS_HANDSHAKE_TIMEOUT, ScanFailureStage.TLS,
+                        true, null, "TLS handshake timed out", e);
+            } catch (SSLHandshakeException e) {
+                throw tlsHandshakeFailure(e);
+            } catch (SSLException e) {
+                throw failure(ScanFailureCode.TLS_HANDSHAKE_FAILED, ScanFailureStage.TLS,
+                        false, null, "TLS handshake failed", e);
+            }
+            return ssl;
+        } catch (IOException | RuntimeException e) {
+            try {
+                plain.close();
+            } catch (IOException ignored) {
+                // Preserve the original failure.
+            }
+            throw e;
         }
-        String host = uri.getHost();
-        SSLSocketFactory factory = (SSLSocketFactory) SSLSocketFactory.getDefault();
-        SSLSocket ssl = (SSLSocket) factory.createSocket(plain, host, port, true);
-        SSLParameters params = ssl.getSSLParameters();
-        params.setEndpointIdentificationAlgorithm("HTTPS");
-        if (isDnsName(host)) {
-            params.setServerNames(List.of(new SNIHostName(host)));
-        }
-        ssl.setSSLParameters(params);
-        ssl.startHandshake();
-        return ssl;
     }
 
     private void writeRequest(OutputStream out, URI uri, String userAgent) throws IOException {
@@ -84,9 +141,22 @@ public class PinnedHttpFetcher {
         }
         int statusCode = parseStatus(lines[0]);
         Map<String, List<String>> headers = parseHeaders(lines);
-        byte[] body = readBody(in, headers, maxBodyBytes);
-        if (header(headers, "content-encoding").map(v -> v.toLowerCase(Locale.ROOT).contains("gzip")).orElse(false)) {
-            body = gunzip(body, maxBodyBytes);
+        byte[] body;
+        try {
+            body = readBody(in, headers, maxBodyBytes);
+            if (header(headers, "content-encoding")
+                    .map(v -> v.toLowerCase(Locale.ROOT).contains("gzip")).orElse(false)) {
+                body = gunzip(body, maxBodyBytes);
+            }
+        } catch (SocketTimeoutException e) {
+            throw failure(ScanFailureCode.RESPONSE_TIMEOUT, ScanFailureStage.HTTP_FETCH,
+                    true, statusCode, "Timed out while reading HTTP response body", e);
+        } catch (BodyTooLargeException e) {
+            throw failure(ScanFailureCode.RESPONSE_TOO_LARGE, ScanFailureStage.HTTP_FETCH,
+                    false, statusCode, "HTTP response body exceeds the configured limit", e);
+        } catch (IOException e) {
+            throw failure(ScanFailureCode.HTTP_INVALID_RESPONSE, ScanFailureStage.HTTP_FETCH,
+                    true, statusCode, "Invalid HTTP response body", e);
         }
         Charset charset = charset(headers);
         return new Response(statusCode, headers, new String(body, charset));
@@ -213,7 +283,7 @@ public class PinnedHttpFetcher {
             if (allowed > 0) {
                 out.write(buffer, 0, allowed);
             }
-            throw new IOException("HTTP body exceeds maxBodyBytes");
+            throw new BodyTooLargeException();
         }
         out.write(buffer, 0, read);
     }
@@ -311,8 +381,61 @@ public class PinnedHttpFetcher {
         return "https".equals(scheme) ? 443 : 80;
     }
 
+    private static int boundedTimeout(int configuredMs, long deadlineNanos) throws FetchException {
+        long remainingNanos = deadlineNanos - System.nanoTime();
+        if (remainingNanos <= 0) {
+            throw failure(ScanFailureCode.RESPONSE_TIMEOUT, ScanFailureStage.HTTP_FETCH,
+                    true, null, "Per-page fetch deadline exhausted", null);
+        }
+        long remainingMs = Math.max(1L,
+                java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(remainingNanos));
+        return (int) Math.min(configuredMs, Math.min(Integer.MAX_VALUE, remainingMs));
+    }
+
     private static boolean isDnsName(String host) {
         return host != null && !host.contains(":") && !host.matches("\\d+\\.\\d+\\.\\d+\\.\\d+");
+    }
+
+    private static FetchException tlsHandshakeFailure(SSLHandshakeException cause) {
+        String message = cause.getMessage() == null ? "" : cause.getMessage().toLowerCase(Locale.ROOT);
+        boolean hostnameMismatch = message.contains("subject alternative")
+                || message.contains("no name matching")
+                || message.contains("hostname");
+        if (!hostnameMismatch) {
+            for (Throwable current = cause; current != null; current = current.getCause()) {
+                String currentMessage = current.getMessage() == null
+                        ? "" : current.getMessage().toLowerCase(Locale.ROOT);
+                if (currentMessage.contains("subject alternative")
+                        || currentMessage.contains("no name matching")
+                        || currentMessage.contains("hostname")) {
+                    hostnameMismatch = true;
+                    break;
+                }
+            }
+        }
+        if (hostnameMismatch) {
+            return failure(ScanFailureCode.TLS_HOSTNAME_MISMATCH, ScanFailureStage.TLS,
+                    false, null, "TLS certificate hostname mismatch", cause);
+        }
+        for (Throwable current = cause; current != null; current = current.getCause()) {
+            if (current instanceof CertificateException) {
+                return failure(ScanFailureCode.TLS_CERT_INVALID, ScanFailureStage.TLS,
+                        false, null, "TLS certificate validation failed", cause);
+            }
+        }
+        return failure(ScanFailureCode.TLS_HANDSHAKE_FAILED, ScanFailureStage.TLS,
+                false, null, "TLS handshake failed", cause);
+    }
+
+    private static FetchException failure(ScanFailureCode code, ScanFailureStage stage,
+                                          boolean retryable, Integer httpStatus,
+                                          String diagnosticMessage, Throwable cause) {
+        ScanFailure failure = ScanFailures.failure(
+                code, stage, retryable, httpStatus, ScanFetchMode.HTTP);
+        return new FetchException(failure, diagnosticMessage, cause);
+    }
+
+    private static final class BodyTooLargeException extends IOException {
     }
 
     public record Response(int statusCode, Map<String, List<String>> headers, String body) {

@@ -2,6 +2,7 @@ package io.okdocs.compliance.api.service;
 
 import io.okdocs.compliance.contracts.enums.MonitorRunStatus;
 import io.okdocs.compliance.contracts.enums.ScanStatus;
+import io.okdocs.compliance.contracts.scan.ScanFailure;
 import io.okdocs.compliance.persistence.monitoring.MonitorRun;
 import io.okdocs.compliance.persistence.monitoring.MonitorRunRepository;
 import io.okdocs.compliance.persistence.monitoring.SiteMonitor;
@@ -76,13 +77,14 @@ public class SiteMonitorResultService {
     }
 
     @Transactional
-    public void failed(UUID scanId, String errorMessage, Instant failedAt) {
+    public void failed(UUID scanId, String errorMessage, ScanFailure failure, Instant failedAt) {
         MonitorRun run = runRepository.findByScanId(scanId).orElse(null);
         if (run == null || run.getStatus() != MonitorRunStatus.RUNNING) {
             return;
         }
         run.setStatus(MonitorRunStatus.FAILED);
         run.setErrorMessage(errorMessage);
+        run.setFailure(failure);
         run.setFinishedAt(failedAt);
         runRepository.save(run);
         monitorRepository.findById(run.getMonitorId()).ifPresent(monitor -> {
