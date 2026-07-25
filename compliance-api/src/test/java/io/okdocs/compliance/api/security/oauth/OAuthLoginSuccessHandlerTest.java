@@ -63,7 +63,7 @@ class OAuthLoginSuccessHandlerTest {
                 .thenReturn(user);
         when(loginCodeService.issue(55L)).thenReturn("one-time-code");
         // state с locale-суффиксом, как его зашивает LocaleAwareAuthorizationRequestResolver.
-        when(request.getParameter("state")).thenReturn("csrf-abc__en");
+        when(request.getParameter("state")).thenReturn("csrf-abc.locale.en");
 
         handler.onAuthenticationSuccess(request, response, token);
 
@@ -110,7 +110,7 @@ class OAuthLoginSuccessHandlerTest {
         when(accountService.resolveOrCreate(any(OAuthUserInfo.class), org.mockito.ArgumentMatchers.eq("ru")))
                 .thenReturn(user);
         when(loginCodeService.issue(8L)).thenReturn("c");
-        when(request.getParameter("state")).thenReturn("csrf__de");
+        when(request.getParameter("state")).thenReturn("csrf.locale.de");
 
         handler.onAuthenticationSuccess(request, response, token);
 

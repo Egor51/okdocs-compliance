@@ -76,7 +76,7 @@ public class OAuthLoginSuccessHandler implements AuthenticationSuccessHandler {
     }
 
     /**
-     * Достаёт locale из суффикса {@code state} ({@code <state>__<locale>}; см.
+     * Достаёт locale из суффикса {@code state} ({@code <state>.locale.<locale>}; см.
      * {@link LocaleAwareAuthorizationRequestResolver}). Нет суффикса / неподдерживаемый —
      * {@link #DEFAULT_LOCALE}.
      */

@@ -31,7 +31,7 @@ class LocaleAwareAuthorizationRequestResolverTest {
         OAuth2AuthorizationRequest req = resolver.resolve(startRequest("en"));
 
         assertThat(req).isNotNull();
-        assertThat(req.getState()).endsWith("__en");
+        assertThat(req.getState()).endsWith(".locale.en");
         // Round-trip: success-handler достаёт из этого же state именно en.
         assertThat(OAuthLoginSuccessHandler.localeFromState(req.getState())).isEqualTo("en");
     }
@@ -41,7 +41,7 @@ class LocaleAwareAuthorizationRequestResolverTest {
         OAuth2AuthorizationRequest req = resolver.resolve(startRequest(null));
 
         assertThat(req).isNotNull();
-        assertThat(req.getState()).doesNotContain("__");
+        assertThat(req.getState()).doesNotContain(".locale.");
     }
 
     @Test
@@ -49,7 +49,7 @@ class LocaleAwareAuthorizationRequestResolverTest {
         OAuth2AuthorizationRequest req = resolver.resolve(startRequest("de"));
 
         assertThat(req).isNotNull();
-        assertThat(req.getState()).doesNotContain("__");
+        assertThat(req.getState()).doesNotContain(".locale.");
     }
 
     @Test
