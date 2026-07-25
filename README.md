@@ -1,551 +1,537 @@
 # okdocs Compliance Scanner
 
-okdocs Compliance Scanner is a Java/Spring service for automated website checks against
-privacy and personal data compliance requirements across supported jurisdictions. It crawls
-a site, extracts forms, scripts, links and hosting signals, evaluates them with a
-jurisdiction-aware rule engine, and produces a report with risk score, findings, evidence
-and remediation guidance.
+Платформа для автоматизированного технического аудита сайтов на соответствие требованиям
+privacy, защиты персональных данных и веб-безопасности. Система обходит сайт, собирает
+воспроизводимые технические сигналы, применяет правила выбранной юрисдикции и формирует отчёт
+с оценкой риска, доказательствами и рекомендациями по исправлению.
 
-The current implementation targets a product flow with two scan modes:
+Проект ориентирован на реальную эксплуатацию: API и обработчики сканов масштабируются отдельно,
+события доставляются через Kafka и transactional outbox, сетевые операции ограничены дедлайнами,
+а ошибки возвращаются в виде стабильных машинных кодов.
 
-- **Free marketing scan**: one-page, static-only scan for anonymous or authenticated users.
-- **Cabinet premium scan**: full crawl with static and dynamic rendering, available to registered users and charged against the scan balance.
+> Сканер выявляет технические признаки риска и помогает приоритизировать исправления, но не
+> заменяет юридическое заключение. Правила и ссылки на законодательство должны проходить
+> регулярную проверку профильным специалистом.
 
-## Table of Contents
+## Содержание
 
-- [Capabilities](#capabilities)
-- [Compliance Scope](#compliance-scope)
-- [Architecture](#architecture)
-- [Modules](#modules)
-- [Request Flow](#request-flow)
-- [Crawler and Rules](#crawler-and-rules)
-- [Technology Stack](#technology-stack)
-- [Repository Layout](#repository-layout)
-- [Prerequisites](#prerequisites)
-- [Local Development](#local-development)
-- [Configuration](#configuration)
-- [API Overview](#api-overview)
-- [Testing](#testing)
-- [Operations](#operations)
-- [Security Notes](#security-notes)
+- [Какую пользу даёт проект](#какую-пользу-даёт-проект)
+- [Основные возможности](#основные-возможности)
+- [Режимы сканирования](#режимы-сканирования)
+- [Что анализирует сканер](#что-анализирует-сканер)
+- [Архитектура](#архитектура)
+- [Надёжность обработки](#надёжность-обработки)
+- [Crawler и сетевая безопасность](#crawler-и-сетевая-безопасность)
+- [Юрисдикции и движок правил](#юрисдикции-и-движок-правил)
+- [Технологический стек](#технологический-стек)
+- [Быстрый старт](#быстрый-старт)
+- [Конфигурация](#конфигурация)
+- [API](#api)
+- [Тестирование](#тестирование)
+- [Эксплуатация](#эксплуатация)
+- [Документация](#документация)
 
-## Capabilities
+## Какую пользу даёт проект
 
-The scanner currently covers the core technical signals needed for website privacy audits:
+| Для кого | Практический результат |
+|---|---|
+| Владелец сайта | Быстрый первичный аудит без ручного просмотра каждой страницы и понятный список приоритетных исправлений. |
+| Команда разработки | Повторяемая техническая проверка перед релизом: URL, доказательство, severity и рекомендация доступны в структурированном отчёте. |
+| Веб-студия или агентство | Единый формат проверки разных клиентских сайтов и артефакт, который можно передать заказчику. |
+| Compliance- или security-команда | История сканов, повторные проверки и мониторинг позволяют видеть регрессии после изменений сайта. |
+| Служба эксплуатации | Машинные причины `FAILED`, метрики и `incidentId` отделяют недоступность сайта от дефекта инфраструктуры сканера. |
 
-- static HTML crawling with sitemap and high-priority path seeding
-- parallel static crawling with strict page-limit semantics
-- optional dynamic rendering through a remote Chromium CDP endpoint
-- form extraction and consent checkbox analysis
-- tracker and pre-consent tracker detection
-- privacy policy and operator contact checks
-- foreign hosting and foreign auth provider signals
-- RKN registry lookup result handling
-- scoring, severity mapping and report snapshot persistence
-- guest and user JWT authentication
-- scan balance, monthly plan quota and refund-on-failure flow
-- transactional outbox for Kafka event publication
-- admin endpoints for users, balances and audit log access
-- Actuator health, metrics and Prometheus endpoints
+Вместо бинарного ответа «соответствует / не соответствует» система сохраняет наблюдаемые факты:
+какая страница проверялась, какой сигнал найден, насколько он достоверен и какое правило его
+интерпретировало. Это делает результат пригодным и для пользователя, и для последующей
+автоматизации.
 
-## Compliance Scope
+## Основные возможности
 
-The data model and rule engine are jurisdiction-aware. A scan carries `ScanJurisdiction`
-(`RU`, `EU`, `GM`), and rules are executed only when their `RuleDefinition.jurisdiction`
-matches the scan jurisdiction.
+- параллельный статический обход сайта на Jsoup;
+- динамический проход через удалённый Chromium по Chrome DevTools Protocol;
+- анализ HTML-форм, cookie, localStorage, трекеров и consent-сценариев;
+- проверка TLS, HTTPS, security headers, DNS и географии инфраструктуры;
+- отдельные rule packs для `RU`, `EU`, `UK`, `DE`, `FR` и `ES`;
+- отчёты `FREE` и `PREMIUM`, сохранённые как согласованные JSON-снапшоты;
+- PDF-отчёт, история сканов и заявки на устранение нарушений;
+- периодический мониторинг сайтов для платных планов;
+- guest JWT, пользовательская аутентификация, OAuth2 и refresh-token families;
+- баланс сканов, тарифы, оплата через YooKassa и идемпотентный refund при неуспешном premium-скане;
+- надёжная событийная обработка через Kafka и transactional outbox;
+- rate limiting через Redis и Bucket4j;
+- Actuator health checks, Micrometer-метрики и Prometheus endpoint;
+- durable email outbox для системных и отчётных писем.
 
-Current implementation status:
+## Режимы сканирования
 
-| Jurisdiction | Status | Notes |
-|---|---|---|
-| `RU` | Implemented | Production rules currently target Russian 152-FZ checks and related administrative liability references. |
-| `EU` | Architecture-ready | The contract and rule engine support EU/GDPR rule isolation; concrete GDPR/ePrivacy rules are planned as a separate rule package. |
-| `GM` | Contract value reserved | Present in contracts for future generic/global checks. |
+| Режим | Запуск | Объём | Рендеринг | Биллинг и хранение |
+|---|---|---|---|---|
+| `FREE_MARKETING` | `POST /api/free-scans` | Главная страница, лимит 1 | Только static | Без списания; короткий retention |
+| `CABINET_PREMIUM` | `POST /api/cabinet/scans` | Полный обход, по умолчанию до 100 страниц | Static + обязательный dynamic CDP | Списание 1 кредита; refund при `FAILED`; история в кабинете |
+| Monitoring run | Планировщик или `run-now` | Premium pipeline | Static + dynamic CDP | Учитывает тариф, лимит мониторов и баланс |
 
-EU/GDPR planned, see roadmap
+Бесплатная проверка всегда анализирует корень сайта. Если пользователь передаст
+`https://icr.su/rus/contacts/accounts.php`, API провалидирует исходный адрес, но сохранит целью
+`https://icr.su`. Это не позволяет случайной внутренней странице подменить обещанную проверку
+главной страницы.
 
-| Scope | Standard or law | Typical website audit coverage |
-|---|---|---|
-| European Union | GDPR, Regulation (EU) 2016/679 | Lawful basis, transparency, privacy notices, data subject rights, processor/controller disclosures, international transfers. |
-| European Union | ePrivacy Directive 2002/58/EC, as amended by 2009/136/EC | Cookies, tracking technologies, consent before non-essential storage/access on user devices. |
-| European Union | EDPB Guidelines | Consent validity, transparency, controller/processor roles, international transfer interpretation. |
-| European Union | Standard Contractual Clauses and transfer impact assessment practice | Cross-border transfer risk, third-country recipients, external processors and trackers. |
-| Germany | BDSG and TTDSG/TDDDG | GDPR supplements, employee data specifics, cookie and terminal-equipment access rules. |
-| France | Loi Informatique et Libertés and CNIL cookie guidelines | Privacy notice quality, consent banners, tracker activation before consent. |
-| Spain | LOPDGDD and LSSI-CE | GDPR supplements, cookie consent and information society service disclosures. |
-| Italy | Codice Privacy and Garante cookie guidelines | GDPR supplements, cookie consent, tracker and profiling transparency. |
-| Netherlands | UAVG and Telecommunicatiewet | GDPR implementation, cookie and tracking consent requirements. |
-| Poland | Personal Data Protection Act and UODO guidance | GDPR implementation, privacy notice and processing transparency expectations. |
-| Ireland | Data Protection Act 2018 and DPC guidance | GDPR implementation, cookie/tracker compliance, controller transparency. |
-| Belgium | Data Protection Act and APD/GBA guidance | GDPR implementation, cookie and transparency expectations. |
-| Austria | DSG and TKG/TTKG-style telecommunications privacy rules | GDPR supplements and cookie/terminal-equipment access requirements. |
-| Portugal | Law 58/2019 and CNPD guidance | GDPR implementation, transparency and consent requirements. |
-| Nordics and Baltics | National GDPR implementation acts and DPA guidance | GDPR supplements, transparency, cookies and tracking enforcement practice. |
-| Switzerland | Federal Act on Data Protection, revised FADP | European non-EU privacy framework; transparency, processor, transfer and security obligations. |
-| United Kingdom | UK GDPR, Data Protection Act 2018 and PECR | European-region non-EU framework; privacy notices, cookies, trackers and direct marketing rules. |
+Premium-скан не маскирует отсутствие браузерного анализа результатом static-only. Если обязательный
+CDP недоступен, скан завершается как `FAILED`, а списанный кредит возвращается.
 
-This repository is an engineering implementation, not legal advice. Rule metadata and legal
-references should be reviewed before being used as a final compliance opinion in any jurisdiction.
+## Что анализирует сканер
 
-## Architecture
+### Privacy и персональные данные
 
-The project is a Maven multi-module Spring Boot application. The production topology separates
-API and worker processes. For local development, `compliance-app` combines both into one process.
+- наличие и доступность политики конфиденциальности;
+- формы сбора данных, их transport security и `action`;
+- consent checkbox и предустановленное согласие;
+- наличие контактов оператора;
+- признаки трансграничной передачи и иностранных auth-провайдеров;
+- полнота privacy notice и прав субъектов данных для GDPR-профилей.
 
-```text
-compliance-app
-  local combined launcher: API + worker in one JVM
+### Cookie и tracking
 
-compliance-api
-  REST API, authentication, rate limiting, scan creation, cabinet/admin endpoints
+- сторонние tracker-домены;
+- cookie и localStorage до получения согласия;
+- появление баннера и сетевые запросы до consent;
+- сценарии `Reject` и `Accept`;
+- наличие понятного отказа и эффективность выбора пользователя;
+- флаги `Secure` и `HttpOnly` у чувствительных cookie.
 
-compliance-worker
-  Kafka consumer, crawler, dynamic renderer integration, rule execution, report assembly
+### Transport и web security
 
-compliance-contracts
-  DTOs, enums, Kafka events and crawler model records
+- принудительный HTTPS и mixed content;
+- валидность, hostname и срок действия TLS-сертификата;
+- устаревшие TLS-протоколы;
+- HSTS, CSP, Referrer-Policy, X-Content-Type-Options и frame protection;
+- wildcard CORS и кеширование чувствительных страниц;
+- раскрытие технологического стека в заголовках.
 
-compliance-persistence
-  JPA entities, repositories and Flyway migrations
+### DNS и инфраструктура
 
-compliance-messaging
-  transactional outbox relay shared by API and worker
+- страна размещения и multi-country hosting;
+- иностранные web- и mail-провайдеры;
+- CNAME на внешние облачные сервисы;
+- ошибки DNS как отдельный наблюдаемый результат.
 
-compliance-mail
-  durable email outbox, Handlebars templates and SMTP transport used by API
+Finding хранит не только код и severity, но также статус верификации. Неполный или недоступный
+источник данных не должен превращаться в подтверждённое нарушение: такие проверки попадают в
+`unverifiedRules` и не уменьшают score как `CONFIRMED`.
 
-compliance-rules
-  compliance rule engine and rule implementations
-```
+## Архитектура
 
-High-level dependencies:
+Production-топология разделяет синхронный API и ресурсоёмкий worker. Для локальной разработки
+`compliance-app` запускает оба компонента в одном JVM.
 
 ```mermaid
 flowchart LR
-    app["compliance-app"] --> api["compliance-api"]
-    app --> worker["compliance-worker"]
-    api --> contracts["compliance-contracts"]
-    api --> persistence["compliance-persistence"]
-    api --> messaging["compliance-messaging"]
-    api --> mail["compliance-mail"]
-    worker --> contracts
-    worker --> persistence
-    worker --> messaging
-    worker --> rules["compliance-rules"]
-    messaging --> persistence
-    mail --> persistence
-    persistence --> contracts
-    rules --> contracts
+    client["Web / API client"] --> api["compliance-api"]
+    api --> redis["Redis<br/>rate limits"]
+    api --> pg[("PostgreSQL")]
+    api --> apiOutbox["Outbox relay"]
+    apiOutbox --> kafka[("Kafka")]
+
+    kafka --> worker["compliance-worker"]
+    worker --> static["Static crawler<br/>Jsoup + pinned HTTP"]
+    worker --> cdp["Dynamic crawler<br/>CDP"]
+    cdp --> chromium["Browserless / Chromium"]
+    worker --> rules["Rule engine"]
+    worker --> pg
+    worker --> workerOutbox["Outbox relay"]
+    workerOutbox --> kafka
+
+    kafka --> api
+    api --> report["JSON / PDF report"]
+    api --> mail["SMTP"]
+    api --> payment["YooKassa"]
 ```
 
-## Modules
+### Модули
 
-| Module | Purpose |
+| Модуль | Ответственность |
 |---|---|
-| `compliance-contracts` | Public DTOs, enums, Kafka events, crawler records. No Spring or JPA dependency. |
-| `compliance-persistence` | Database model, Spring Data repositories, Flyway migrations. |
-| `compliance-messaging` | Transactional outbox publisher used by both API and worker. |
-| `compliance-mail` | Welcome/reset/report-ready/promo email queue and SMTP transport. |
-| `compliance-rules` | Rule engine and compliance rule implementations. |
-| `compliance-api` | REST API, JWT auth, rate limiting, scan commands, cabinet and admin endpoints. |
-| `compliance-worker` | Kafka worker, static crawler, CDP dynamic crawler, enrichment, scoring and report snapshots. |
-| `compliance-app` | Local combined runtime that imports API and worker as libraries. |
+| `compliance-contracts` | DTO, enum, Kafka events, модели crawler и стабильные wire-контракты; без Spring/JPA. |
+| `compliance-persistence` | JPA-модель, репозитории, optimistic locking и Flyway-миграции PostgreSQL. |
+| `compliance-messaging` | Общий transactional outbox relay для API и worker. |
+| `compliance-mail` | Durable email outbox, Handlebars-шаблоны и SMTP transport. |
+| `compliance-rules` | Изолированный от инфраструктуры rule engine и наборы правил по юрисдикциям. |
+| `compliance-api` | REST API, JWT/OAuth2, rate limiting, кабинет, платежи, мониторинг и выдача отчётов. |
+| `compliance-worker` | Kafka consumer, static/dynamic crawling, enrichment, правила, score и сборка отчёта. |
+| `compliance-app` | Локальный combined launcher: API и worker в одном процессе. |
 
-## Request Flow
+Зависимости направлены от runtime-модулей к контрактам и инфраструктурным адаптерам. Rule engine
+не зависит от Spring, JPA или Kafka, поэтому правила можно тестировать как обычные Java-классы.
 
-1. The client obtains a guest token through `POST /api/auth/guest` or logs in as a user.
-2. The API creates a `compliance_scans` row and writes `ScanRequestedEvent` to the outbox in the same transaction.
-3. `OutboxPublisher` publishes the event to Kafka.
-4. The worker consumes `ScanRequestedEvent`, loads the scan row from PostgreSQL and determines execution mode from the database.
-5. The worker runs static crawling and, for premium scans when required, dynamic CDP rendering.
-6. Extracted page data is evaluated by the rule engine.
-7. The worker assembles findings, score, diagnostics and report snapshot.
-8. The scan is completed as `COMPLETED`, `PARTIAL` or `FAILED`.
-9. Completion or failure events are written through the same transactional outbox pattern.
-10. The API exposes status and report data through `/api/compliance-scans/{id}` and `/api/compliance-scans/{id}/report`.
+### Жизненный цикл скана
 
-## Crawler and Rules
-
-### Static Crawler
-
-`SiteCrawler` is a parallel Jsoup-based BFS crawler. It uses:
-
-- sitemap discovery
-- priority path seeding for privacy, contacts, terms and similar pages
-- internal-link BFS from the homepage
-- robots.txt support, configurable through `compliance.crawler.respect-robots`
-- redirect validation with a maximum of 8 hops
-- SSRF host validation before every fetch, including robots.txt, sitemap and redirect hops
-- response body size limits
-- per-page, connect and total crawl timeouts
-- configurable static fetch concurrency
-
-The parallel page limit is intentionally split into two counters:
-
-- `reserved`: temporary slots held by in-flight fetches and accepted pages
-- `accepted`: monotonic count of pages that were actually accepted into the result set
-
-This avoids premature crawl termination when slow failing pages temporarily occupy all slots. If a slot is unavailable but the accepted page limit has not been reached, the URL is requeued and retried later.
-
-### Dynamic Crawler
-
-Dynamic rendering is implemented in `CdpDynamicCrawler` over `java.net.http.WebSocket` and a remote Chromium CDP endpoint, for example Browserless. Playwright and Node.js are not required.
-
-Dynamic mode is gated by scan execution kind:
-
-- `FREE_MARKETING`: static-only
-- `CABINET_PREMIUM`: static plus dynamic when `dynamicRequired=true`
-
-Premium scans do not silently degrade to static when CDP is required and unavailable. In that case the scan fails and the balance credit is refunded.
-
-### Rule Engine
-
-Rules live in `compliance-rules` and emit rule facts. Worker-side assembly maps facts to persisted findings, applies metadata, calculates severity impact and stores report snapshots. The rule engine is jurisdiction-aware; the concrete rule list below describes the current RU implementation.
-
-Currently implemented RU rule areas include:
-
-- missing privacy policy
-- unprotected data forms
-- default-checked consent
-- missing cookie consent
-- third-party trackers
-- trackers before consent
-- foreign auth providers
-- cross-border transfer signals
-- missing operator contacts
-- non-Russian hosting
-- RKN registry lookup status
-
-## Technology Stack
-
-- Java 21
-- Spring Boot 3.5
-- Maven multi-module build
-- PostgreSQL and Flyway
-- Spring Data JPA
-- Kafka
-- Transactional outbox
-- Redis and Bucket4j for API rate limiting outside the local profile
-- Jsoup for static crawling
-- Java HTTP/WebSocket CDP client for dynamic crawling
-- GeoIP2 / DB-IP country database
-- Micrometer and Prometheus
-- JUnit 5, Mockito, Spring Kafka Test and Testcontainers
-
-## Repository Layout
-
-```text
-.
-├── compliance-api
-├── compliance-app
-├── compliance-contracts
-├── compliance-messaging
-├── compliance-persistence
-├── compliance-rules
-├── compliance-worker
-├── docker-compose.yml
-├── docker-compose.override.yml
-├── docker-compose.prod.yml
-├── docker-compose.infra.prod.yml
-├── PROJECT.md
-└── pom.xml
+```mermaid
+stateDiagram-v2
+    [*] --> QUEUED
+    QUEUED --> CRAWLING: atomic claim
+    CRAWLING --> ANALYZING
+    ANALYZING --> COMPLETED
+    ANALYZING --> PARTIAL
+    CRAWLING --> FAILED
+    ANALYZING --> FAILED
 ```
 
-## Prerequisites
+- `COMPLETED` — целевой объём обработан;
+- `PARTIAL` — отчёт сформирован, но часть страниц или enrichment-шагов недоступна;
+- `FAILED` — анализировать нечего либо общий pipeline не завершился;
+- любой терминальный статус необратим.
 
-- JDK 21
-- Maven 3.9+
-- Docker, for Testcontainers and optional local services
-- PostgreSQL 16-compatible database for running the application
-- Kafka broker for scan request/result events
-- Optional: Redis for non-local rate limiting
-- Optional: Browserless or another remote Chromium CDP endpoint for premium dynamic scans
-- Optional: `jq` for the shell examples below
+### Поток обработки
 
-## Local Development
+1. API валидирует URL, principal, юрисдикцию, rate limit и доступный баланс.
+2. Строка скана и `ScanRequestedEvent` записываются в PostgreSQL одной транзакцией.
+3. Outbox relay публикует команду в Kafka.
+4. Worker атомарно захватывает скан переходом `QUEUED → CRAWLING`.
+5. Static crawler обходит сайт; premium-поток дополнительно запускает dynamic CDP.
+6. Enrichment дополняет страницы DNS, GeoIP, TLS и другими техническими сигналами.
+7. Rule engine выполняет только слои выбранной юрисдикции.
+8. Worker сохраняет findings, score, diagnostics и free/premium report snapshots.
+9. Терминальный статус и событие `ScanCompletedEvent` или `ScanFailedEvent` фиксируются через outbox.
+10. API обновляет мониторинг, отправляет уведомления и делает refund, когда он требуется.
 
-### 1. Build the project
+## Надёжность обработки
 
-```bash
-mvn clean test
+### Transactional outbox
+
+Изменение состояния и исходящее событие записываются в одной DB-транзакции. Relay забирает события
+короткими batch-транзакциями с `FOR UPDATE SKIP LOCKED`, публикует их в Kafka вне транзакции и
+использует exponential backoff. После исчерпания попыток событие получает статус `DEAD` и становится
+видимым в метриках.
+
+Kafka имеет семантику at-least-once, поэтому повторная доставка ожидаема. Право выполнения скана
+выдаёт атомарный `QUEUED → CRAWLING` claim: сообщения для уже работающего или терминального скана
+подтверждаются без повторного запуска crawler.
+
+### Дедлайны и reaper
+
+Сетевой pipeline ограничен на нескольких уровнях. Актуальные значения по умолчанию:
+
+| Граница | Настройка | Значение |
+|---|---|---|
+| TCP connect | `compliance.crawler.connect-timeout-ms` | `4000 ms` |
+| TLS handshake | `compliance.crawler.tls-handshake-timeout-ms` | `10000 ms` |
+| Страница / response read | `compliance.crawler.page-timeout-ms` | `15000 ms` |
+| Static crawl | `compliance.crawler.crawler-timeout-seconds` | `90 s` |
+| Весь scan pipeline | `compliance.scan.total-deadline` | `5 min` |
+| Stuck scan reaper | `compliance.scan.stale-after` | `7 min` |
+
+Пул static workers принудительно останавливается по общему дедлайну. Reaper завершает потерявший
+владельца скан как `PIPELINE_TIMEOUT`, но не перезаписывает уже сохранённую первичную причину.
+Критичные соотношения таймаутов валидируются при старте приложения.
+
+### Детальные причины `FAILED`
+
+API и `ScanFailedEvent` возвращают структурированную причину без текста исключения и имени
+Java-класса:
+
+```json
+{
+  "status": "FAILED",
+  "errorMessage": "Сайт не завершил защищённое соединение вовремя",
+  "failure": {
+    "code": "TLS_HANDSHAKE_TIMEOUT",
+    "stage": "TLS",
+    "retryable": true,
+    "httpStatus": null,
+    "fetchMode": "HTTP",
+    "fallbackAttempted": false,
+    "incidentId": null
+  }
+}
 ```
 
-### 2. Start runtime helper services
+Коды различают validation, DNS, connect, TLS, HTTP, browser, parsing, analysis и pipeline errors.
+`retryable` описывает характер причины, но сам по себе не запускает бесконечный retry. Неожиданная
+внутренняя ошибка получает `incidentId`, по которому можно связать ответ пользователя с логами.
+Полный контракт и политика классификации описаны в
+[`FAILED-REASONS.md`](FAILED-REASONS.md).
 
-The provided base Docker Compose files currently start Redis and Browserless. They do not start a local PostgreSQL or Kafka broker.
+### Региональная доступность
+
+Скан отражает доступность сайта из сети, где запущен worker. Например,
+`TLS_HANDSHAKE_TIMEOUT` с российской точки означает, что защищённое соединение не было завершено
+вовремя; одного такого наблюдения недостаточно, чтобы автоматически утверждать геоблокировку.
+
+Зарубежный proxy fallback сейчас не включён в pipeline. Для корректного определения регионального
+ограничения нужны как минимум две явно обозначенные точки проверки, а отчёт должен сохранять
+исходный и fallback-регионы. Иначе зарубежная доступность может быть ошибочно выдана за доступность
+для пользователей из РФ.
+
+## Crawler и сетевая безопасность
+
+### Static crawler
+
+`SiteCrawler` — параллельный BFS crawler на Jsoup. Источники URL:
+
+- главная страница;
+- sitemap;
+- приоритетные пути: privacy, contacts, terms и формы;
+- внутренние ссылки найденных страниц.
+
+Crawler учитывает `robots.txt`, глубину и лимит страниц, ограничивает response body, поддерживает
+редиректы до 8 переходов и регулирует нагрузку на сайт через concurrency и задержку между
+запросами.
+
+Слоты параллельного обхода разделены на `reserved` и `accepted`: медленный или ошибочный запрос
+не уменьшает фактический лимит успешно принятых страниц.
+
+### Pinned HTTP fetcher и SSRF
+
+`PinnedHttpFetcher` повторно валидирует DNS непосредственно перед сетевым запросом, подключается
+к разрешённому IP и сохраняет исходный hostname для HTTP `Host`, TLS SNI и hostname verification.
+Такая схема уменьшает риск DNS rebinding между API-валидацией и worker fetch.
+
+Проверка выполняется перед каждым fetch и redirect hop. Блокируются loopback, private,
+link-local, multicast, reserved ranges, IPv6 ULA, IPv4-mapped IPv6, cloud metadata и домены из
+общей anti-abuse политики. Аналогичный request filter действует внутри Chromium.
+
+### Dynamic crawler
+
+`CdpDynamicCrawler` работает через HTTP/WebSocket CDP напрямую; Node.js и Playwright worker-у не
+нужны. Он собирает DOM, cookies, localStorage и сетевой timeline, а также выполняет
+consent-сценарии `before → Reject → Accept`.
+
+При включённом premium-потоке worker проверяет Browserless во время старта. Некорректный
+`base-url`, отсутствующий token или недоступный `/json/version` останавливают приложение раньше,
+чем платный скан попадёт в неработающий pipeline.
+
+## Юрисдикции и движок правил
+
+Юрисдикция — это выбранный правовой профиль, а не страна хостинга сайта.
+
+| Код | Активные слои | Назначение |
+|---|---|---|
+| `RU` | `RU` | Технические проверки и эвристики для российского privacy-контекста и 152-ФЗ. |
+| `EU` | `EU` | GDPR/ePrivacy baseline и consent-сценарии. |
+| `UK` | `UK` | Отдельный UK GDPR/PECR profile; EU baseline не наследуется. |
+| `DE` | `EU + DE` | EU baseline с overlay требований TDDDG. |
+| `FR` | `EU + FR` | EU baseline с overlay практики CNIL. |
+| `ES` | `EU + ES` | EU baseline с overlay практики AEPD. |
+
+Общие детекторы TLS, headers, cookie и tracking используются повторно, но получают локализованные
+метаданные и правовое обоснование выбранного слоя. Национальный overlay имеет приоритет над
+baseline-метаданными.
+
+Score рассчитывается как `100 − Σ(basePoints × verificationWeight)`. По умолчанию:
+
+- `CONFIRMED` влияет с весом `1.0`;
+- `DETECTED` — с весом `0.65`;
+- `UNVERIFIED`, `FALSE_POSITIVE` и отсутствие результата — с весом `0`.
+
+Так недоступность внешнего источника не превращается в штраф пользователю.
+
+## Технологический стек
+
+- Java 21;
+- Spring Boot 3.5, Spring Security, Spring Data JPA и Actuator;
+- Maven multi-module build;
+- PostgreSQL 16 и Flyway;
+- Apache Kafka;
+- Redis, Bucket4j и Lettuce;
+- Jsoup;
+- Browserless / Chromium и собственный Java CDP client;
+- GeoIP2 / DB-IP;
+- Apache PDFBox;
+- Handlebars и Spring Mail;
+- Micrometer и Prometheus;
+- JUnit 5, Mockito, Spring Kafka Test и Testcontainers.
+
+## Быстрый старт
+
+### Требования
+
+- JDK 21;
+- Maven 3.9+;
+- Docker с Compose plugin;
+- `curl` для проверки API;
+- `jq` только для приведённого ниже shell-примера.
+
+### 1. Запустить инфраструктуру
+
+`docker-compose.override.yml` подхватывается автоматически и добавляет локальные PostgreSQL,
+Kafka, Kafka UI и порты к базовым Redis и Browserless.
 
 ```bash
 export CDP_AUTH_TOKEN=local-cdp-token
-docker compose up -d redis browserless
+docker compose up -d
+docker compose ps
 ```
 
-For the application itself, provide PostgreSQL and Kafka through one of these options:
+Локальные адреса:
 
-- run local PostgreSQL and Kafka yourself at the defaults used by the app
-- point `DB_URL` and `KAFKA_BOOTSTRAP_SERVERS` to a shared development environment
-- use Testcontainers-backed integration tests when you only need verification rather than an interactive local app
+| Сервис | Адрес |
+|---|---|
+| API | `http://localhost:8080` |
+| Kafka UI | `http://localhost:8081` |
+| PostgreSQL | `localhost:5432` |
+| Kafka | `localhost:9092` |
+| Redis | `localhost:6379` |
+| Browserless | `http://localhost:3005` |
 
-Default application values:
+### 2. Собрать проект
 
-```text
-DB_URL=jdbc:postgresql://localhost:5432/compliance
-DB_USERNAME=compliance
-DB_PASSWORD=compliance
-KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+Установка модулей в локальный Maven repository нужна, чтобы отдельный launcher мог разрешить
+внутренние зависимости:
+
+```bash
+mvn -B -ntp -DskipTests install
 ```
 
-### 3. Run the combined local application
+### 3. Запустить combined application
 
-`compliance-app` starts API and worker in one JVM and uses the `local` profile by default.
+`compliance-app` использует профиль `local` по умолчанию. В нём premium CDP выключен, поэтому
+разработка бесплатного static flow не зависит от Browserless.
 
 ```bash
 mvn spring-boot:run -pl compliance-app
 ```
 
-The API listens on:
+### 4. Запустить бесплатный скан
 
-```text
-http://localhost:8080
+```bash
+TOKEN=$(
+  curl -sS -X POST http://localhost:8080/api/auth/guest |
+    jq -r '.accessToken'
+)
+
+curl -sS -X POST http://localhost:8080/api/free-scans \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"siteUrl":"https://example.com/path","jurisdiction":"RU","locale":"ru"}'
 ```
 
-The local profile disables premium CDP fail-fast by setting:
+Ответ имеет статус `202 Accepted`. Дальше клиент опрашивает:
 
-```yaml
-compliance:
-  crawler:
-    dynamic:
-      premium-enabled: false
+```bash
+curl -sS http://localhost:8080/api/compliance-scans/<scan-id> \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
-This lets the combined app start without a working Browserless endpoint. Free static scans can still run.
+Тот же guest token обязателен для чтения результата: scan resources проверяют владельца на
+сервере и не являются публичными.
 
-### 4. Run API and worker separately
-
-For a production-like local process split:
+### Раздельный запуск API и worker
 
 ```bash
 mvn spring-boot:run -pl compliance-api
 mvn spring-boot:run -pl compliance-worker -Dspring-boot.run.profiles=local
 ```
 
-The standalone worker imports `application-compliance-core.yml`, which contains the shared crawler, scan, score, outbox and dynamic defaults.
+Раздельный режим ближе к production-топологии. Общие worker-настройки импортируются из
+`application-compliance-core.yml`, чтобы standalone worker и combined app не расходились по
+таймаутам, score и лимитам.
 
-## Configuration
+## Конфигурация
 
-All application-specific configuration uses the `compliance.*` prefix.
+Основные инфраструктурные переменные:
 
-### API Configuration
-
-| Property | Purpose |
+| Переменная | Назначение |
 |---|---|
-| `compliance.auth.jwt-secret` | Signing secret for guest and user JWTs. Must be replaced in production. |
-| `compliance.auth.access-token-ttl` | User access token lifetime. |
-| `compliance.auth.refresh-token-ttl` | User refresh token lifetime. |
-| `compliance.auth.guest-token-ttl` | Guest token lifetime. |
-| `compliance.rate-limit.guest-scans-per-ip-per-hour` | Guest scan rate limit. |
-| `compliance.rate-limit.user-scans-per-hour` | Authenticated user scan rate limit. |
-| `compliance.scan.free-marketing-max-pages` | Page limit for free marketing scans. |
-| `compliance.scan.guest-max-pages` | Legacy guest scan page limit retained in config. |
-| `compliance.scan.user-max-pages` | Page limit for cabinet scans. |
-| `compliance.plan.quota.*` | Monthly scan credits by plan. |
-| `compliance.security.trust-forwarded-header` | Whether `X-Forwarded-For` is trusted for client IP resolution. |
+| `DB_URL`, `DB_USERNAME`, `DB_PASSWORD` | PostgreSQL |
+| `KAFKA_BOOTSTRAP_SERVERS` | Kafka brokers |
+| `KAFKA_SECURITY_PROTOCOL`, `KAFKA_SASL_*` | SASL/SCRAM и TLS для production Kafka |
+| `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` | Distributed rate limiting |
+| `JWT_SECRET` | Подпись guest/user JWT; production secret должен быть не короче 256 бит |
+| `CDP_ENABLED`, `CDP_BASE_URL`, `CDP_AUTH_TOKEN` | Browserless/CDP |
+| `CDP_PREMIUM_ENABLED` | Fail-fast контракт доступности premium dynamic flow |
+| `GEOIP_DB_PATH` | GeoIP database |
+| `SMTP_*`, `MAIL_*` | Email transport и durable mail outbox |
+| `OAUTH_*` | OAuth providers и redirect flow |
+| `YOOKASSA_*`, `PAYMENT_WEBHOOK_SECRET` | Платежи и webhook |
 
-### Worker and Crawler Configuration
+Все прикладные настройки используют префикс `compliance.*`. Основные группы:
 
-| Property | Purpose |
+- `compliance.crawler.*` — лимиты, concurrency, robots, body size и сетевые таймауты;
+- `compliance.crawler.dynamic.*` — CDP, batch limits и consent-сценарии;
+- `compliance.scan.*` — дедлайны, retention и доступные юрисдикции;
+- `compliance.score.*` — severity points и verification weights;
+- `compliance.outbox.*` — batch, retries и backoff;
+- `compliance.plan.*` и `compliance.monitoring.*` — квоты и мониторинг;
+- `compliance.security.*` — forwarded headers и domain policy.
+
+Production secrets, `.env`, truststore и сертификаты нельзя коммитить в репозиторий.
+
+## API
+
+Основные группы endpoint:
+
+| Область | Endpoint |
 |---|---|
-| `compliance.crawler.max-pages` | Global upper bound for pages per static crawl. |
-| `compliance.crawler.max-depth` | Maximum BFS crawl depth. |
-| `compliance.crawler.connect-timeout-ms` | TCP connect timeout. |
-| `compliance.crawler.page-timeout-ms` | Per-page fetch/read timeout. |
-| `compliance.crawler.crawler-timeout-seconds` | Total static crawler deadline. |
-| `compliance.crawler.concurrency` | Parallel static fetch worker count. |
-| `compliance.crawler.rate-limit-ms` | Delay between requests per static fetch worker. |
-| `compliance.crawler.max-body-bytes` | Maximum response body size. |
-| `compliance.crawler.user-agent` | User-Agent used by static crawler. |
-| `compliance.crawler.respect-robots` | Whether robots.txt is honored. |
-| `compliance.crawler.allowed-domains` | Optional allowlist for crawled domains. |
-| `compliance.crawler.blocked-domains` | Denylist for crawled domains. |
-| `compliance.crawler.dynamic.*` | CDP dynamic crawler settings. |
-| `compliance.scan.stale-after` | Reaper threshold for stuck scans. |
-| `compliance.scan.redeliver-delay` | Kafka redelivery delay when a scan is already being processed. |
-| `compliance.scan.total-deadline` | Overall scan deadline beyond crawler timeout. |
-| `compliance.score.*` | Score model weights. |
-| `compliance.geoip.db-path` | GeoIP database path. |
+| Guest и user auth | `/api/auth/**` |
+| Бесплатный скан | `POST /api/free-scans` |
+| Premium-скан | `POST /api/cabinet/scans` |
+| Статус, история, JSON/PDF отчёт | `/api/compliance-scans/**` |
+| Каталог юрисдикций | `/api/jurisdictions/**` |
+| Кабинет и баланс | `/api/cabinet/**` |
+| Мониторинг сайтов | `/api/cabinet/monitors/**` |
+| Каталог тарифов | `/api/pricing/plans/**` |
+| Платежи | `/api/payments/**` |
+| Admin API | `/api/admin/**` |
 
-Cross-field validation fails application startup when critical invariants are broken, for example:
+Защищённые запросы используют `Authorization: Bearer <token>`. Доступ к скану проверяется по
+`userId` или `guestId`, поэтому знание UUID не даёт доступ к чужому отчёту.
 
-- `scan.stale-after` must be greater than `crawler.crawler-timeout-seconds`
-- `scan.total-deadline` must be greater than or equal to `crawler.crawler-timeout-seconds`
-- `crawler.dynamic.max-pages` must not exceed `crawler.max-pages`
-- premium dynamic mode requires an enabled and configured CDP endpoint unless `premium-enabled=false`
+Полный контракт, DTO и коды ответов: [`compliance-api/API.md`](compliance-api/API.md).
 
-### Kafka Topics
+## Тестирование
 
-Default topics:
-
-```text
-compliance.scan.requested
-compliance.scan.completed
-compliance.scan.failed
-```
-
-Create them before running with Kafka auto-topic creation disabled.
-
-## API Overview
-
-All scan resources are owner-scoped. A scan can be read only by the user who owns it or by the guest principal that created it.
-
-### Authentication
-
-| Method | Path | Access | Description |
-|---|---|---|---|
-| `POST` | `/api/auth/guest` | Public | Issue a guest JWT. |
-| `POST` | `/api/auth/register` | Public | Register a user and return tokens. |
-| `POST` | `/api/auth/login` | Public | Authenticate a user. |
-| `POST` | `/api/auth/refresh` | Public | Refresh an access token. |
-| `POST` | `/api/auth/logout` | Public | Revoke a refresh token. |
-| `GET` | `/api/auth/me` | Public | Describe the current principal or anonymous state. |
-
-### Scans
-
-| Method | Path | Access | Description |
-|---|---|---|---|
-| `POST` | `/api/free-scans` | Guest or user token | Start a free static marketing scan. |
-| `POST` | `/api/cabinet/scans` | User token | Start a premium cabinet scan and debit one scan credit. |
-| `GET` | `/api/compliance-scans` | User token | List user scans with optional domain/status filters. |
-| `GET` | `/api/compliance-scans/{id}` | Owner token | Get scan status and progress. |
-| `GET` | `/api/compliance-scans/{id}/report` | Owner token | Get the report snapshot. |
-| `POST` | `/api/compliance-scans/{id}/email` | Owner token | Store report email and consent flags. |
-| `POST` | `/api/auth/password/forgot` | Public | Queue a password-reset link with opaque response. |
-| `POST` | `/api/auth/password/reset` | Public | Set a new password using a one-time token. |
-| `POST` | `/api/mail/unsubscribe` | Public | Unsubscribe using a signed token. |
-
-### Cabinet
-
-| Method | Path | Access | Description |
-|---|---|---|---|
-| `GET` | `/api/cabinet` | User token | User dashboard. |
-| `GET` | `/api/cabinet/balance` | User token | Current scan balance. |
-| `GET` | `/api/cabinet/balance/transactions` | User token | Balance ledger. |
-| `POST` | `/api/cabinet/password` | User token | Change password. |
-
-### Admin
-
-| Method | Path | Access | Description |
-|---|---|---|---|
-| `GET` | `/api/admin/users` | Admin token | Search users. |
-| `GET` | `/api/admin/users/{id}` | Admin token | Read a user. |
-| `GET` | `/api/admin/users/{id}/scans` | Admin token | Read a user's scans. |
-| `POST` | `/api/admin/users/{id}/balance` | Admin token | Adjust balance. |
-| `POST` | `/api/admin/users/{id}/plan` | Admin token | Change plan. |
-| `POST` | `/api/admin/users/{id}/block` | Admin token | Block a user. |
-| `GET` | `/api/admin/stats` | Admin token | Administrative statistics. |
-| `GET` | `/api/admin/audit` | Admin token | Audit log. |
-
-### Example: Start a Free Scan
-
-```bash
-TOKEN=$(
-  curl -s -X POST http://localhost:8080/api/auth/guest \
-  | jq -r '.accessToken'
-)
-
-curl -i -X POST http://localhost:8080/api/free-scans \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"siteUrl":"https://example.com"}'
-```
-
-Expected response status:
-
-```text
-202 Accepted
-```
-
-### Example: Read Scan Status
-
-```bash
-curl -s http://localhost:8080/api/compliance-scans/<scan-id> \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### Common HTTP Status Codes
-
-| Status | Meaning |
-|---|---|
-| `200` | Request succeeded. |
-| `201` | Resource created, for example user registration. |
-| `202` | Scan accepted for asynchronous processing. |
-| `204` | Request succeeded with no response body. |
-| `400` | Validation error. |
-| `401` | Missing or invalid token. |
-| `402` | Insufficient scan balance. |
-| `403` | Resource belongs to another principal or role is insufficient. |
-| `404` | Scan or resource not found. |
-| `409` | Report is not ready yet. |
-| `429` | Rate limit exceeded. |
-| `500` | Unexpected server error. |
-
-## Testing
-
-Run all unit tests:
+Быстрая проверка модулей:
 
 ```bash
 mvn test
 ```
 
-Run module tests:
+Полная проверка, используемая перед деплоем:
 
 ```bash
-mvn -pl compliance-worker test
-mvn -pl compliance-api test
+mvn -B -ntp verify
 ```
 
-Run a focused crawler test suite:
+`verify` включает unit tests и integration tests через Failsafe/Testcontainers, поэтому требуется
+работающий Docker.
+
+Точечные примеры:
 
 ```bash
-mvn -pl compliance-worker -Dtest=SiteCrawlerTest test
+mvn -pl compliance-api -am test
+mvn -pl compliance-worker -am test
+mvn -pl compliance-worker -am \
+  -Dtest=SiteCrawlerTest \
+  -Dsurefire.failIfNoSpecifiedTests=false \
+  test
 ```
 
-Run integration tests that use Testcontainers:
+## Эксплуатация
+
+### Production deployment
+
+В production запускаются два отдельных контейнера:
+
+- `compliance-api` обслуживает HTTP, auth, кабинет, платежи и чтение отчётов;
+- `compliance-worker` потребляет Kafka и выполняет crawling/analysis.
+
+PostgreSQL и Kafka ожидаются как внешняя инфраструктура. Redis и Browserless запускаются на
+application host:
 
 ```bash
-mvn verify
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.prod.yml \
+  -f docker-compose.deploy.yml \
+  up -d
 ```
 
-Integration tests require Docker. Unit tests use Surefire. Integration tests use Failsafe and the `*IT` naming convention.
-
-## Operations
-
-### Local Combined App
-
-Use `compliance-app` for local development because it runs API and worker in one JVM.
-
-### Production Runtime
-
-Production is intended to run API and worker as separate services:
-
-- `compliance-api` handles REST traffic, authentication, scan creation and result reads.
-- `compliance-worker` consumes scan requests and performs crawling, analysis and report assembly.
-
-`docker-compose.prod.yml` is an override for runtime services on the application host. It expects PostgreSQL and Kafka to be external services.
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-```
-
-`docker-compose.infra.prod.yml` is a separate infrastructure compose for PostgreSQL and Kafka on an infra host:
-
-```bash
-docker compose --env-file /path/to/prod-infra.env -f docker-compose.infra.prod.yml up -d
-```
-
-Do not commit real production `.env` files, passwords, truststores or certificates.
+GitHub Actions собирает отдельные OCI images для API и worker, публикует immutable
+`sha-<commit>` tags в GHCR и поддерживает селективный деплой по изменённым модулям.
 
 ### Observability
 
-Actuator endpoints are enabled for:
+Доступны:
 
 ```text
 /actuator/health
@@ -554,39 +540,47 @@ Actuator endpoints are enabled for:
 /actuator/prometheus
 ```
 
-The worker uses structured logging with MDC fields such as `scanId` and `scanKind` where available.
+Ключевые метрики:
 
-Useful operational metrics include:
+- pending/dead outbox events;
+- scan outcome и duration по status, kind и jurisdiction;
+- static/dynamic crawler success и failure;
+- rule evaluation errors;
+- listener failures и stuck-scan reaper;
+- длительность отдельных pipeline phases.
 
-- outbox pending/dead event counts
-- scan duration by status and kind
-- crawled/fetched/failed page counters
-- dynamic crawler success/failure counters
-- rule error counters
-- listener failure counters
-- stuck-scan reaper failure counters
+Логи worker содержат MDC-поля `scanId`, `scanKind` и, для внутренних ошибок, `incidentId`.
 
-### Stuck Scan Reaper
+### Горизонтальное масштабирование
 
-The worker includes a scheduled reaper for scans stuck in `CRAWLING` or `ANALYZING`. It uses strict transactional lifecycle transitions and optimistic locking so that a live scan is not failed by a stale reaper decision.
+- Kafka consumer group распределяет партиции между worker replicas;
+- atomic scan claim предотвращает повторную обработку;
+- outbox publishers делят batch через `SKIP LOCKED`;
+- optimistic locking защищает lifecycle и баланс;
+- API rate limits хранятся в Redis;
+- лимиты crawler и CDP задаются на реплику.
 
-## Security Notes
+Количество Kafka partitions, listener concurrency, DB pool и Browserless concurrency следует
+масштабировать согласованно.
 
-- The API is stateless and uses JWT for guest and user principals.
-- User status is checked on authenticated requests, so blocked/deleted users lose access before token expiry.
-- Scan results are not public; owner checks are enforced server-side.
-- SSRF protection is applied in both API URL validation and worker fetch-time validation.
-- Worker URL validation is repeated close to the network request to reduce DNS rebinding risk.
-- `X-Forwarded-For` is ignored unless `compliance.security.trust-forwarded-header=true`.
-- Dynamic CDP endpoints must be token-protected.
-- Browserless blocklists are disabled intentionally so tracker analysis can observe real network traffic.
-- Replace all development secrets before production deployment.
-- Keep production env files, Kafka truststores and certificates outside the repository.
+## Документация
 
-## Development Notes
+| Документ | Содержание |
+|---|---|
+| [`compliance-api/API.md`](compliance-api/API.md) | Полный REST API и DTO |
+| [`FAILED-REASONS.md`](FAILED-REASONS.md) | Контракт структурированных причин `FAILED` |
+| [`docs/RUNBOOK-worker.md`](docs/RUNBOOK-worker.md) | Диагностика worker, outbox, reaper и CDP |
+| [`docs/CI-CD.md`](docs/CI-CD.md) | GitHub Actions, GHCR, deployment и rollback |
+| [`compliance-api/RU_REPORT_V2_METHODOLOGY.md`](compliance-api/RU_REPORT_V2_METHODOLOGY.md) | Методика RU report v2 |
+| [`docs/PLAN-jurisdictions.md`](docs/PLAN-jurisdictions.md) | Модель jurisdiction layers и overlays |
+| [`docs/PLAN.md`](docs/PLAN.md) | Расширенный инженерный план и принятые решения |
 
-- Prefer adding DTOs and external contracts to `compliance-contracts`.
-- Keep rule logic free of Spring, JPA and infrastructure dependencies.
-- Use the transactional outbox instead of direct Kafka sends for state-changing workflows.
-- Keep scan execution decisions in the database scan row; Kafka events are commands and diagnostics, not the source of execution policy.
-- Use `compliance-app` only as a local combined launcher. Production should deploy API and worker separately.
+## Правила разработки
+
+- Wire-контракты и общие enum размещаются в `compliance-contracts`.
+- Правила не должны зависеть от Spring, JPA, Kafka или HTTP-клиентов.
+- Изменение состояния и отправка доменного события выполняются через transactional outbox.
+- Решения о режиме выполнения берутся из строки скана в БД, а не из недоверенного Kafka payload.
+- Новая сетевая операция обязана иметь timeout/deadline и проходить SSRF-проверку.
+- Новые failure codes должны быть стабильными, user-safe и backward-compatible для старых клиентов.
+- `compliance-app` используется для локальной разработки; production разворачивает API и worker отдельно.

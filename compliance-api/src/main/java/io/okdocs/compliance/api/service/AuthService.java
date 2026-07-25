@@ -105,6 +105,9 @@ public class AuthService {
 
         int quota = properties.plan().quotaFor(UserPlan.FREE);
         balanceService.createForNewUser(user.getId(), quota);
+        // Один бесплатный полный отчёт новому пользователю
+        balanceService.purchase(user.getId(), 1);
+        log.info("Новому пользователю {} начислен приветственный кредит", user.getId());
         mailNotificationService.enqueueWelcome(user.getId(), user.getEmail(), user.getName(), locale);
 
         return issueTokensFor(user, null, null);

@@ -98,6 +98,8 @@ public class OAuthAccountService {
 
         int quota = properties.plan().quotaFor(UserPlan.FREE);
         balanceService.createForNewUser(user.getId(), quota);
+        //test marketing flow: add 1 scan for new user
+        balanceService.purchase(user.getId(), 1);
         mailNotificationService.enqueueWelcome(user.getId(), user.getEmail(), user.getName(), locale);
         return user;
     }
